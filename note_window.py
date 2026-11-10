@@ -10,6 +10,7 @@ import ctypes
 import sys
 import uuid
 
+from PyQt5 import sip
 from PyQt5.QtCore import QPoint, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import QHBoxLayout, QTextEdit, QVBoxLayout, QWidget
@@ -51,9 +52,16 @@ class _CloseGlyph(QWidget):
         super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.clicked.emit()
+        # A release can arrive after the note this glyph belongs to has been
+        # destroyed (closed by its own click, or as the app put its notes
+        # away). Touching a deleted widget raises, and an unhandled exception
+        # in an event handler ends the whole process.
+        if sip.isdeleted(self):
+            return
         super().mouseReleaseEvent(event)
+        if sip.isdeleted(self) or event.button() != Qt.LeftButton:
+            return
+        self.clicked.emit()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -61,8 +69,8 @@ class _CloseGlyph(QWidget):
         if self._dark:
             color = QColor("#EDEDED") if self._hover else QColor("#8A8A8A")
         else:
-            color = QColor("#333333") if self._hover else QColor("#7A7A7A")
-        painter.setPen(QPen(color, 1.4, Qt.SolidLine, Qt.RoundCap))
+            color = QColor("#1C1C1E") if self._hover else QColor("#5E5E63")
+        painter.setPen(QPen(color, 1.5, Qt.SolidLine, Qt.RoundCap))
         centre = self.width() / 2
         arm = 4
         painter.drawLine(QPoint(int(centre - arm), int(centre - arm)),
