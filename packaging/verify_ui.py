@@ -10,6 +10,7 @@ The exclusion itself is asserted separately (see --check-protection).
 import ctypes
 import os
 import sys
+import tempfile
 
 from PIL import ImageGrab
 from PyQt5.QtCore import QTimer
@@ -81,6 +82,10 @@ def main():
     light = "--theme" in sys.argv and sys.argv[sys.argv.index("--theme") + 1] == "light"
 
     win = ui_overlay.NotchOverlay()
+    # A capture run must not write into the app's own saved state: the note it
+    # opens used to come back as an extra note window on the next launch.
+    from store import Store
+    win._store = Store(tempfile.mkdtemp(prefix="notch-verify-"))
     if light:
         win._dark_theme = False
         win._apply_read_mode_style()
@@ -135,6 +140,8 @@ def check_protection():
     import ui_overlay
 
     win = ui_overlay.NotchOverlay()
+    from store import Store
+    win._store = Store(tempfile.mkdtemp(prefix="notch-protection-"))
     win.show()
     note = win._open_note()
     win._load_script_from_file(FIXTURE)

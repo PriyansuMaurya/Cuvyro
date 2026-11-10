@@ -150,6 +150,23 @@ def main():
         Store(tmp).load()["notes"][0]["text"] == "Board block reads",
     )
 
+    # Closing a note with its own × destroyed the widget inside the click that
+    # closed it, and the rest of that handler then touched a deleted object —
+    # an unhandled exception in an event handler, which ends the process. The
+    # click has to leave the app running.
+    before_close = len(win2._notes)
+    closing = win2._open_note()
+    closing._edit.setPlainText("closes on click")
+    QTest.qWait(50)
+    QTest.mouseClick(closing._close, Qt.LeftButton)
+    QTest.qWait(200)
+    check("a note closes from its own ×", len(win2._notes) == before_close,
+          f"{len(win2._notes)} of {before_close} open")
+    survivor = win2._open_note()
+    QTest.qWait(100)
+    check("the reader still opens notes after one was closed",
+          survivor.isVisible(), f"{len(win2._notes)} open")
+
     win2._close_all_notes()
     win._close_all_notes()
     print()
