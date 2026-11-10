@@ -54,6 +54,7 @@ exe = EXE(
     exclude_binaries=True,
     name="Notch",
     icon=os.path.join(SPECPATH, "notch.ico"),
+    version=os.path.join(SPECPATH, "version_info.txt"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
