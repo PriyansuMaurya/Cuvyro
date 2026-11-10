@@ -10,7 +10,8 @@ from PyQt5.QtCore import (
     QPropertyAnimation, QAbstractAnimation, QElapsedTimer, QSettings
 )
 from PyQt5.QtGui import (
-    QFont, QColor, QPainter, QPen, QTextCursor, QTextCharFormat, QTextBlockFormat, QKeySequence,
+    QFont, QFontMetrics, QColor, QPainter, QPen, QTextCursor, QTextCharFormat,
+    QTextBlockFormat, QKeySequence,
     QDragEnterEvent, QDropEvent, QMouseEvent, QPaintEvent, QKeyEvent,
     QRadialGradient, QLinearGradient, QBrush, QPainterPath, QRegion, QBitmap, QWheelEvent
 )
@@ -21,7 +22,7 @@ from PyQt5.QtWidgets import (
     QToolButton, QAbstractButton, QPushButton,
     QGraphicsDropShadowEffect, QGraphicsOpacityEffect,
     QMessageBox, QDialog, QDialogButtonBox, QScrollArea,
-    QStackedWidget,
+    QStackedWidget, QButtonGroup,
 )
 
 # Assumed external dependencies based on your project structure
@@ -41,364 +42,12 @@ class _RenderedLine(NamedTuple):
     height: float
 
 
-class AnimatedCloseButton(QAbstractButton):
-    """
-    A minimal button that morphs from a Line (-) to a Cross (X) on hover.
-    The two lines start overlapped (horizontal) and rotate apart.
-    """
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(24, 24)
-        self.setCursor(Qt.PointingHandCursor)
-        
-        # 0.0 = Line (Rest), 1.0 = Cross (Hover)
-        self._progress = 0.0 
-
-        # Animation Setup
-        self._anim = QVariantAnimation()
-        self._anim.setDuration(200)  # ms
-        self._anim.setEasingCurve(QEasingCurve.OutBack) # Slight overshoot for organic feel
-        self._anim.valueChanged.connect(self._on_anim_value)
-
-    def _on_anim_value(self, value):
-        self._progress = value
-        self.update()
-
-    def enterEvent(self, event):
-        self._anim.stop()
-        self._anim.setStartValue(self._progress)
-        self._anim.setEndValue(1.0)
-        self._anim.start()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._anim.stop()
-        self._anim.setStartValue(self._progress)
-        self._anim.setEndValue(0.0)
-        self._anim.start()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        # Center point
-        cx, cy = self.width() / 2, self.height() / 2
-        
-        # Color: both themes stay gray (avoids glitch when animating to X)
-        overlay = self.parent()
-        while overlay and not hasattr(overlay, '_dark_theme'):
-            overlay = overlay.parent()
-        dark = getattr(overlay, '_dark_theme', True) if overlay else True
-        if dark:
-            c_val = int(136 + (44 * self._progress))  # gray (136) -> darker gray (180) on hover
-        else:
-            c_val = int(100 - (20 * self._progress))  # gray (100) -> darker gray (80) on hover
-        color = QColor(c_val, c_val, c_val)
-        
-        pen = QPen(color)
-        pen.setWidthF(2.0)
-        pen.setCapStyle(Qt.RoundCap)
-        painter.setPen(pen)
-
-        # Animation Math
-        # Target angle is 45 degrees for X
-        angle = self._progress * 45.0
-        arm_len = 5.0 
-
-        # Draw First Line (Rotates +45)
-        painter.save()
-        painter.translate(cx, cy)
-        painter.rotate(angle)
-        painter.drawLine(QPointF(-arm_len, 0), QPointF(arm_len, 0))
-        painter.restore()
-
-        # Draw Second Line (Rotates -45)
-        # We only draw the second line if we have started animating,
-        # otherwise, drawing two lines at exactly 0 degrees looks 
-        # slightly thicker due to anti-aliasing.
-        if self._progress > 0.05:
-            painter.save()
-            painter.translate(cx, cy)
-            painter.rotate(-angle)
-            painter.drawLine(QPointF(-arm_len, 0), QPointF(arm_len, 0))
-            painter.restore()
-
-
-class CogButton(QAbstractButton):
-    """
-    Minimalist gear/cog icon for settings.
-    """
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(24, 24)
-        self.setCursor(Qt.PointingHandCursor)
-        self._hover = False
-
-    def enterEvent(self, event):
-        self._hover = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._hover = False
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        overlay = self.parent()
-        while overlay and not hasattr(overlay, '_dark_theme'):
-            overlay = overlay.parent()
-        dark = getattr(overlay, '_dark_theme', True) if overlay else True
-        color = (QColor("#b0b0b0") if self._hover else QColor("#888888")) if dark else (QColor("#555555") if self._hover else QColor("#333333"))
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(color)
-
-        cx, cy = self.width() / 2, self.height() / 2
-
-        # 1. Draw gear body as donut (outer circle minus inner hole) — avoids CompositionMode_Clear
-        #    which can show black center in light mode on some systems
-        body = QPainterPath()
-        body.addEllipse(QPointF(cx, cy), 5.5, 5.5)
-        body.addEllipse(QPointF(cx, cy), 2.5, 2.5)  # hole; OddEvenFill makes it subtract
-        painter.drawPath(body)
-
-        # 2. Draw Teeth
-        painter.save()
-        painter.translate(cx, cy)
-        for _ in range(8):
-            painter.drawRoundedRect(QRectF(-1.2, -8.0, 2.4, 3.0), 0.5, 0.5)
-            painter.rotate(45)
-        painter.restore()
-
-
-class MicButton(QAbstractButton):
-    """
-    Toggle mic mute (Notch mode). Icon: mic when unmuted, mic with slash when muted.
-    """
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(24, 24)
-        self.setCursor(Qt.PointingHandCursor)
-        self._hover = False
-        self._muted = False  # updated by parent
-
-    def set_muted(self, muted: bool):
-        if self._muted != muted:
-            self._muted = muted
-            self.update()
-
-    def enterEvent(self, event):
-        self._hover = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._hover = False
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        overlay = self.parent()
-        while overlay and not hasattr(overlay, '_dark_theme'):
-            overlay = overlay.parent()
-        dark = getattr(overlay, '_dark_theme', True) if overlay else True
-        if self._muted:
-            color = QColor("#666666") if dark else QColor("#888888")
-        else:
-            color = (QColor("#b0b0b0") if self._hover else QColor("#888888")) if dark else (QColor("#555555") if self._hover else QColor("#333333"))
-        painter.setPen(QPen(color, 1.5, Qt.SolidLine, Qt.RoundCap))
-        painter.setBrush(Qt.NoBrush)
-        cx, cy = self.width() / 2, self.height() / 2
-        # Mic capsule (rounded rect for body)
-        body_h, body_w = 10, 6
-        painter.drawRoundedRect(QRectF(cx - body_w/2, cy - body_h/2 - 1, body_w, body_h), 3, 3)
-        # Stem (a bit longer)
-        stem_top = cy + body_h/2 - 1
-        stem_bottom = cy + 10
-        base_y = stem_bottom
-        painter.drawLine(QPointF(cx, stem_top), QPointF(cx, base_y))
-        # Base: horizontal line with dome above it (dome nudged up a tiny bit)
-        painter.drawArc(QRectF(cx - 5, base_y - 8, 10, 5), 180 * 16, 180 * 16)
-        if self._muted:
-            # Diagonal slash through mic
-            painter.drawLine(QPointF(cx - 6, cy - 6), QPointF(cx + 6, cy + 6))
-
-class NoteButton(QAbstractButton):
-    """Create a sticky note. Thin outline note glyph."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(24, 24)
-        self.setCursor(Qt.PointingHandCursor)
-        self._hover = False
-
-    def enterEvent(self, event):
-        self._hover = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._hover = False
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        overlay = self.parent()
-        while overlay and not hasattr(overlay, '_dark_theme'):
-            overlay = overlay.parent()
-        dark = getattr(overlay, '_dark_theme', True) if overlay else True
-        if dark:
-            color = QColor("#b0b0b0") if self._hover else QColor("#888888")
-        else:
-            color = QColor("#555555") if self._hover else QColor("#333333")
-        painter.setPen(QPen(color, 1.4, Qt.SolidLine, Qt.RoundCap))
-        painter.setBrush(Qt.NoBrush)
-        cx, cy = self.width() / 2, self.height() / 2
-        rect = QRectF(cx - 4.5, cy - 6, 9, 12)
-        painter.drawRoundedRect(rect, 1.5, 1.5)
-        painter.drawLine(QPointF(rect.left() + 2, rect.top() + 4),
-                         QPointF(rect.right() - 2, rect.top() + 4))
-        painter.drawLine(QPointF(rect.left() + 2, rect.top() + 7),
-                         QPointF(rect.right() - 3.5, rect.top() + 7))
-
-
-class BottomFade(QWidget):
-    """Soft fade over the last line of script, as on the reference card."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self._color = QColor("#000000")
-
-    def set_fade_color(self, value: str):
-        color = QColor(value)
-        if color != self._color:
-            self._color = color
-            self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        gradient = QLinearGradient(0, 0, 0, self.height())
-        top = QColor(self._color)
-        top.setAlpha(0)
-        bottom = QColor(self._color)
-        bottom.setAlpha(235)
-        gradient.setColorAt(0.0, top)
-        gradient.setColorAt(1.0, bottom)
-        painter.fillRect(self.rect(), QBrush(gradient))
-
-
-class CompactButton(QAbstractButton):
-    """
-    Toggle narrow (2-word width) vs normal. Icon: || = go narrow, = = go wide.
-    """
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(24, 24)
-        self.setCursor(Qt.PointingHandCursor)
-        self._hover = False
-        self._compact = False  # updated by parent when toggling
-
-    def set_compact(self, compact: bool):
-        if self._compact != compact:
-            self._compact = compact
-            self.update()
-
-    def enterEvent(self, event):
-        self._hover = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._hover = False
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        overlay = self.parent()
-        while overlay and not hasattr(overlay, '_dark_theme'):
-            overlay = overlay.parent()
-        dark = getattr(overlay, '_dark_theme', True) if overlay else True
-        color = (QColor("#b0b0b0") if self._hover else QColor("#888888")) if dark else (QColor("#555555") if self._hover else QColor("#333333"))
-        # Thin outline strokes, matching the rest of the toolbar. The old glyph
-        # was a filled square, which read as a solid box next to outline icons
-        # and became the darkest element in light mode.
-        pen = QPen(color)
-        pen.setWidthF(1.4)
-        pen.setCapStyle(Qt.RoundCap)
-        painter.setPen(pen)
-        painter.setBrush(Qt.NoBrush)
-        cx, cy = self.width() / 2, self.height() / 2
-        arm = 5.0
-        gap = 2.2
-        if self._compact:
-            # Currently narrow: two short horizontal bars = widen
-            for dy in (-gap, gap):
-                painter.drawLine(QPointF(cx - arm, cy + dy), QPointF(cx + arm, cy + dy))
-        else:
-            # Currently full width: two short vertical bars = go narrow
-            for dx in (-gap, gap):
-                painter.drawLine(QPointF(cx + dx, cy - arm), QPointF(cx + dx, cy + arm))
-
-
-class _RoundedMenu(QMenu):
-    """
-    QMenu with smooth rounded corners via custom painting.
-    We don't use a mask (which is pixelated); instead we paint a rounded rect
-    and set the menu to have a transparent background.
-    Excluded from screenshare/capture on Windows when shown.
-    """
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
-        self._radius = 12
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        if sys.platform == "win32":
-            QTimer.singleShot(0, self._apply_capture_exclusion)
-
-    def _apply_capture_exclusion(self):
-        """Exclude menu from screenshare/capture on Windows."""
-        if sys.platform != "win32":
-            return
-        try:
-            hwnd = int(self.winId())
-            user32 = ctypes.windll.user32
-            WDA_EXCLUDEFROMCAPTURE = 0x11
-            WDA_MONITOR = 0x1
-            ok = user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
-            if not ok:
-                user32.SetWindowDisplayAffinity(hwnd, WDA_MONITOR)
-        except Exception:
-            pass
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        
-        # Draw rounded background
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(self.rect()), self._radius, self._radius)
-        
-        painter.setPen(QPen(QColor("#333"), 1))
-        painter.setBrush(QColor("#1e1e1e"))
-        painter.drawPath(path)
-        
-        # Let the base class paint the items
-        # We need to clip to the rounded rect
-        painter.setClipPath(path)
-        super().paintEvent(event)
+from spring import SpringGroup, system_allows_motion
+from controls import (
+    BottomFade, CompactButton, GlyphButton, MicButton, MoreButton,
+    MinimizeButton, NoteButton, RoundedMenu, TextButton,
+)
+from win_capture import exclude_from_capture
 
 
 class HelpDialog(QDialog):
@@ -629,6 +278,7 @@ class HelpDialog(QDialog):
     # ── Position below parent (fade-in only, no slide) ──────────────
     def showEvent(self, event):
         super().showEvent(event)
+        exclude_from_capture(self)
         parent = self.parent()
         if parent and parent.isVisible() and parent.width() > 0:
             gap = 8
@@ -661,7 +311,7 @@ class NotchOverlay(QWidget):
     MIN_W, MIN_H = 340, 122
     TOP_INSET = 6            # DIP between the work-area top and the card
     COMPACT_W = 100   # ~2 word width with compact font
-    COMPACT_FONT = 6  # smallest allowed text size
+    COMPACT_FONT = 8  # smallest allowed text size; 6 pt was below reading size
     MODEL_PATH = "model"  # overridden in __init__ when running as frozen exe
 
     # Aesthetic Constants
@@ -707,6 +357,8 @@ class NotchOverlay(QWidget):
         self._collapsed_size = None
         self._prev_voice_mode = True
         self._compact_mode = False
+        self._peeked = False
+        self._peek_restore: Optional[QRect] = None
         self._size_before_compact: Optional[QSize] = None
         self._font_size_before_compact = 10
 
@@ -727,7 +379,7 @@ class NotchOverlay(QWidget):
         self.MIN_H = int(122 * self._scale)
         self.COMPACT_W = int(100 * self._scale)
         self.CORNER_RADIUS = int(24 * self._scale)
-        self.COMPACT_FONT = max(4, min(12, int(6 * self._scale)))
+        self.COMPACT_FONT = max(6, min(13, int(8 * self._scale)))
         self._font_size = max(6, min(24, int(12 * self._scale)))  # 12pt ≈ 16px at 96 DPI
         self._font_size_before_compact = self._font_size
 
@@ -800,30 +452,25 @@ class NotchOverlay(QWidget):
         self._fade_anim.setEndValue(1.0)
         self._fade_anim.setEasingCurve(QEasingCurve.OutCubic)
 
-        # ── Edit mode expand/collapse geometry animation ──────────────
-        self._geometry_anim = QPropertyAnimation(self, b"geometry")
-        self._geometry_anim.setDuration(450)  # ~0.45s, smooth expand/collapse
-        self._geometry_anim.setEasingCurve(QEasingCurve.InOutCubic)  # smooth start and end
-        self._geometry_anim_entering = False  # True = expanding into edit, False = collapsing out
-        self._geometry_anim.finished.connect(self._on_edit_geometry_anim_finished)
-
-        # ── Glow fade out/in during expand/collapse (0.4s) ──────────────
-        self._glow_anim = QVariantAnimation(self)
-        self._glow_anim.setDuration(400)
-        self._glow_anim.setEasingCurve(QEasingCurve.InOutCubic)
-        self._glow_anim.valueChanged.connect(self._on_glow_anim_value)
-
-        # ── Narrow/wide (compact) geometry animation ──────────────────
-        # Animate width only and keep window centered (so it expands from center, not sticks to one side)
-        self._compact_width_anim = QVariantAnimation()
-        self._compact_width_anim.setDuration(350)
-        self._compact_width_anim.setEasingCurve(QEasingCurve.InOutCubic)
-        self._compact_width_anim.valueChanged.connect(self._on_compact_width_anim_value)
-        self._compact_anim_going_narrow = False
-        self._compact_anim_center_x = 0
-        self._compact_anim_y = 0
-        self._compact_anim_h = 0
-        self._compact_width_anim.finished.connect(self._on_compact_geometry_anim_finished)
+        # ── Motion ───────────────────────────────────────────────────
+        # Every spatial transition (edit expand/collapse, narrow/wide) runs
+        # on one spring clock, one spring per edge. A spring starts from the
+        # geometry already on screen and keeps its velocity, so reversing
+        # mid-flight bends the motion instead of restarting it.
+        self._motion = SpringGroup(self, interval_ms=16)
+        self._sx = self._motion.add("x", 0.0, damping=0.88, response=0.34)
+        self._sy = self._motion.add("y", 0.0, damping=0.88, response=0.34)
+        self._sw = self._motion.add("w", float(self.DEFAULT_W), damping=0.88, response=0.34)
+        self._sh = self._motion.add("h", float(self.DEFAULT_H), damping=0.88, response=0.34)
+        self._glow = self._motion.add("glow", 28.0, damping=1.0, response=0.26,
+                                      rest_value=0.05, rest_velocity=0.5)
+        self._motion.tick.connect(self._on_motion_tick)
+        self._motion.settled.connect(self._on_motion_settled)
+        self._motion_intent = None      # "expand" | "collapse" | "narrow" | "wide"
+        self._edit_target = False       # what the user last asked for
+        rect = self.geometry()
+        self._motion.jump(x=float(rect.x()), y=float(rect.y()),
+                          w=float(rect.width()), h=float(rect.height()))
 
         # ── Build UI ─────────────────────────────────────────────────
         self._build_ui()
@@ -836,10 +483,33 @@ class NotchOverlay(QWidget):
         self._scroll_timer.start()
         print("[Notch] Overlay ready (mode: Notch=voice follow, Keys & Scroll=manual)", flush=True)
 
-    def _on_glow_anim_value(self, value):
-        self._current_glow_alpha = int(round(value))
-        self._target_glow_alpha = self._current_glow_alpha
-        self.update()
+    def _on_motion_tick(self):
+        """Apply the springs to the window. One place, every frame."""
+        rect = QRect(int(round(self._sx.value)), int(round(self._sy.value)),
+                     max(1, int(round(self._sw.value))),
+                     max(1, int(round(self._sh.value))))
+        if rect != self.geometry():
+            self.setGeometry(rect)
+        glow = int(round(self._glow.value))
+        if glow != self._current_glow_alpha:
+            self._current_glow_alpha = glow
+            self.update()
+
+    def _animate_geometry_to(self, target: QRect, response: float = 0.34):
+        """Retarget the window's edges. Reversible at any point."""
+        self._sx.response = self._sy.response = self._sw.response = self._sh.response = response
+        self._motion.set_targets(x=float(target.x()), y=float(target.y()),
+                                 w=float(target.width()), h=float(target.height()))
+
+    def _on_motion_settled(self):
+        """Run the finish step for whichever transition just landed."""
+        intent, self._motion_intent = self._motion_intent, None
+        if intent == "expand":
+            self._on_edit_motion_finished()
+        elif intent == "collapse":
+            self._on_edit_motion_finished()
+        elif intent in ("narrow", "wide"):
+            self._on_compact_motion_finished(narrow=intent == "narrow")
 
     def _on_text_fade_out_finished(self):
         """Text has faded out; apply styling while invisible, then fade back in (or defer for collapse)."""
@@ -897,7 +567,11 @@ class NotchOverlay(QWidget):
             """ % (editor_bg, editor_fg, bar_track, bar_handle, bar_hover,
                    bar_track, bar_handle, bar_hover))
             self._clear_edit_mode_char_formats()
+            self._reserve_editor_footer(True)
             self._text_edit.setFocus()
+            self._layout_done_button()
+            self._done_btn.show()
+            self._done_btn.raise_()
             self._text_fade_in.start()
         else:
             # Collapsing: apply pill styling while text is invisible (no snap)
@@ -914,6 +588,8 @@ class NotchOverlay(QWidget):
             self._partial_word = -1
             self._voice_target_scroll = None
             self._edit_mode = False
+            self._done_btn.hide()
+            self._reserve_editor_footer(False)
             self._text_edit.setReadOnly(True)
             self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             self._text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -934,63 +610,73 @@ class NotchOverlay(QWidget):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
+        self._root_layout = root
         s = self._scale
-        root.setContentsMargins(int(18 * s), int(8 * s), int(18 * s), int(10 * s))
+        # The top inset is 4 px of margin plus 4 px of hit-box padding, so the
+        # glyphs sit where the reference puts them while the hit area is 32 px
+        # and nothing is clipped by the bar's own height.
+        root.setContentsMargins(int(18 * s), int(4 * s), int(18 * s), int(10 * s))
         root.setSpacing(0)
 
-        # ── Top bar ────────────────────────────────────────────────
-        top_bar = QHBoxLayout()
+        # ── Chrome (top bar) ───────────────────────────────────────
+        # One container so the entire bar can recede as a single object:
+        # five icons fading on five clocks reads as noise, one fade reads
+        # as the window getting out of the way.
+        self._chrome = QWidget(self)
+        top_bar = QHBoxLayout(self._chrome)
         top_bar.setContentsMargins(0, 0, 0, 0)
-        top_bar.setSpacing(6)
+        top_bar.setSpacing(0)
 
-        # REPLACED: Custom AnimatedCloseButton
-        self._close_btn = AnimatedCloseButton()
-        self._close_btn.setToolTip("Close")
-        self._close_btn.clicked.connect(self.close)
-        
+        self._close_btn = MinimizeButton(hit=int(30 * s))
+        self._close_btn.setToolTip("Minimize (or Esc)")
+        self._close_btn.clicked.connect(self._minimize)
         top_bar.addWidget(self._close_btn)
         top_bar.addStretch()
 
-        # Top-right icons (mic, compact, settings) – fade in/out on contract/expand
         self._icons_container = QWidget()
         icons_layout = QHBoxLayout(self._icons_container)
         icons_layout.setContentsMargins(0, 0, 0, 0)
-        icons_layout.setSpacing(6)
+        icons_layout.setSpacing(int(1 * s))
         self._muted = False
-        self._note_btn = NoteButton()
+        hit = int(30 * s)
+        self._note_btn = NoteButton(hit=hit)
         self._note_btn.setToolTip("New note (Ctrl+N)")
         self._note_btn.clicked.connect(self._open_note)
         icons_layout.addWidget(self._note_btn)
-        self._mic_btn = MicButton()
+        self._mic_btn = MicButton(hit=hit)
         self._mic_btn.setToolTip("Mute mic (stop voice from advancing script)")
         self._mic_btn.clicked.connect(self._toggle_mic_mute)
         icons_layout.addWidget(self._mic_btn)
-        self._compact_btn = CompactButton()
-        self._compact_btn.setToolTip("Narrow (2 words)")
+        self._compact_btn = CompactButton(hit=hit)
+        self._compact_btn.setToolTip("Narrow reader (about two words per line)")
         self._compact_btn.clicked.connect(self._toggle_compact_mode)
         icons_layout.addWidget(self._compact_btn)
-        self._settings_btn = CogButton()
+        self._settings_btn = MoreButton(hit=hit)
         self._settings_btn.setToolTip("Menu")
         self._settings_btn.clicked.connect(self._open_menu_from_button)
         icons_layout.addWidget(self._settings_btn)
-        self._icons_opacity = QGraphicsOpacityEffect(self._icons_container)
-        self._icons_container.setGraphicsEffect(self._icons_opacity)
-        self._icons_opacity.setOpacity(1.0)
-        self._icon_fade_in = QPropertyAnimation(self._icons_opacity, b"opacity")
-        self._icon_fade_in.setDuration(200)
-        self._icon_fade_in.setStartValue(0.0)
-        self._icon_fade_in.setEndValue(1.0)
-        self._icon_fade_in.setEasingCurve(QEasingCurve.OutCubic)
-        self._icon_fade_out = QPropertyAnimation(self._icons_opacity, b"opacity")
-        self._icon_fade_out.setDuration(200)
-        self._icon_fade_out.setStartValue(1.0)
-        self._icon_fade_out.setEndValue(0.0)
-        self._icon_fade_out.setEasingCurve(QEasingCurve.InCubic)
-        self._icon_fade_out.finished.connect(self._icons_container.hide)
         top_bar.addWidget(self._icons_container)
-        self._set_top_bar_icon_size(int(24 * self._scale))
+        self._set_top_bar_icon_size(int(24 * s))
 
-        root.addLayout(top_bar)
+        # The bar is as tall as the hit box: a 24 px bar clipped the bottom
+        # of every 24 px glyph drawn inside a 32 px target.
+        self._chrome.setFixedHeight(int(32 * s))
+        root.addWidget(self._chrome)
+
+        # Idle recede: the chrome dissolves after a pause and returns the
+        # moment the pointer comes back, so the script is the only thing
+        # left on screen while you are actually reading.
+        self._chrome_opacity = QGraphicsOpacityEffect(self._chrome)
+        self._chrome.setGraphicsEffect(self._chrome_opacity)
+        self._chrome_opacity.setOpacity(1.0)
+        self._chrome_fade = QPropertyAnimation(self._chrome_opacity, b"opacity", self)
+        self._chrome_fade.setDuration(240)
+        self._chrome_fade.setEasingCurve(QEasingCurve.OutCubic)
+        self.setMouseTracking(True)
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.setInterval(2200)
+        self._idle_timer.timeout.connect(self._recede_chrome)
 
         # ── Script text area ─────────────────────────────────────────
         self._text_edit = QTextEdit()
@@ -1007,9 +693,18 @@ class NotchOverlay(QWidget):
         self._text_edit.viewport().installEventFilter(self)
         root.addWidget(self._text_edit)
 
+        # The editor's way out. Escape works from the keyboard, but a
+        # surface you can only leave with a hidden key is a trap.
+        self._done_btn = TextButton("Done", self, primary=True)
+        self._done_btn.clicked.connect(self._toggle_edit_mode)
+        self._done_btn.hide()
+
         # Lower-edge fade over the script (reference card detail)
         self._bottom_fade = BottomFade(self)
         self._layout_bottom_fade()
+        # The band sits on the clipped line, so it travels with the script.
+        self._text_edit.verticalScrollBar().valueChanged.connect(
+            lambda _value: self._layout_bottom_fade())
 
         # Text fade out/in for smooth mode transitions (expand/collapse)
         self._text_opacity = QGraphicsOpacityEffect(self._text_edit)
@@ -1075,7 +770,11 @@ class NotchOverlay(QWidget):
         self._sc_go4 = _mk("Ctrl+Shift+4", lambda: self._go_to_checkpoint(4))
         self._sc_left = _mk("Left", lambda: self._adjust_speed_dir(-1))
         self._sc_right = _mk("Right", lambda: self._adjust_speed_dir(1))
-        self._sc_esc = _mk("Escape", self.close)
+        self._sc_esc = QShortcut(QKeySequence("Escape"), self)
+        # Window context, not application: an application-wide Escape fired
+        # from inside Settings and closed the reader behind the dialog.
+        self._sc_esc.setContext(Qt.WindowShortcut)
+        self._sc_esc.activated.connect(self._on_escape)
 
     # ═══════════════════════════════════════════════════════════════════
     #  Custom Painting (Floating Pill & Reactive Glow)
@@ -1097,6 +796,7 @@ class NotchOverlay(QWidget):
         super().resizeEvent(event)
         # No mask needed - edges are smooth via paintEvent anti-aliasing
         self._layout_bottom_fade()
+        self._layout_done_button()
         # Line breaks depend on the viewport width: rebuild them once the
         # resize settles rather than on every animation frame.
         if self._script_text and not self._edit_mode:
@@ -1109,9 +809,11 @@ class NotchOverlay(QWidget):
         w = self.width()
         h = self.height()
 
-        # 1. Define Shape (Rounded Pill)
+        # 1. Define Shape (Rounded Pill). The narrow card takes a smaller
+        #    radius so the corners do not eat half of its width.
+        radius = int(20 * self._scale) if self._compact_mode else self.CORNER_RADIUS
         path = QPainterPath()
-        path.addRoundedRect(0, 0, w, h, self.CORNER_RADIUS, self.CORNER_RADIUS)
+        path.addRoundedRect(0, 0, w, h, radius, radius)
 
         # 2. Draw Background
         painter.setPen(Qt.NoPen)
@@ -1123,29 +825,74 @@ class NotchOverlay(QWidget):
         painter.setBrush(bg_color)
         painter.drawPath(path)
 
-        # 3. Draw Reactive Glow
-        # The glow is a radial gradient at the bottom center
-        # Intensity depends on self._current_glow_alpha
+        # 3. Material and status.
+        # The old radial wash covered the lower half of the card in colour,
+        # which on white read as a smudge under the words rather than depth.
+        # What is left is a wash quiet enough to be felt and not read, plus a
+        # short level line that carries the voice signal on its own.
+        s = self._scale
         if not self._edit_mode:
-            glow_center = QPoint(int(w/2), int(h)) # Bottom center
-            radius = w / 1.5
-
-            radialGrad = QRadialGradient(glow_center, radius)
-
+            level = max(0.0, min(1.0, (self._current_glow_alpha - 28) / 140.0))
             glow_base = self.GLOW_COLOR if self._voice_mode else self.MANUAL_GLOW_COLOR
-            glow_col = QColor(glow_base)
-            # A coloured wash over white reads as a smudge, so the light theme
-            # keeps the same signal at a fraction of the strength.
-            alpha = self._current_glow_alpha * (1.0 if self._dark_theme else 0.45)
-            glow_col.setAlpha(int(alpha))
 
-            radialGrad.setColorAt(0.0, glow_col)
-            radialGrad.setColorAt(0.5, QColor(0, 0, 0, 0)) # Fade out
+            ambient = QColor(glow_base)
+            ambient.setAlpha(int((9 if self._dark_theme else 6) * (0.35 + 0.65 * level)))
+            wash = QRadialGradient(QPointF(w / 2.0, float(h)), w / 2.1)
+            wash.setColorAt(0.0, ambient)
+            wash.setColorAt(1.0, QColor(0, 0, 0, 0))
 
-            painter.setBrush(QBrush(radialGrad))
-            painter.setClipPath(path) # Keep glow inside the pill
+            painter.save()
+            painter.setClipPath(path)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(wash))
             painter.drawRect(0, 0, w, h)
-            painter.setClipping(False)
+
+            # The meter grows from the centre, so it reads as a level, not a
+            # progress bar. At rest it is a short, quiet dash.
+            if not self._peeked:
+                inset = 30 * s
+                track = max(1.0, w - 2 * inset)
+                short = min(track, 26 * s)
+                meter_w = short + (track - short) * level
+                meter = QColor(glow_base)
+                meter.setAlpha(int(105 + 115 * level))
+                painter.setBrush(meter)
+                painter.drawRoundedRect(
+                    QRectF((w - meter_w) / 2.0, h - 7 * s,
+                           meter_w, max(2.0, 2.0 * s)), 1.0, 1.0)
+            painter.restore()
+
+        # 3b. A resting pill still has to say something. Three bars at the
+        #     centre read as a level meter, and they are the only element the
+        #     peek state shows.
+        if self._peeked:
+            s = self._scale
+            level = max(0.0, min(1.0, self._smoothed_volume_level * 4.0))
+            color = QColor(self.GLOW_COLOR if self._voice_mode else self.MANUAL_GLOW_COLOR)
+            color.setAlpha(235)
+            bar_w = 3.0 * s
+            gap = 3.6 * s
+            # At rest the bars keep a short waveform shape rather than
+            # collapsing to three dots, which read as "more options".
+            tall = 9.0 * s + 11.0 * s * level
+            total = bar_w * 3 + gap * 2
+            x0 = (w - total) / 2.0
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(color)
+            for index, factor in enumerate((0.68, 1.0, 0.68)):
+                bar_h = tall * factor
+                painter.drawRoundedRect(
+                    QRectF(x0 + index * (bar_w + gap), (h - bar_h) / 2.0, bar_w, bar_h),
+                    bar_w / 2.0, bar_w / 2.0)
+
+        # 3c. Light catching the top edge of the material (dark only; on a
+        #     white card there is no edge to catch).
+        if self._dark_theme:
+            painter.save()
+            painter.setClipPath(path)
+            painter.setPen(QPen(QColor(255, 255, 255, 16), 1.0))
+            painter.drawLine(QPointF(radius, 1.0), QPointF(w - radius, 1.0))
+            painter.restore()
 
         # 4. Hairline border, drawn last so the glow cannot wash it out.
         # Inset by half a pixel so a 1 px stroke lands on the pixel grid.
@@ -1157,7 +904,7 @@ class NotchOverlay(QWidget):
         border_path = QPainterPath()
         border_path.addRoundedRect(
             inset, inset, w - 1.0, h - 1.0,
-            self.CORNER_RADIUS - inset, self.CORNER_RADIUS - inset,
+            radius - inset, radius - inset,
         )
         painter.drawPath(border_path)
 
@@ -1170,20 +917,18 @@ class NotchOverlay(QWidget):
         Handles both text scrolling AND glow animation smoothing.
         Runs at ~30 FPS.
         """
-        # 1. Animate Glow (smooth lerp toward target; skip while expand/collapse glow anim runs)
-        if self._glow_anim.state() != QAbstractAnimation.Running:
-            diff = self._target_glow_alpha - self._current_glow_alpha
-            self._current_glow_alpha += diff * 0.12  # Slower follow = smoother bar
-            if self._current_glow_alpha < 0: self._current_glow_alpha = 0
-            if self._current_glow_alpha > 255: self._current_glow_alpha = 255
-        
-        # During collapse from edit mode, clip window to pill so top bar doesn't "separate" visually
-        if (self._geometry_anim.state() == QAbstractAnimation.Running
-                and not self._geometry_anim_entering):
+        # 1. Move the card and the glow. The spring clock only runs while
+        #    something is actually in flight, so an idle reader costs no
+        #    frames and the card does not repaint against a static screen.
+        glow_target = 0.0 if self._edit_target else float(self._target_glow_alpha)
+        if abs(self._glow.target - glow_target) > 0.5:
+            self._glow.set_target(glow_target)
+
+        # During a collapse, clip the window to the pill so the toolbar
+        # cannot appear to float outside the card as it shrinks.
+        if (self._motion.running and not self._edit_target
+                and self._motion_intent == "collapse"):
             self._update_collapse_mask()
-        
-        # Trigger repaint to show new glow
-        self.update()
 
         # 2. Handle Scrolling
         if self._edit_mode:
@@ -1308,6 +1053,10 @@ class NotchOverlay(QWidget):
             self._smoothed_volume_level = self._smoothed_volume_level * 0.75 + level * 0.25
             intensity = min(1.0, self._smoothed_volume_level * 5.0)
             self._target_glow_alpha = 28 + int(140 * intensity)
+            # The peek pill animates from this level directly; the glow spring
+            # is parked while the reader is put away.
+            if self._peeked:
+                self.update()
 
     def _toggle_mic_mute(self):
         self._muted = not self._muted
@@ -1476,486 +1225,392 @@ class NotchOverlay(QWidget):
     # ═══════════════════════════════════════════════════════════════════
 
     def _build_menu(self) -> QMenu:
-        menu = _RoundedMenu(self)
-        scale = self._scale
-        radius = max(6, int(12 * scale))
-        compact = getattr(self, "_compact_mode", False)
-        font_sz = f"{int(9 * scale)}px" if compact else f"{int(11 * scale)}px"
-        pad = "2px 6px" if compact else "4px 10px"
-        # ── Poppins Regular, rounded corners ────────────────────────────
+        """The menu is a surface, not a stack of system widgets.
+
+        Everything follows the card: same material, same type ramp, same
+        hairline. The mode is one segmented control instead of three separate
+        readings of the same state, the font size shows its current value, and
+        appearance and actions are grouped by what they change.
+        """
+        dark = self._dark_theme
+        s = self._scale
+
+        def px(value: float) -> int:
+            return int(round(value * s))
+
+        menu = RoundedMenu(self, dark=dark)
+        menu._radius = px(14)
+        menu.setFixedWidth(px(236))
+
+        fg = "#EDEDEF" if dark else "#151517"
+        fg2 = "#9C9CA2" if dark else "#6E6E73"
+        line = "#343436" if dark else "#E4E4E6"
+        hover = "#2C2C2E" if dark else "#ECECEE"
+        track = "#2A2A2C" if dark else "#EDEDEF"
+        thumb = "#48484A" if dark else "#FFFFFF"
+        panel = "#1E1E1E" if dark else "#F7F7F8"
+
         menu.setStyleSheet(f"""
             QMenu {{
-                background-color: transparent;
+                background: transparent;
                 border: none;
-                padding: {4 if compact else 4}px;
+                padding: {px(8)}px;
             }}
             QMenu::item {{
-                background-color: transparent;
-                color: #b0b0b0;
-                padding: {pad};
-                border-radius: 6px;
-                font-family: "Poppins", "Segoe UI", sans-serif;
-                font-weight: 400;
-                font-size: {font_sz};
+                color: {fg};
+                padding: {px(7)}px {px(10)}px;
+                border-radius: {px(8)}px;
+                font-family: "Segoe UI", system-ui, sans-serif;
+                font-size: {px(13)}px;
                 margin: 1px 0;
             }}
-            QMenu::item:selected {{
-                background-color: #2a2a2a;
-                color: #ffffff;
-            }}
+            QMenu::item:selected {{ background: {hover}; }}
             QMenu::separator {{
-                background-color: #333;
                 height: 1px;
-                margin: 2px 6px;
+                background: {line};
+                margin: {px(6)}px {px(8)}px;
+            }}
+            QToolTip {{
+                background: {panel};
+                color: {fg};
+                border: 1px solid {line};
+                padding: 4px 7px;
             }}
         """)
-        menu._radius = radius
-        if compact:
-            menu.setMaximumWidth(int(150 * scale))
-        
-        # ── 1. Mode (Notch = follows voice / Keys & Scroll = manual) ──
-        voice_widget = QWidget(menu)
-        voice_widget.setCursor(Qt.PointingHandCursor)
-        voice_layout = QHBoxLayout(voice_widget)
-        m = (6, 2, 6, 2) if compact else (10, 4, 10, 4)
-        voice_layout.setContentsMargins(*m)
-        voice_layout.setSpacing(8 if compact else 10)
 
-        # Notch = blue (follows voice), Keys & Scroll = green (manual)
-        ind_color = "#007aff" if self._voice_mode else "#4cd964"
-        mode_tag = "Notch" if self._voice_mode else "Keys & Scroll"
-        if not self._voice_mode:
-            voice_widget.setToolTip(
-                '<span style="font-size: 6pt">Hold Space to scroll · Use arrow keys to adjust speed</span>'
+        def label(text, size=13, color=fg, weight=400):
+            w = QLabel(text)
+            w.setStyleSheet(
+                f"color: {color}; background: transparent;"
+                f" font-family: 'Segoe UI', system-ui, sans-serif;"
+                f" font-size: {px(size)}px; font-weight: {weight};"
             )
+            return w
 
-        # Style for the whole row with hover
-        voice_widget.setStyleSheet(f"""
-            QWidget {{
-                background-color: transparent;
-                border-radius: 6px;
-            }}
-            QWidget:hover {{
-                background-color: #2a2a2a;
-            }}
-        """)
+        def add_widget(inner, top=0, bottom=0):
+            holder = QWidget(menu)
+            lay = QHBoxLayout(holder)
+            lay.setContentsMargins(0, px(top), 0, px(bottom))
+            lay.setSpacing(0)
+            lay.addWidget(inner)
+            action = QWidgetAction(menu)
+            action.setDefaultWidget(holder)
+            menu.addAction(action)
+            return action
 
-        v_label = QLabel("Mode")
-        v_label.setStyleSheet(f"""
-            color: #b0b0b0; 
-            font-family: "Poppins", "Segoe UI", sans-serif; 
-            font-weight: 400; 
-            font-size: {font_sz};
-            background: transparent;
-        """)
-        voice_layout.addWidget(v_label)
-        voice_layout.addStretch()
+        # ── Mode: one control, one state ─────────────────────────────
+        segmented = QWidget(menu)
+        segmented.setStyleSheet(f"background: {track}; border-radius: {px(9)}px;")
+        segmented_layout = QHBoxLayout(segmented)
+        segmented_layout.setContentsMargins(px(2), px(2), px(2), px(2))
+        segmented_layout.setSpacing(px(2))
+        mode_group = QButtonGroup(menu)
+        mode_group.setExclusive(True)
 
-        # Mode tag (e.g., "Notch" or "Keys & Scroll") — store ref so we can update on mode switch
-        tag_label = QLabel(mode_tag)
-        tag_font = f"{int(8 * scale)}px" if compact else f"{int(9 * scale)}px"
-        tag_label.setStyleSheet(f"""
-            color: {ind_color};
-            font-family: "Poppins", "Segoe UI", sans-serif;
-            font-weight: 400;
-            font-size: {tag_font};
-            padding: 1px 6px;
-            border: 1px solid {ind_color};
-            border-radius: 6px;
-            background: transparent;
-        """)
-        voice_layout.addWidget(tag_label)
-
-        # Glowing indicator dot — store ref for refresh on mode switch
-        indicator = QLabel()
-        indicator.setFixedSize(int(8 * scale), int(8 * scale))
-        indicator.setStyleSheet(f"""
-            background-color: {ind_color}; 
-            border-radius: 4px;
-        """)
-        voice_layout.addWidget(indicator)
-
-        # Store refs so menu can refresh mode display when user toggles (keep menu open)
-        menu._mode_tag_label = tag_label
-        menu._mode_indicator = indicator
-        menu._mode_tag_font = tag_font
-
-        # Click handler: install filter on the widget we control (avoids createWidget returning None)
-        class VoiceRowClickFilter(QObject):
-            def __init__(self, menu, callback, parent=None):
-                super().__init__(parent)
-                self._menu = menu
-                self._callback = callback
-
-            def eventFilter(self, obj, event):
-                if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
-                    self._callback()
-                    # Keep menu open so user can change other settings after switching mode
-                    return True
-                return False
-
-        def _toggle_action():
-            self._toggle_mode(not self._voice_mode)
-            self._refresh_menu_mode_display(menu)
-
-        voice_widget.installEventFilter(VoiceRowClickFilter(menu, _toggle_action, parent=menu))
-
-        voice_action = QWidgetAction(menu)
-        voice_action.setDefaultWidget(voice_widget)
-        menu.addAction(voice_action)
-        
-        menu.addSeparator()
-
-        # ── 2. Speed or "Voice Follow Active" (QStackedWidget so they occupy same space on mode switch) ─
-        sm = (int(6 * scale), int(2 * scale), int(6 * scale), int(2 * scale)) if compact else (int(10 * scale), int(2 * scale), int(10 * scale), int(2 * scale))
-        speed_section = QStackedWidget(menu)
-
-        # Page 0: Notch mode — "Voice Follow Active"
-        voice_follow_row = QWidget(menu)
-        voice_follow_row_layout = QHBoxLayout(voice_follow_row)
-        voice_follow_row_layout.setContentsMargins(0, 0, 0, 0)
-        voice_follow_row_layout.setSpacing(0)
-        voice_follow_lbl = QLabel("Voice Follow Active")
-        voice_follow_lbl.setStyleSheet(f"""
-            color: #88ccff;
-            font-family: "Poppins", "Segoe UI", sans-serif;
-            font-weight: 400;
-            font-size: {font_sz};
-            background: transparent;
-        """)
-        glow = QGraphicsDropShadowEffect()
-        glow.setBlurRadius(8)
-        glow.setColor(QColor(0x40, 0x90, 0xff, 140))
-        glow.setOffset(0, 0)
-        voice_follow_lbl.setGraphicsEffect(glow)
-        voice_follow_lbl.setCursor(Qt.ArrowCursor)
-        voice_follow_row_layout.addWidget(voice_follow_lbl)
-        voice_follow_row_layout.addStretch()
-        speed_section.addWidget(voice_follow_row)
-
-        # Page 1: Keys & Scroll — speed slider
-        speed_row = QWidget(menu)
-        speed_row_layout = QHBoxLayout(speed_row)
-        speed_row_layout.setContentsMargins(0, 0, 0, 0)
-        speed_row_layout.setSpacing(6 if compact else 8)
-        speed_label = QLabel("Speed")
-        speed_label.setStyleSheet(f"""
-            color: #b0b0b0;
-            font-family: "Poppins", "Segoe UI", sans-serif;
-            font-weight: 400;
-            font-size: {font_sz};
-        """)
-        speed_row_layout.addWidget(speed_label)
-        speed_slider = QSlider(Qt.Horizontal)
-        speed_slider.setRange(1, 400)
-        speed_slider.setValue(self._manual_wpm)
-        speed_slider.setFixedWidth(int(60 * scale) if compact else int(70 * scale))
-        speed_slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                height: 4px;
-                background: #3a3a3c;
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                width: 14px;
-                height: 14px;
-                margin: -5px 0;
-                background: qradialgradient(cx:0.5, cy:0.5, radius:0.5,
-                    fx:0.3, fy:0.3, stop:0 #ffffff, stop:1 #8e8e93);
-                border-radius: 7px;
-                border: 1px solid #555;
-            }
-            QSlider::handle:horizontal:hover {
-                background: qradialgradient(cx:0.5, cy:0.5, radius:0.5,
-                    fx:0.3, fy:0.3, stop:0 #ffffff, stop:1 #007aff);
-            }
-        """)
-        speed_row_layout.addWidget(speed_slider)
-        speed_value = QLabel(str(self._manual_wpm))
-        speed_value.setAlignment(Qt.AlignCenter)
-        speed_value.setFixedSize(int(28 * scale), int(18 * scale))
-        speed_value.setStyleSheet(f"""
-            background-color: #2c2c2e;
-            color: #b0b0b0;
-            border-radius: 4px;
-            font-family: "Poppins", "Segoe UI", sans-serif;
-            font-weight: 400;
-            font-size: {int(10 * scale)}px;
-        """)
-        speed_row_layout.addWidget(speed_value)
-
-        def _on_speed_change(value):
-            speed_value.setText(str(value))
-            self._set_speed(value, "manual")
-        speed_slider.valueChanged.connect(_on_speed_change)
-
-        speed_section.addWidget(speed_row)
-        speed_section.setCurrentIndex(0 if self._voice_mode else 1)
-        menu._speed_section = speed_section
-
-        speed_widget = QWidget(menu)
-        speed_layout = QHBoxLayout(speed_widget)
-        speed_layout.setContentsMargins(*sm)
-        speed_layout.setSpacing(6 if compact else 8)
-        speed_layout.addWidget(speed_section)
-
-        speed_action = QWidgetAction(menu)
-        speed_action.setDefaultWidget(speed_widget)
-        menu.addAction(speed_action)
-
-        # ── 3. Font Size row with − / + buttons ──────────────────────
-        font_widget = QWidget(menu)
-        font_layout = QHBoxLayout(font_widget)
-        font_layout.setContentsMargins(*sm)
-        font_layout.setSpacing(6 if compact else 8)
-
-        font_label = QLabel("Font Size")
-        font_label.setStyleSheet(f"""
-            color: #b0b0b0;
-            font-family: "Poppins", "Segoe UI", sans-serif;
-            font-weight: 400;
-            font-size: {font_sz};
-        """)
-        font_layout.addWidget(font_label)
-        font_layout.addStretch()
-
-        btn_font_sz = int(14 * scale)
-        btn_sz = int(28 * scale)
-        btn_style = f"""
-            QPushButton {{
-                background-color: #2c2c2e;
-                color: #b0b0b0;
-                border: 1px solid #444;
-                border-radius: 4px;
-                font-family: "Poppins", "Segoe UI", sans-serif;
-                font-weight: 400;
-                font-size: {btn_font_sz}px;
-                min-width: {btn_sz}px;
-                max-width: {btn_sz}px;
-            }}
-            QPushButton:hover {{
-                background-color: #3a3a3c;
-                color: #ffffff;
-            }}
-            QPushButton:pressed {{
-                background-color: #007aff;
-                color: #ffffff;
-            }}
-        """
-        font_minus_btn = QPushButton("−")
-        font_minus_btn.setStyleSheet(btn_style)
-        font_minus_btn.setCursor(Qt.PointingHandCursor)
-        font_minus_btn.clicked.connect(self._font_decrease)
-        font_layout.addWidget(font_minus_btn)
-
-        font_plus_btn = QPushButton("+")
-        font_plus_btn.setStyleSheet(btn_style)
-        font_plus_btn.setCursor(Qt.PointingHandCursor)
-        font_plus_btn.clicked.connect(self._font_increase)
-        font_layout.addWidget(font_plus_btn)
-
-        font_action = QWidgetAction(menu)
-        font_action.setDefaultWidget(font_widget)
-        menu.addAction(font_action)
-
-        # ── 3b. Font: cycle through Consolas, Arial, Open Sans, Times, Helvetica ──
-        font_options = getattr(self, "FONT_OPTIONS", (("Consolas", "Consolas"), ("Arial", "Arial")))
-        try:
-            current_idx = next(i for i, (_, fam) in enumerate(font_options) if fam == self._font_family)
-        except StopIteration:
-            current_idx = 0
-            self._font_family = font_options[0][1]
-        display_name, family_name = font_options[current_idx]
-        font_type_widget = QWidget(menu)
-        font_type_layout = QHBoxLayout(font_type_widget)
-        font_type_layout.setContentsMargins(*sm)
-        font_type_layout.setSpacing(6 if compact else 8)
-        font_type_label = QLabel("Font")
-        font_type_label.setStyleSheet(f"""
-            color: #b0b0b0;
-            font-family: "Poppins", "Segoe UI", sans-serif;
-            font-weight: 400;
-            font-size: {font_sz};
-        """)
-        font_type_layout.addWidget(font_type_label)
-        font_type_layout.addStretch()
-        font_type_btn = QPushButton(display_name)
-        btn_font_size = int(9 * scale)
-        font_type_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: #2c2c2e;
-                color: #b0b0b0;
-                border: 1px solid #444;
-                border-radius: 4px;
-                font-family: "{family_name}", sans-serif;
-                font-weight: 400;
-                font-size: {btn_font_size}px;
-                min-width: {int(56 * scale)}px;
-            }}
-            QPushButton:hover {{
-                background-color: #3a3a3c;
-                color: #ffffff;
-            }}
-            QPushButton:pressed {{
-                background-color: #007aff;
-                color: #ffffff;
-            }}
-        """)
-        font_type_btn.setCursor(Qt.PointingHandCursor)
-        font_type_btn.setToolTip("Click to cycle: " + ", ".join(d for d, _ in font_options))
-        def _apply_font_btn_style(btn, idx):
-            disp, fam = font_options[idx]
-            btn.setText(disp)
+        def segment(text):
+            btn = QPushButton(text)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedHeight(px(28))
             btn.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: #2c2c2e;
-                    color: #b0b0b0;
-                    border: 1px solid #444;
-                    border-radius: 4px;
-                    font-family: "{fam}", sans-serif;
-                    font-weight: 400;
-                    font-size: {btn_font_size}px;
-                    min-width: {int(56 * scale)}px;
+                    background: transparent;
+                    color: {fg2};
+                    border: none;
+                    border-radius: {px(7)}px;
+                    padding: 0 {px(6)}px;
+                    font-family: "Segoe UI", system-ui, sans-serif;
+                    font-size: {px(12)}px;
+                    font-weight: 500;
                 }}
-                QPushButton:hover {{
-                    background-color: #3a3a3c;
-                    color: #ffffff;
-                }}
-                QPushButton:pressed {{
-                    background-color: #007aff;
-                    color: #ffffff;
-                }}
+                QPushButton:hover {{ color: {fg}; }}
+                QPushButton:checked {{ background: {thumb}; color: {fg}; }}
             """)
-        def _toggle_font_type():
-            try:
-                idx = next(i for i, (_, fam) in enumerate(font_options) if fam == self._font_family)
-            except StopIteration:
-                idx = 0
-            next_idx = (idx + 1) % len(font_options)
-            _, next_family = font_options[next_idx]
-            self._font_family = next_family
-            self._apply_typography()
-            _apply_font_btn_style(font_type_btn, next_idx)
-        font_type_btn.clicked.connect(_toggle_font_type)
-        font_type_layout.addWidget(font_type_btn)
-        font_type_action = QWidgetAction(menu)
-        font_type_action.setDefaultWidget(font_type_widget)
-        menu.addAction(font_type_action)
+            mode_group.addButton(btn)
+            segmented_layout.addWidget(btn)
+            return btn
 
-        # ── 3c. Theme: Dark / Light ──────────────────────────────────
-        theme_widget = QWidget(menu)
-        theme_layout = QHBoxLayout(theme_widget)
-        theme_layout.setContentsMargins(*sm)
-        theme_layout.setSpacing(6 if compact else 8)
-        theme_label = QLabel("Theme")
-        theme_label.setStyleSheet(f"""
-            color: #b0b0b0;
-            font-family: "Poppins", "Segoe UI", sans-serif;
-            font-weight: 400;
-            font-size: {font_sz};
+        voice_btn = segment("Voice")
+        manual_btn = segment("Manual")
+        voice_btn.setChecked(self._voice_mode)
+        manual_btn.setChecked(not self._voice_mode)
+        voice_btn.setToolTip("Follow your speech")
+        manual_btn.setToolTip("Scroll at a fixed pace")
+        menu._voice_btn = voice_btn
+        menu._manual_btn = manual_btn
+
+        def choose_mode(voice: bool):
+            if voice != self._voice_mode:
+                self._toggle_mode(voice)
+            self._refresh_menu_mode_display(menu)
+
+        voice_btn.clicked.connect(lambda: choose_mode(True))
+        manual_btn.clicked.connect(lambda: choose_mode(False))
+        add_widget(segmented, top=2, bottom=7)
+
+        # ── Status: what the reader is doing right now ───────────────
+        status_row = QWidget(menu)
+        status_layout = QHBoxLayout(status_row)
+        status_layout.setContentsMargins(px(10), 0, px(10), 0)
+        status_layout.setSpacing(px(7))
+        dot = QLabel()
+        dot.setFixedSize(px(6), px(6))
+        status_layout.addWidget(dot)
+        status = label("", size=11, color=fg2)
+        status_layout.addWidget(status, 1)
+        menu._status_dot = dot
+        menu._status_label = status
+        add_widget(status_row, bottom=4)
+
+        # ── Speed (manual mode only) ─────────────────────────────────
+        speed_row = QWidget(menu)
+        speed_layout = QHBoxLayout(speed_row)
+        speed_layout.setContentsMargins(px(10), 0, px(10), 0)
+        speed_layout.setSpacing(px(8))
+        speed_layout.addWidget(label("Speed", size=13))
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(1, 400)
+        slider.setValue(self._manual_wpm)
+        slider.setStyleSheet(f"""
+            QSlider::groove:horizontal {{
+                height: {px(4)}px;
+                background: {track};
+                border-radius: {px(2)}px;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: {fg2};
+                border-radius: {px(2)}px;
+            }}
+            QSlider::handle:horizontal {{
+                width: {px(14)}px;
+                height: {px(14)}px;
+                margin: {px(-5)}px 0;
+                background: {thumb};
+                border: 1px solid {line};
+                border-radius: {px(7)}px;
+            }}
         """)
-        theme_layout.addWidget(theme_label)
-        theme_layout.addStretch()
-        theme_btn = QPushButton("Dark" if self._dark_theme else "Light")
-        def _theme_btn_stylesheet(dark: bool) -> str:
-            if dark:
-                return f"""
-                    QPushButton {{
-                        background-color: #2c2c2e;
-                        color: #b0b0b0;
-                        border: 1px solid #444;
-                        border-radius: 4px;
-                        font-family: "Poppins", "Segoe UI", sans-serif;
-                        font-weight: 400;
-                        font-size: {int(9 * scale)}px;
-                        min-width: {int(56 * scale)}px;
-                    }}
-                    QPushButton:hover {{
-                        background-color: #3a3a3c;
-                        color: #ffffff;
-                    }}
-                    QPushButton:pressed {{
-                        background-color: #007aff;
-                        color: #ffffff;
-                    }}
-                """
+        speed_value = label(str(self._manual_wpm), size=11, color=fg2)
+        speed_value.setFixedWidth(px(30))
+        speed_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        speed_layout.addWidget(slider, 1)
+        speed_layout.addWidget(speed_value)
+        menu._speed_slider = slider
+        menu._speed_value = speed_value
+
+        def on_speed(value):
+            speed_value.setText(str(value))
+            self._set_speed(value, "manual")
+            status.setText(self._mode_status_text())
+
+        slider.valueChanged.connect(on_speed)
+        menu._speed_action = add_widget(speed_row, bottom=4)
+
+        menu.addSeparator()
+
+        # ── Text: size shows its value, typeface shows its own face ──
+        size_row = QWidget(menu)
+        size_layout = QHBoxLayout(size_row)
+        size_layout.setContentsMargins(px(10), 0, px(8), 0)
+        size_layout.setSpacing(px(8))
+        size_layout.addWidget(label("Font size", size=13))
+        size_layout.addStretch(1)
+
+        stepper = QWidget(menu)
+        stepper.setStyleSheet(f"background: {track}; border-radius: {px(8)}px;")
+        stepper_layout = QHBoxLayout(stepper)
+        stepper_layout.setContentsMargins(0, 0, 0, 0)
+        stepper_layout.setSpacing(0)
+        size_value = label(str(self._font_size), size=11, color=fg)
+        size_value.setAlignment(Qt.AlignCenter)
+        size_value.setFixedWidth(px(24))
+
+        def step_button(text, handler, tip):
+            btn = QPushButton(text)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedSize(px(26), px(26))
+            btn.setToolTip(tip)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent;
+                    color: {fg};
+                    border: none;
+                    border-radius: {px(7)}px;
+                    font-size: {px(14)}px;
+                }}
+                QPushButton:hover {{ background: {hover}; }}
+                QPushButton:pressed {{ background: {thumb}; }}
+            """)
+            btn.clicked.connect(handler)
+            stepper_layout.addWidget(btn)
+            return btn
+
+        def bump_size(direction: int):
+            if direction < 0:
+                self._font_decrease()
             else:
-                return f"""
-                    QPushButton {{
-                        background-color: #ffffff;
-                        color: #111111;
-                        border: 1px solid #ccc;
-                        border-radius: 4px;
-                        font-family: "Poppins", "Segoe UI", sans-serif;
-                        font-weight: 400;
-                        font-size: {int(9 * scale)}px;
-                        min-width: {int(56 * scale)}px;
-                    }}
-                    QPushButton:hover {{
-                        background-color: #e8e8e8;
-                        color: #111111;
-                    }}
-                    QPushButton:pressed {{
-                        background-color: #007aff;
-                        color: #ffffff;
-                    }}
-                """
-        theme_btn.setStyleSheet(_theme_btn_stylesheet(self._dark_theme))
-        theme_btn.setCursor(Qt.PointingHandCursor)
-        theme_btn.setToolTip("Switch to light (white pill) or dark (black pill)")
-        def _toggle_theme():
-            self._dark_theme = not self._dark_theme
-            theme_btn.setText("Dark" if self._dark_theme else "Light")
-            theme_btn.setStyleSheet(_theme_btn_stylesheet(self._dark_theme))
+                self._font_increase()
+            size_value.setText(str(self._font_size))
+
+        step_button("−", lambda: bump_size(-1), "Smaller script")
+        stepper_layout.addWidget(size_value)
+        step_button("+", lambda: bump_size(1), "Larger script")
+        size_layout.addWidget(stepper)
+        add_widget(size_row)
+
+        font_row = QWidget(menu)
+        font_layout = QHBoxLayout(font_row)
+        font_layout.setContentsMargins(px(10), 0, px(8), 0)
+        font_layout.setSpacing(px(8))
+        font_layout.addWidget(label("Typeface", size=13))
+        font_layout.addStretch(1)
+        family_btn = QPushButton()
+        family_btn.setCursor(Qt.PointingHandCursor)
+        family_btn.setFixedHeight(px(26))
+        family_btn.setMinimumWidth(px(104))
+        family_btn.setToolTip("Click to try the next typeface")
+
+        def style_family_btn():
+            display, family = next(
+                ((d, f) for d, f in self.FONT_OPTIONS if f == self._font_family),
+                self.FONT_OPTIONS[0],
+            )
+            family_btn.setText(f"{display}  ▾")
+            family_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {track};
+                    color: {fg};
+                    border: none;
+                    border-radius: {px(7)}px;
+                    padding: 0 {px(8)}px;
+                    text-align: left;
+                    font-family: "{family}", "Segoe UI", sans-serif;
+                    font-size: {px(12)}px;
+                }}
+                QPushButton:hover {{ background: {hover}; }}
+            """)
+
+        def cycle_family():
+            families = [f for _, f in self.FONT_OPTIONS]
+            try:
+                index = families.index(self._font_family)
+            except ValueError:
+                index = 0
+            self._font_family = families[(index + 1) % len(families)]
+            self._apply_typography()
+            style_family_btn()
+
+        family_btn.clicked.connect(cycle_family)
+        style_family_btn()
+        font_layout.addWidget(family_btn)
+        add_widget(font_row)
+
+        # ── Appearance ───────────────────────────────────────────────
+        theme_row = QWidget(menu)
+        theme_layout = QHBoxLayout(theme_row)
+        theme_layout.setContentsMargins(px(10), 0, px(8), 0)
+        theme_layout.setSpacing(px(8))
+        theme_layout.addWidget(label("Appearance", size=13))
+        theme_layout.addStretch(1)
+        theme_seg = QWidget(menu)
+        theme_seg.setStyleSheet(f"background: {track}; border-radius: {px(8)}px;")
+        theme_seg_layout = QHBoxLayout(theme_seg)
+        theme_seg_layout.setContentsMargins(px(2), px(2), px(2), px(2))
+        theme_seg_layout.setSpacing(px(2))
+        theme_group = QButtonGroup(menu)
+        theme_group.setExclusive(True)
+
+        def theme_button(text):
+            btn = QPushButton(text)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedSize(px(46), px(22))
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent;
+                    color: {fg2};
+                    border: none;
+                    border-radius: {px(6)}px;
+                    font-family: "Segoe UI", system-ui, sans-serif;
+                    font-size: {px(11)}px;
+                }}
+                QPushButton:hover {{ color: {fg}; }}
+                QPushButton:checked {{ background: {thumb}; color: {fg}; }}
+            """)
+            theme_group.addButton(btn)
+            theme_seg_layout.addWidget(btn)
+            return btn
+
+        dark_btn = theme_button("Dark")
+        light_btn = theme_button("Light")
+        dark_btn.setChecked(self._dark_theme)
+        light_btn.setChecked(not self._dark_theme)
+
+        def choose_theme(dark_theme: bool):
+            if dark_theme == self._dark_theme:
+                return
+            self._dark_theme = dark_theme
             self._apply_read_mode_style()
             self.update()
             for note in self._notes:
                 note.apply_theme(self._dark_theme)
-            for btn in (self._close_btn, self._mic_btn, self._compact_btn, self._settings_btn):
-                if btn:
-                    btn.update()
+            self._apply_control_theme()
             self._apply_highlight(self._display_word())
-        theme_btn.clicked.connect(_toggle_theme)
-        theme_layout.addWidget(theme_btn)
-        theme_action = QWidgetAction(menu)
-        theme_action.setDefaultWidget(theme_widget)
-        menu.addAction(theme_action)
+            # The popup is a material too: close it rather than leave a dark
+            # panel floating over a card that just turned white.
+            menu.close()
+
+        dark_btn.clicked.connect(lambda: choose_theme(True))
+        light_btn.clicked.connect(lambda: choose_theme(False))
+        theme_layout.addWidget(theme_seg)
+        add_widget(theme_row, bottom=2)
 
         menu.addSeparator()
 
-        # ── 4. Other Actions ─────────────────────────────────────────
-        menu.addAction("Load Script...", self._load_file)
+        menu.addAction("Load Script…", self._load_file)
         menu.addAction("Help", self._show_help)
-        menu.addAction("Setup", self._open_settings)
+        menu.addAction("Setup…", self._open_settings)
+        menu.addSeparator()
         menu.addAction("Quit", self.close)
 
+        self._refresh_menu_mode_display(menu)
         return menu
+
+    def _present_menu(self, menu: QMenu, pos: QPoint):
+        """Show the menu as a material arriving, not as a system popup."""
+        menu.adjustSize()
+        if system_allows_motion():
+            menu.setWindowOpacity(0.0)
+
+            def fade_in():
+                anim = QPropertyAnimation(menu, b"windowOpacity", menu)
+                anim.setDuration(120)
+                anim.setStartValue(0.0)
+                anim.setEndValue(1.0)
+                anim.setEasingCurve(QEasingCurve.OutCubic)
+                menu._fade_anim = anim
+                anim.start()
+
+            QTimer.singleShot(0, fade_in)
+        menu.exec_(QPoint(pos))
 
     def _open_menu_from_button(self):
         if self._edit_mode:
             return
         menu = self._build_menu()
-        
         btn_pos = self._settings_btn.mapToGlobal(QPoint(0, 0))
         btn_w = self._settings_btn.width()
         btn_h = self._settings_btn.height()
-        menu_size = menu.sizeHint()
-        
-        if self._compact_mode:
-            # Place menu to the right of notch so it doesn't cover it
-            x = btn_pos.x() + btn_w + 6
-            y = btn_pos.y() + btn_h + 4
-        else:
-            # Align right edge of menu with right edge of button
-            x = btn_pos.x() + btn_w - menu_size.width()
-            y = btn_pos.y() + btn_h + 8
-        menu.exec_(QPoint(x, y))
+        hint = menu.sizeHint()
+        x = btn_pos.x() + btn_w - hint.width()
+        y = btn_pos.y() + btn_h + int(6 * self._scale)
+        self._present_menu(menu, QPoint(x, y))
+
 
     def _show_menu(self, global_pos):
         if self._edit_mode:
             return
-        menu = self._build_menu()
-        menu.exec_(global_pos)
+        self._present_menu(self._build_menu(), global_pos)
 
     def contextMenuEvent(self, event):
         self._show_menu(event.globalPos())
@@ -1964,7 +1619,16 @@ class NotchOverlay(QWidget):
     #  Standard Logic (Load, Save, Drag)
     # ═══════════════════════════════════════════════════════════════════
 
+    def enterEvent(self, event):
+        self._wake_chrome()
+        super().enterEvent(event)
+
     def mousePressEvent(self, event: QMouseEvent):
+        if self._peeked:
+            # A resting pill: clicking it brings the reader back.
+            self._restore_from_peek()
+            return
+        self._wake_chrome()
         if event.button() == Qt.RightButton:
             self._show_menu(event.globalPos())
             return
@@ -1973,6 +1637,7 @@ class NotchOverlay(QWidget):
             event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent):
+        self._wake_chrome()
         if self._drag_pos and (event.buttons() & Qt.LeftButton):
             self.move(event.globalPos() - self._drag_pos)
             event.accept()
@@ -2024,6 +1689,8 @@ class NotchOverlay(QWidget):
 
     def _toggle_mode(self, checked):
         self._voice_mode = checked
+        # The card's indicator colour and the meter belong to the mode.
+        self.update()
         if self._voice_mode:
             self._start_listening()
         else:
@@ -2035,105 +1702,239 @@ class NotchOverlay(QWidget):
             self._voice_scroll_accum = 0.0
             self._voice_target_scroll = None
 
+    def _mode_status_text(self) -> str:
+        """One line of state, without repeating the number in the row below."""
+        if self._voice_mode:
+            return "Following your voice"
+        return "Timed scroll · running" if self._manual_running else "Timed scroll · paused"
+
     def _refresh_menu_mode_display(self, menu):
-        """Update mode tag, indicator, and speed section visibility so menu reflects current mode without closing."""
-        if not hasattr(menu, "_mode_tag_label"):
+        """Keep an open menu honest about the mode it is showing."""
+        accent = "#0A84FF" if self._voice_mode else "#30D158"
+        radius = max(2, int(3 * self._scale))
+        if hasattr(menu, "_status_dot"):
+            menu._status_dot.setStyleSheet(
+                f"background: {accent}; border-radius: {radius}px;")
+        if hasattr(menu, "_status_label"):
+            menu._status_label.setText(self._mode_status_text())
+        for btn, checked in (
+            (getattr(menu, "_voice_btn", None), self._voice_mode),
+            (getattr(menu, "_manual_btn", None), not self._voice_mode),
+        ):
+            if btn is not None:
+                btn.blockSignals(True)
+                btn.setChecked(checked)
+                btn.blockSignals(False)
+        # A hidden QAction leaves the menu layout instead of leaving a gap.
+        if hasattr(menu, "_speed_action"):
+            menu._speed_action.setVisible(not self._voice_mode)
+        if hasattr(menu, "_speed_slider"):
+            menu._speed_slider.blockSignals(True)
+            menu._speed_slider.setValue(self._manual_wpm)
+            menu._speed_slider.blockSignals(False)
+            menu._speed_value.setText(str(self._manual_wpm))
+
+    def _set_top_bar_icon_size(self, glyph: int):
+        """Icon design size, and a hit box that stays comfortable."""
+        hit = max(int(glyph + int(8 * self._scale)), int(20 * self._scale))
+        for btn in (self._close_btn, self._note_btn, self._mic_btn,
+                    self._compact_btn, self._settings_btn):
+            if btn is None:
+                continue
+            if hasattr(btn, "set_glyph_size"):
+                btn.set_glyph_size(glyph)
+            btn.setFixedSize(hit, hit)
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  Chrome, theme and put-away
+    # ═══════════════════════════════════════════════════════════════════
+
+    def _apply_control_theme(self):
+        """Keep every custom-painted control on the card's theme."""
+        dark = self._dark_theme
+        for btn in (self._close_btn, self._note_btn, self._mic_btn,
+                    self._compact_btn, self._settings_btn,
+                    getattr(self, "_done_btn", None)):
+            if btn is not None and hasattr(btn, "set_dark"):
+                btn.set_dark(dark)
+
+    def _wake_chrome(self):
+        """Full chrome, and restart the countdown to it receding."""
+        if not hasattr(self, "_chrome_fade"):
             return
-        scale = getattr(self, "_scale", 1.0)
-        compact = getattr(self, "_compact_mode", False)
-        tag_font = getattr(menu, "_mode_tag_font", "9px")
-        ind_color = "#007aff" if self._voice_mode else "#4cd964"
-        mode_tag = "Notch" if self._voice_mode else "Keys & Scroll"
-        menu._mode_tag_label.setText(mode_tag)
-        menu._mode_tag_label.setStyleSheet(f"""
-            color: {ind_color};
-            font-family: "Poppins", "Segoe UI", sans-serif;
-            font-weight: 400;
-            font-size: {tag_font};
-            padding: 1px 6px;
-            border: 1px solid {ind_color};
-            border-radius: 6px;
-            background: transparent;
-        """)
-        menu._mode_indicator.setStyleSheet(f"""
-            background-color: {ind_color};
-            border-radius: 4px;
-        """)
-        if hasattr(menu, "_speed_section"):
-            menu._speed_section.setCurrentIndex(0 if self._voice_mode else 1)
+        if self._idle_timer.isActive():
+            self._idle_timer.start()
+        else:
+            self._idle_timer.start()
+        if self._chrome_opacity.opacity() < 1.0:
+            self._fade_chrome(1.0)
 
-    def _on_compact_width_anim_value(self, width_value):
-        """Keep window centered while width animates (expand/contract from center)."""
-        w = int(width_value)
-        x = self._compact_anim_center_x - w // 2
-        self.setGeometry(x, self._compact_anim_y, w, self._compact_anim_h)
+    def _recede_chrome(self):
+        """Let the toolbar dissolve while the reader is just reading."""
+        if self._edit_target or self._peeked:
+            return
+        hovering = self._chrome.underMouse() or any(
+            getattr(btn, "_hover", False) for btn in
+            (self._close_btn, self._note_btn, self._mic_btn,
+             self._compact_btn, self._settings_btn)
+        )
+        if hovering:
+            # Pointer is resting on the controls: do not pull them away.
+            self._idle_timer.start()
+            return
+        self._fade_chrome(0.0)
 
-    def _set_top_bar_icon_size(self, size: int):
-        """Set all top bar icons to the same fixed size (e.g. 18 in narrow, 24 in wide)."""
-        self._close_btn.setFixedSize(size, size)
-        self._note_btn.setFixedSize(size, size)
-        self._mic_btn.setFixedSize(size, size)
-        self._compact_btn.setFixedSize(size, size)
-        self._settings_btn.setFixedSize(size, size)
+    def _fade_chrome(self, target: float):
+        self._chrome_fade.stop()
+        self._chrome_fade.setStartValue(self._chrome_opacity.opacity())
+        self._chrome_fade.setEndValue(target)
+        self._chrome_fade.setDuration(170 if target < 1.0 else 150)
+        if not system_allows_motion():
+            self._chrome_opacity.setOpacity(target)
+            return
+        self._chrome_fade.start()
 
-    def _on_compact_geometry_anim_finished(self):
-        """Called when narrow/wide width animation finishes."""
-        if self._compact_anim_going_narrow:
+    def _on_escape(self):
+        """Escape backs out one level at a time; it is not a quit key."""
+        if self._peeked:
+            self._restore_from_peek()
+        elif self._edit_target:
+            self._toggle_edit_mode()
+        elif self._voice_mode is False and self._manual_running:
+            self._manual_running = False
+        else:
+            self.close()
+
+    def _minimize(self):
+        """Put the card away without quitting it.
+
+        The minus used to close the app, which made the most familiar
+        control in the window the most destructive one. Quitting lives in
+        the menu; this shrinks to a resting pill that comes back on click.
+        """
+        if self._edit_target:
+            self._toggle_edit_mode()
+            return
+        if self._peeked:
+            return
+        s = self._scale
+        self._peek_restore = QRect(self.geometry())
+        self._peeked = True
+        self._motion_intent = "peek"
+        self._text_edit.hide()
+        self._bottom_fade.hide()
+        self._chrome.hide()
+        self._fade_chrome(1.0)
+        self._glow.set_target(20.0, carry_velocity=False)
+        # The reader's minimum size is its normal size; a resting pill is
+        # smaller than that, so the floor has to come off first.
+        self.setMinimumSize(1, 1)
+        w, h = int(132 * s), int(34 * s)
+        target = QRect(self.x() + self.width() // 2 - w // 2, self.y(), w, h)
+        self._animate_geometry_to(target, response=0.30)
+
+    def _restore_from_peek(self):
+        if not self._peeked:
+            return
+        self._peeked = False
+        self._motion_intent = "restore"
+        self._chrome.show()
+        self._text_edit.show()
+        self._layout_bottom_fade()
+        self._glow.set_target(float(self._target_glow_alpha), carry_velocity=False)
+        target = self._peek_restore or QRect(self.x(), self.y(), self.DEFAULT_W, self.DEFAULT_H)
+        self._peek_restore = None
+        self.setMinimumSize(self.MIN_W, self.MIN_H)
+        self._animate_geometry_to(QRect(target), response=0.30)
+        self._wake_chrome()
+
+    def _reserve_editor_footer(self, reserve: bool):
+        """Keep the last line of the script out from under the Done button.
+
+        The button floats inside the editor's bottom-right corner, so without
+        a reserved strip a long script scrolls its final line underneath it.
+        """
+        frame = self._text_edit.document().rootFrame()
+        fmt = frame.frameFormat()
+        fmt.setBottomMargin(int((44 if reserve else 0) * self._scale))
+        frame.setFrameFormat(fmt)
+
+    def _layout_done_button(self):
+        """The editor needs a visible way out that is not a hidden key."""
+        btn = getattr(self, "_done_btn", None)
+        if btn is None:
+            return
+        s = self._scale
+        w, h = int(62 * s), int(26 * s)
+        btn.setFixedSize(w, h)
+        btn.move(self.width() - w - int(16 * s), self.height() - h - int(14 * s))
+        btn.raise_()
+
+    def _on_compact_motion_finished(self, narrow: bool):
+        """Called when the narrow/wide spring lands."""
+        if narrow:
             self._center_top()
+            self._motion.jump(x=float(self.x()), y=float(self.y()),
+                              w=float(self.width()), h=float(self.height()))
             self._reflow_timer.start()
         else:
-            self.setMinimumSize(self.MIN_W, self.MIN_H)  # restore min size after wide animation
+            self.setMinimumSize(self.MIN_W, self.MIN_H)  # restore min size
             self._font_size = self._font_size_before_compact
             self._apply_typography()
             self._size_before_compact = None
             self._center_top()
+            self._motion.jump(x=float(self.x()), y=float(self.y()),
+                              w=float(self.width()), h=float(self.height()))
             self._reflow_timer.start()
 
     def _toggle_compact_mode(self):
-        """Switch between normal width and ~2-word width (smaller font), with animated width (centered)."""
+        """Switch between the normal reader and a ~2-word narrow reader."""
         screen = QApplication.primaryScreen().availableGeometry()
-        y = screen.y() + 8
+        s = self._scale
+        y = screen.y() + int(self.TOP_INSET * s)
         center_x = screen.x() + screen.width() // 2
 
         if self._compact_mode:
-            # Animate to wide (normal): width grows, center stays fixed (set MIN_W after anim to avoid snap)
             self._compact_mode = False
-            self._set_top_bar_icon_size(int(24 * self._scale))
-            self._settings_btn.show()  # show settings again in wide mode
+            self._motion_intent = "wide"
+            self._set_top_bar_icon_size(int(24 * s))
+            self._note_btn.show()
+            self._mic_btn.show()
+            self._settings_btn.show()
             self._compact_btn.set_compact(False)
-            self._compact_btn.setToolTip("Narrow (2 words)")
+            self._compact_btn.setToolTip("Narrow reader (about two words per line)")
             if self._size_before_compact is None:
                 return
+            self._root_layout.setContentsMargins(
+                int(18 * s), int(4 * s), int(18 * s), int(10 * s))
             target_w = self._size_before_compact.width()
             target_h = self._size_before_compact.height()
-            self._compact_anim_going_narrow = False
-            self._compact_anim_center_x = center_x
-            self._compact_anim_y = y
-            self._compact_anim_h = target_h
-            self._compact_width_anim.stop()
-            self._compact_width_anim.setStartValue(self.width())
-            self._compact_width_anim.setEndValue(target_w)
-            self._compact_width_anim.start()
+            self._animate_geometry_to(
+                QRect(center_x - target_w // 2, y, target_w, target_h), response=0.32)
         else:
-            # Animate to narrow: set font first so text reflows, then animate width (center stays fixed)
             self._compact_mode = True
-            self._set_top_bar_icon_size(int(18 * self._scale))
-            self._settings_btn.hide()  # more space in narrow mode
+            self._motion_intent = "narrow"
+            # Font first, so the text has already reflowed when the width
+            # arrives; animating width against old metrics makes the text jump.
+            self._set_top_bar_icon_size(int(18 * s))
+            # 100 px holds two 26 px targets; five would push the bar out of
+            # the card. The rest come back with the wide reader.
+            self._note_btn.hide()
+            self._mic_btn.hide()
+            self._settings_btn.hide()
             self._compact_btn.set_compact(True)
-            self._compact_btn.setToolTip("Wide")
+            self._compact_btn.setToolTip("Wide reader")
             self._size_before_compact = self.size()
             self._font_size_before_compact = self._font_size
+            # Two words per line need the width the 18 px margins were using.
+            self._root_layout.setContentsMargins(
+                int(12 * s), int(4 * s), int(12 * s), int(10 * s))
             self.setMinimumSize(self.COMPACT_W, self.MIN_H)
             self._font_size = self.COMPACT_FONT
             self._apply_typography()
-            self._compact_anim_going_narrow = True
-            self._compact_anim_center_x = center_x
-            self._compact_anim_y = y
-            self._compact_anim_h = self.height()
-            self._compact_width_anim.stop()
-            self._compact_width_anim.setStartValue(self.width())
-            self._compact_width_anim.setEndValue(self.COMPACT_W)
-            self._compact_width_anim.start()
+            self._animate_geometry_to(
+                QRect(center_x - self.COMPACT_W // 2, y, self.COMPACT_W, self.height()),
+                response=0.32)
 
     def _reset_position(self):
         self._text_edit.moveCursor(QTextCursor.Start)
@@ -2321,11 +2122,13 @@ class NotchOverlay(QWidget):
         self._line_spans = self._measure_lines()
         if not self._line_spans:
             self._current_line = 0
+            self._layout_bottom_fade()
             return
         focus = 0 if anchor is None else anchor
         if self._confirmed_word >= 0:
             focus = max(focus, self._confirmed_word)
         self._current_line = self._line_index_for_word(focus)
+        self._layout_bottom_fade()
 
     def _line_index_for_word(self, word: int) -> int:
         """Index of the rendered line containing a script word."""
@@ -2392,13 +2195,40 @@ class NotchOverlay(QWidget):
             self._scroll_to_reading_line(self._current_line)
         elif top_word is not None:
             self._scroll_word_to_top(top_word)
+        self._layout_bottom_fade()
+
+    def _text_font(self) -> QFont:
+        """The reader's font, including size-dependent tracking.
+
+        Type that is set larger needs less space between letters, and type
+        set small needs a little more; a single tracking value is what makes
+        a teleprompter look untypeset at one end of its size range.
+        """
+        font = QFont(self._font_family, self._font_size)
+        tracking = (14.0 - float(self._font_size)) * 0.05 * self._scale
+        font.setLetterSpacing(QFont.AbsoluteSpacing, tracking)
+        return font
+
+    def _line_pitch(self) -> int:
+        """Distance between baselines, derived from the font in use.
+
+        This used to be a fixed 24 px, which the largest sizes outgrew:
+        24 pt Segoe UI is 33 px tall, so the lines overlapped and the last
+        line was clipped. Deriving the pitch from the metrics keeps the
+        reference rhythm at the default size and makes it impossible for
+        two lines to collide at any size.
+        """
+        metrics = QFontMetrics(self._text_font())
+        return max(int(round(metrics.height() * 1.47)), metrics.height() + 4)
 
     def _apply_typography(self):
         """Apply the current font and recompute line breaks for the new layout."""
         top_word = None
         if not self._voice_mode and not self._edit_mode:
             top_word = self._word_at_scroll_top()
-        self._text_edit.setFont(QFont(self._font_family, self._font_size))
+        self._text_edit.setFont(self._text_font())
+        self._spaced_key = None          # the pitch may have changed with the size
+        self._apply_line_spacing()
         self._refresh_lines()
         self._restore_reading_view(top_word)
 
@@ -2445,6 +2275,8 @@ class NotchOverlay(QWidget):
         # settings left a dark band across a light card until the next resize.
         if hasattr(self, "_bottom_fade"):
             self._layout_bottom_fade()
+        if hasattr(self, "_close_btn"):
+            self._apply_control_theme()
 
     def _apply_highlight(self, position: int):
         if not self._script_text:
@@ -2477,16 +2309,17 @@ class NotchOverlay(QWidget):
         cursor.endEditBlock()
 
     def _apply_line_spacing(self) -> bool:
-        """Reference rhythm: ~24 DIP between baselines for ~16 px text.
+        """Reference rhythm, at whatever size the reader is set to.
 
-        Reflowed only when the script length changes, so caret moves and
-        recognizer updates do not touch block layout on every tick. Returns
-        True when the layout was changed.
+        Reflowed only when the script or the font changes, so caret moves
+        and recognizer updates do not touch block layout on every tick.
+        Returns True when the layout was changed.
         """
-        if getattr(self, "_spaced_len", -1) == len(self._script_text):
+        key = (len(self._script_text), self._font_family, self._font_size)
+        if getattr(self, "_spaced_key", None) == key:
             return False
-        self._spaced_len = len(self._script_text)
-        line_px = max(1, int(24 * self._scale))
+        self._spaced_key = key
+        line_px = self._line_pitch()
         cursor = QTextCursor(self._text_edit.document())
         cursor.select(QTextCursor.Document)
         block_format = QTextBlockFormat()
@@ -2520,7 +2353,7 @@ class NotchOverlay(QWidget):
         mods = event.modifiers()
 
         if key == Qt.Key_Escape:
-            self.close()
+            self._on_escape()
             return
 
         if mods == Qt.ControlModifier and key == Qt.Key_N:
@@ -2581,6 +2414,12 @@ class NotchOverlay(QWidget):
             if event.type() == QEvent.MouseButtonDblClick:
                 self._toggle_edit_mode()
                 return True
+            if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+                # The editor owns the keyboard while editing, so a window
+                # shortcut alone never saw this key. Escape is the way out
+                # of the editor, and it must work from inside the text.
+                self._on_escape()
+                return True
             if event.type() == QEvent.KeyPress and not self._edit_mode:
                 # Reader-only keys. The editor keeps normal typing because this
                 # branch is skipped there.
@@ -2624,29 +2463,25 @@ class NotchOverlay(QWidget):
         fmt.setForeground(QColor("#111111" if not self._dark_theme else "#fafafa"))
         cursor.setCharFormat(fmt)
 
-    def _on_edit_geometry_anim_finished(self):
-        """Called when expand/collapse animation finishes. Text styling is handled by fade out/in."""
-        if self._geometry_anim_entering:
-            # Expansion finished (text styling already applied in fade out/in)
-            pass
+    def _on_edit_motion_finished(self):
+        """The card has landed. Styling was swapped during the text fade."""
+        if self._edit_target:
+            return
+        if not self._compact_mode:
+            self._settings_btn.show()
         else:
-            # Collapse finished: styling already applied in _on_text_fade_out_finished
-            if not self._compact_mode:
-                self._settings_btn.show()
-            else:
-                self._settings_btn.hide()
-            self._icons_container.show()
-            self._icons_opacity.setOpacity(0.0)
-            self._icon_fade_in.stop()
-            self._icon_fade_in.start()
-            self.clearMask()
-            self.resize(self._collapsed_size)
-            self._center_top()
-            # Fade pill text in now that the pill is at its final size
-            self._text_fade_in.start()
-            if self._prev_voice_mode:
-                self._voice_mode = True
-                self._start_listening()
+            self._settings_btn.hide()
+        self._icons_container.show()
+        self._wake_chrome()
+        self.clearMask()
+        self.resize(self._collapsed_size)
+        self._center_top()
+        self._motion.jump(x=float(self.x()), y=float(self.y()),
+                          w=float(self.width()), h=float(self.height()))
+        self._text_fade_in.start()
+        if self._prev_voice_mode and not self._edit_target:
+            self._voice_mode = True
+            self._start_listening()
 
     def _update_collapse_mask(self):
         """Clip window to current pill shape during collapse so the top bar doesn't appear to separate."""
@@ -2663,72 +2498,62 @@ class NotchOverlay(QWidget):
         self.setMask(QRegion(bm))
 
     def _toggle_edit_mode(self):
-        # Ignore double-click while expand/collapse is animating (prevents wrong pill size and re-entrant _stop_listening)
-        if self._geometry_anim.state() == QAbstractAnimation.Running:
-            return
-        if not self._edit_mode:
-            # Expand: fade text out, apply edit mode, fade in (geometry anim runs in parallel)
+        """Switch between the reader pill and the editor card.
+
+        Reversible at any point: the springs start from the geometry on
+        screen and keep their velocity, so a second click mid-flight bends
+        the transition back instead of being swallowed.
+        """
+        if self._peeked:
+            # Editing always starts from the full card, never from the
+            # resting pill: the two states are not composable.
+            self._peeked = False
+            self._peek_restore = None
+            self._chrome.show()
+            self._text_edit.show()
+            self._layout_bottom_fade()
+        self._edit_target = not self._edit_target
+        screen = QApplication.primaryScreen().availableGeometry()
+        s = self._scale
+
+        if self._edit_target:
             self.clearMask()
-            self._geometry_anim_entering = True
+            self._motion_intent = "expand"
             self._prev_voice_mode = self._voice_mode
             self._manual_running = False
-            self._stop_listening()  # Non-blocking now; worker stops in background
-            if self.width() < int(500 * self._scale) and self.height() < int(280 * self._scale):
+            self._stop_listening()  # non-blocking; the worker stops in background
+            if self.width() < int(500 * s) and self.height() < int(280 * s):
                 self._collapsed_size = self.size()
-            self._icon_fade_out.stop()
-            self._icons_opacity.setOpacity(1.0)
-            self._icon_fade_out.start()
             self._text_fade_for_expand = True
-            self._text_fade_out.start()
-            screen = QApplication.primaryScreen().availableGeometry()
-            tw, th = int(860 * self._scale), int(320 * self._scale)
+            # Only fade if there is something visible to fade, so reversing
+            # after the swap does not flash the text back on.
+            if self._text_opacity.opacity() > 0.01:
+                self._text_fade_out.start()
+            tw, th = int(860 * s), int(320 * s)
             x = screen.x() + (screen.width() - tw) // 2
-            y = screen.y() + int(self.TOP_INSET * self._scale)
-            self._geometry_anim.stop()
-            self._geometry_anim.setStartValue(self.geometry())
-            self._geometry_anim.setEndValue(QRect(x, y, tw, th))
-            self._glow_anim.stop()
-            self._glow_anim.setStartValue(float(self._current_glow_alpha))
-            self._glow_anim.setEndValue(0.0)
-            self._glow_anim.start()
-            self._geometry_anim.start()
+            y = screen.y() + int(self.TOP_INSET * s)
+            self._animate_geometry_to(QRect(x, y, tw, th), response=0.42)
+            self._glow.set_target(0.0, carry_velocity=False)
             return
 
-        # Exit edit mode: fade text out (hides styling swap), shrink pill, fade text in when done
-        self._geometry_anim_entering = False
+        self._motion_intent = "collapse"
         self._text_fade_for_expand = False
-        self._text_fade_out.start()
-        screen = QApplication.primaryScreen().availableGeometry()
         w = self._collapsed_size.width()
         h = self._collapsed_size.height()
-        # If _collapsed_size was ever overwritten by spam (e.g. mid-animation), fall back to default pill size
-        if w >= int(500 * self._scale) or h >= int(280 * self._scale):
+        # A size saved mid-animation would be the expanded card; fall back.
+        if w >= int(500 * s) or h >= int(280 * s):
             w, h = self.DEFAULT_W, self.DEFAULT_H
             self._collapsed_size = QSize(w, h)
         x = screen.x() + (screen.width() - w) // 2
-        y = screen.y() + 8
-        self._geometry_anim.stop()
-        self._geometry_anim.setStartValue(self.geometry())
-        self._geometry_anim.setEndValue(QRect(x, y, w, h))
-        self._glow_anim.stop()
-        self._glow_anim.setStartValue(0.0)
-        self._glow_anim.setEndValue(28.0)
-        self._glow_anim.start()
-        self._geometry_anim.start()
+        y = screen.y() + int(self.TOP_INSET * s)
+        if self._text_opacity.opacity() > 0.01:
+            self._text_fade_out.start()
+        self._animate_geometry_to(QRect(x, y, w, h), response=0.36)
+        self._glow.set_target(28.0, carry_velocity=False)
 
     def _apply_capture_exclusion(self):
-        if sys.platform != "win32":
-            return
-        try:
-            hwnd = int(self.winId())
-            user32 = ctypes.windll.user32
-            WDA_EXCLUDEFROMCAPTURE = 0x11
-            WDA_MONITOR = 0x1
-            ok = user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
-            if not ok:
-                user32.SetWindowDisplayAffinity(hwnd, WDA_MONITOR)
-        except Exception:
-            pass
+        """Keep the reader out of screen shares, like the menu and notes."""
+        exclude_from_capture(self)
 
     def _apply_blur_effect(self):
         """
@@ -2756,25 +2581,67 @@ class NotchOverlay(QWidget):
         if self._voice_mode:
             print("[Notch] Voice mode on — starting mic + speech recognition", flush=True)
             self._start_listening()
+        # Without this the toolbar only recedes after the pointer has moved;
+        # launching with the cursor elsewhere left it on screen for good.
+        self._idle_timer.start()
 
     # ═══════════════════════════════════════════════════════════════════
     #  Session persistence (script + sticky notes)
     # ═══════════════════════════════════════════════════════════════════
 
     def _layout_bottom_fade(self):
-        """Keep the script fade pinned to the bottom edge of the card."""
+        """Treat the line the viewport cuts off at the bottom edge.
+
+        A partial line there is unavoidable while the script scrolls, so it
+        gets one of two treatments. When only the tops of the glyphs are
+        inside the card the line is unreadable, and left alone it shows as a
+        grey smear: the band covers it outright. When more of it is in view
+        the band dissolves it instead, crisp at the top and fading into the
+        cut, because a line sliced in half ten pixels above the edge reads
+        as a mistake rather than as the script continuing.
+        """
         if not hasattr(self, "_bottom_fade"):
             return
-        if self._edit_mode:
+        if self._edit_mode or self._peeked:
             self._bottom_fade.hide()
             return
         s = self._scale
-        height = int(14 * s)
-        left = int(18 * s)
-        right = int(18 * s)
-        bottom = int(10 * s)
+        area_top = float(self._text_edit.y())
+        area_bottom = float(self._text_edit.y() + self._text_edit.height())
+        scroll = float(self._text_edit.verticalScrollBar().value())
+
+        clipped = None
+        clipped_height = 0.0
+        for line in self._line_spans:
+            top = area_top + line.top - scroll
+            if top + line.height <= area_bottom + 0.5:
+                continue
+            if top < area_bottom:
+                clipped = top
+                clipped_height = line.height
+            break
+        if clipped is None:
+            self._bottom_fade.hide()
+            return
+
+        # A sliver is hidden: the ramp lives in the gap above it, so the
+        # cover is already solid where the glyph tops start and the line
+        # above keeps its descenders. A line with more of itself in view is
+        # dissolved instead, solid only at the cut.
+        sliver = area_bottom - clipped <= clipped_height * 0.3
+        band_top = max(area_top, clipped - (4.0 * s if sliver else 0.0))
+        height = max(1, int(round(area_bottom - band_top)))
+        if sliver:
+            solid_at = min(1.0, max(0.05, (clipped - band_top) / float(height)))
+        else:
+            # Solid a few pixels above the cut, so the glyphs never end on a
+            # bright half-pixel row at the very edge of the text area.
+            solid_at = max(0.2, 1.0 - (3.0 * s) / float(height))
+        left = int((12 if self._compact_mode else 18) * s)
+        right = int((12 if self._compact_mode else 18) * s)
         width = max(1, self.width() - left - right)
-        self._bottom_fade.setGeometry(left, max(0, self.height() - bottom - height), width, height)
+        self._bottom_fade.setGeometry(left, int(round(band_top)), width, height)
+        self._bottom_fade.set_solid_at(solid_at)
         self._bottom_fade.set_fade_color("#000000" if self._dark_theme else "#ffffff")
         self._bottom_fade.show()
         self._bottom_fade.raise_()
@@ -2799,12 +2666,22 @@ class NotchOverlay(QWidget):
         for note in list(self._notes):
             if note.note_id == note_id:
                 self._notes.remove(note)
+                # Dropping the last reference would destroy the widget in the
+                # middle of the event that closed it, and the rest of that
+                # handler (the close glyph's own mouse-release, or the note's
+                # closeEvent) then touches a deleted object. Deleting is
+                # deferred to the event loop instead.
+                note.deleteLater()
         self._save_state()
 
     def _close_all_notes(self):
         for note in list(self._notes):
             note.blockSignals(True)
             note.close()
+            # Deferred, like a note closed from its own corner: dropping the
+            # last reference here would destroy the window while Qt may still
+            # be delivering the mouse event that closed the app.
+            note.deleteLater()
         self._notes.clear()
 
     def _note_state(self) -> list:
