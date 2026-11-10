@@ -43,6 +43,13 @@ Surface treatment, also measured from the captures:
   desktop.
 - The lower-edge fade cached its colour and only refreshed on resize, so a
   theme restored from settings left a dark band across a light card.
+- The same fade was pinned to the card's bottom edge rather than to the line
+  the viewport cuts in half, so the top of the next line stayed visible as a
+  grey smear under the script. It now follows that line: a sliver (the tops
+  of the glyphs only) is covered outright, a line with more of itself in view
+  dissolves into the cut, and a script that ends on a whole line has no band
+  at all, because there is nothing to dissolve. Measured across both themes
+  and 60 scroll offsets: no state leaves stray ink at the cut.
 - The light theme applied the full-strength coloured glow over white, which
   read as a smudge rather than a status hint.
 
@@ -60,6 +67,9 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_behavior.py
 
 # line-gated voice follow: pauses, speeds, multi-line finals, reflow
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_voice_follow.py
+
+# design invariants, asserted against rendered pixels (needs a real display)
+.venv/Scripts/python.exe packaging/check_design.py
 ```
 
 Screenshots are written to `%TEMP%\shots`. `verify_ui.py` lifts
