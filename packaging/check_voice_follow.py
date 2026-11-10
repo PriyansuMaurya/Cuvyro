@@ -107,7 +107,7 @@ def target_matches_line(win):
     line = win._line_spans[win._current_line]
     bar = win._text_edit.verticalScrollBar()
     expected = max(0.0, min(float(bar.maximum()),
-                            line.top - win._text_edit.document().documentMargin()))
+                            line.top - win._text_edit.reading_inset()))
     return abs((win._voice_target_scroll or 0.0) - expected) <= 0.5
 
 

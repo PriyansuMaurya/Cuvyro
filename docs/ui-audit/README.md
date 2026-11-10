@@ -28,9 +28,28 @@ Surface treatment, also measured from the captures:
   last so the voice glow cannot wash it out. The stroke is inset half a pixel
   and lands on exactly one pixel row, with no anti-aliasing blur.
 - **Rounded corners**: 24 px compact/editor, 12 px note.
-- **Translucency**: 0.97 compact, 0.99 editor. Desktop text behind the card
-  deviates at most **4 levels** out of 255 from the card's own fill, i.e.
-  present as depth but never readable as competing content.
+- **Card material: unchanged.** The reader is still a surface, not a hole: the
+  fill stays at **0.97** in the dark theme and fully opaque in the light one
+  (measured centre alpha **247** / **255**), with the same quiet wash, the same
+  level line at the bottom and the same hairline. The full-height script is
+  what changed, not the window it runs on.
+- **Floating layout**: the script's viewport is the whole window. The toolbar
+  is a child placed at the exact rectangle it always had (x 18, y 4,
+  304×32 at 100%) and simply rises above the type, which runs underneath it
+  at up to **23%** of full coverage and dissolves to nothing at both edges.
+  The reading line did not move: the document reserves the 36 px strip the
+  controls float over, so the anchor is at **64.3 px** exactly as before, and
+  the first line of a script can now be scrolled down to the anchor instead of
+  sticking against the top edge.
+- **Controls on a three-second leash**: while the reader is reading, the
+  toolbar dissolves 3 s after the last movement and comes back the moment the
+  pointer moves — over the script as much as over the controls, since the type
+  covers the whole window. Measured: opacity 1.00 → 0.00 on the idle timeout,
+  back to 1.00 on a mouse move over the script viewport. The editor and the
+  resting pill keep their controls on screen, because there they are the point.
+- **Editor and menu** keep the 0.99 fill and the hairline; the editor puts the
+  type back below the control strip while it is open, because it is a document
+  you type into rather than a script passing under a toolbar.
 - **Light theme**: white surface, `#111111` text, `#E2E2E2` hairline, and the
   voice glow scaled to 45% so it reads as a hint rather than a blue smudge.
 - **Controls**: outline glyphs only. The narrow/wide toggle was a filled
@@ -41,15 +60,27 @@ Surface treatment, also measured from the captures:
 
 - The sticky note ignored the theme entirely and stayed charcoal on a white
   desktop.
-- The lower-edge fade cached its colour and only refreshed on resize, so a
-  theme restored from settings left a dark band across a light card.
-- The same fade was pinned to the card's bottom edge rather than to the line
-  the viewport cuts in half, so the top of the next line stayed visible as a
-  grey smear under the script. It now follows that line: a sliver (the tops
-  of the glyphs only) is covered outright, a line with more of itself in view
-  dissolves into the cut, and a script that ends on a whole line has no band
-  at all, because there is nothing to dissolve. Measured across both themes
-  and 60 scroll offsets: no state leaves stray ink at the cut.
+- The script viewport cut its type at both edges, and a painted band over
+  the lower one hid the half-line there. The band was a rectangle pretending
+  to be a fade: it matched one background (a theme restored from settings
+  left a dark band across a light card) and it covered words instead of
+  letting them leave. Both edges now dissolve the type itself (`SoftEdgeTextEdit`):
+  the document is painted offscreen and its alpha is driven by distance from
+  the line being read, with a light blur growing in the same rows. Nothing is
+  painted on top.
+  The line being read is the only opaque type in the card: it stays
+  pixel-identical to the sharp render, and coverage falls with distance from
+  it until the outermost row is fully transparent — the type leaves the card
+  by losing presence, not by being cut. The fall is a curve, not a straight
+  ramp: a straight ramp over a 64 px half kept the neighbouring line at
+  two-thirds strength, which reads as two current lines.
+  At the first and last lines the scrollbar cannot reach the anchor, so the
+  reading band moves to the line instead of leaving it in the dissolve.
+  Measured across both themes and 28 scroll offsets: no pixel added outside
+  the type, the reading line at 1.0000 of its sharp alpha, a median of 0.48
+  for every row outside it, the outermost row at 0% (fully transparent),
+  nine distinct opacity levels between 10% and 95%, and type in the toolbar
+  strip peaking at 59/255 against 255 on the reading line.
 - The light theme applied the full-strength coloured glow over white, which
   read as a smudge rather than a status hint.
 

@@ -116,6 +116,29 @@ def main():
     QTest.qWait(700)
     check("clock stops at the end of the script", not win._manual_running)
 
+    # The controls are on a three-second leash: stillness dissolves them and
+    # any pointer movement brings them back. Both are what lets the window
+    # read as floating type instead of a toolbar with a script under it.
+    check("the idle leash is three seconds", win._idle_timer.interval() == 3000,
+          f"{win._idle_timer.interval()} ms")
+    win._fade_chrome(1.0)
+    QTest.qWait(260)
+    check("the controls start fully visible",
+          win._chrome_opacity.opacity() > 0.99,
+          f"opacity {win._chrome_opacity.opacity():.2f}")
+    win._wake_chrome()
+    QTest.qWait(3400)
+    check("the controls recede after three seconds of stillness",
+          win._chrome_opacity.opacity() < 0.01,
+          f"opacity {win._chrome_opacity.opacity():.2f}")
+    # Moving over the script counts as movement: the type covers the window.
+    QTest.mouseMove(win._text_edit.viewport(),
+                    QPoint(win._text_edit.viewport().width() // 2, 40))
+    QTest.qWait(300)
+    check("mouse movement over the script restores the controls",
+          win._chrome_opacity.opacity() > 0.99,
+          f"opacity {win._chrome_opacity.opacity():.2f}")
+
     # Persistence round trip: edit, commit, reload in a fresh overlay.
     edited = "Edited script for the persistence check.\nSecond line stays put."
     win._text_edit.setPlainText(edited)

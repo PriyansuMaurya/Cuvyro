@@ -12,9 +12,14 @@ The rules these implement:
   see is not reachable.
 """
 
+import numpy as np
+
 from PyQt5.QtCore import QRectF, QPointF, Qt, QTimer, QVariantAnimation, QEasingCurve
-from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen, QBrush, QLinearGradient
-from PyQt5.QtWidgets import QAbstractButton, QMenu, QWidget
+from PyQt5.QtGui import (
+    QColor, QImage, QPainter, QPainterPath, QPalette, QPen, QTextCharFormat,
+    QAbstractTextDocumentLayout,
+)
+from PyQt5.QtWidgets import QAbstractButton, QMenu, QTextEdit, QWidget
 
 from spring import Spring, system_allows_motion
 from win_capture import exclude_from_capture
@@ -351,66 +356,276 @@ class TextButton(QAbstractButton):
                                     radius, radius)
 
 
-class BottomFade(QWidget):
-    """Softens the line that the viewport cuts in half.
+class SoftEdgeTextEdit(QTextEdit):
+    """A script viewport whose edges dissolve the type instead of cutting it.
 
-    The band is positioned over the clipped line and told where that line
-    starts (`solid_at`): the ramp lives in the whitespace above it, and the
-    glyphs underneath are covered completely. Ramping by a fixed fraction of
-    the widget instead left the top half of the next line ghosting under the
-    text, which read as a rendering fault rather than a dissolve.
+    QTextEdit always clips at its viewport. The old answer was a coloured band
+    laid over the line at the cut, which is a rectangle pretending to be a
+    fade: it hides the line instead of letting it leave, and it can only ever
+    match one background. This paints the document itself into an offscreen
+    image and attenuates that image by distance from the line being read — so
+    words leave the card by losing presence rather than by being covered, and
+    the line itself is the same pixels QTextEdit would have drawn.
+
+    Only the reading line is opaque. Everything above it and below it fades
+    steadily until it is fully transparent at the card's edge: the whole top
+    of the card and the whole bottom of the card are see-through, not a border
+    strip with the rest left solid. Nothing is painted on top of the script,
+    and the viewport owns the whole window, so type runs underneath the
+    floating controls and under the bottom edge before it disappears.
     """
+
+    # Where the reading line sits inside the reading area, and how much room
+    # must be left under it for the ghost of the next line.
+    READING_TOP = 0.32
+    READING_TOP_MIN = 12.0
+    READING_BOTTOM_MIN = 12.0
+
+    # The fade leaves the reading line quickly and then thins slowly to
+    # nothing at the edge. A straight ramp over the whole column kept the
+    # neighbouring line at two-thirds strength, which reads as two current
+    # lines; this keeps one line sharp and the rest clearly behind it.
+    TAIL_CURVE = 0.6
+    BLUR_PX = 1.4     # device-pixel blur radius at the very edge
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self._color = QColor("#000000")
-        self._solid_at = 0.6
+        self._soft_edges = True
+        self._reading_shift = 0.0
+        # The viewport now covers the window, but the reading rhythm is still
+        # measured against the reading area: the lead is the strip the top
+        # controls float over, the foot is the padding below the last line.
+        self._lead_top = 0.0
+        self._lead_bottom = 0.0
 
-    def set_fade_color(self, value: str):
-        color = QColor(value)
-        if color != self._color:
-            self._color = color
-            self.update()
+    # ── state ────────────────────────────────────────────────────────
+    def set_soft_edges(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if enabled != self._soft_edges:
+            self._soft_edges = enabled
+            self.viewport().update()
 
-    def set_solid_at(self, value: float):
-        """Where, as a fraction of the band, the cover is fully opaque."""
-        value = max(0.05, min(1.0, float(value)))
-        if abs(value - self._solid_at) > 0.005:
-            self._solid_at = value
-            self.update()
+    def soft_edges(self) -> bool:
+        return self._soft_edges
+
+    def set_reading_leads(self, top: float, bottom: float) -> None:
+        """Reserve the strips the floating chrome and the bottom padding use.
+
+        The viewport is the whole window so the script can run under the
+        controls, but the line being read must not move when it does: the lead
+        is where the top of the reading area used to be.
+        """
+        top, bottom = float(max(0.0, top)), float(max(0.0, bottom))
+        if (abs(top - self._lead_top) > 0.01
+                or abs(bottom - self._lead_bottom) > 0.01):
+            self._lead_top, self._lead_bottom = top, bottom
+            self.viewport().update()
+
+    def reading_inset(self) -> float:
+        """Where the line being read begins, measured from the window top.
+
+        The line is anchored below the strip the controls float over, so the
+        chrome sits above the words rather than on them, and the top of the
+        card is always carrying the previous line away. The document's own
+        top margin reserves that strip, which is what lets the first line of a
+        script be scrolled down to the anchor instead of sticking to the top
+        edge where the controls are.
+        """
+        height = float(self.viewport().height())
+        pitch = float(max(1, self.fontMetrics().lineSpacing()))
+        margin = float(self.document().documentMargin())
+        lead = float(self.document().rootFrame().frameFormat().topMargin())
+        usable = max(0.0, height - self._lead_top - self._lead_bottom)
+        top = max(usable * self.READING_TOP, self.READING_TOP_MIN)
+        top = min(top, usable - pitch - margin - self.READING_BOTTOM_MIN)
+        return max(0.0, lead + margin + top)
+
+    def set_reading_shift(self, offset: float) -> None:
+        """Slide the reading band when the view cannot reach its anchor.
+
+        At the first and last lines the scrollbar runs out before the line can
+        arrive at the inset. Without this the words being read would sit in
+        the dissolve, so the reader passes the shortfall it could not scroll.
+        """
+        offset = float(offset)
+        if abs(offset - self._reading_shift) > 0.01:
+            self._reading_shift = offset
+            self.viewport().update()
+
+    def reading_band(self):
+        """(top, bottom) of the reading line in viewport rows, in DIP.
+
+        Everything outside this box is dissolved; everything inside it is the
+        sharp render, untouched.
+        """
+        height = float(self.viewport().height())
+        pitch = float(max(1, self.fontMetrics().lineSpacing()))
+        top = self.reading_inset() + self._reading_shift
+        top = max(0.0, min(top, height - pitch))
+        return top, min(height, top + pitch)
+
+    # ── painting ─────────────────────────────────────────────────────
+    def scrollContentsBy(self, dx, dy):
+        # QAbstractScrollArea normally blits the scrolled pixels; that would
+        # drag an already-faded row down the viewport. Repaint instead.
+        if self._soft_edges:
+            self.viewport().update()
+            return
+        super().scrollContentsBy(dx, dy)
 
     def paintEvent(self, event):
-        if self.height() <= 0:
+        if not self._soft_edges or not self.toPlainText().strip():
+            # The editor wants its caret and scrollbars; the placeholder is a
+            # single centred pair of lines that the viewport cannot cut.
+            super().paintEvent(event)
             return
-        painter = QPainter(self)
-        gradient = QLinearGradient(0, 0, 0, self.height())
-        tint = QColor(self._color)
-        clear = QColor(tint)
-        clear.setAlpha(0)
-        soft = QColor(tint)
-        soft.setAlpha(90)
-        firm = QColor(tint)
-        firm.setAlpha(200)
-        solid = QColor(tint)
-        solid.setAlpha(255)
-        solid_at = self._solid_at
-        stops = [
-            (0.0, clear),
-            (solid_at * 0.45, soft),
-            (solid_at * 0.80, firm),
-            (solid_at, solid),
-            (1.0, solid),
-        ]
-        # Qt wants stops in order; a band that is opaque almost from its top
-        # collapses the early ones onto each other.
-        last = -1.0
-        for position, color in stops:
-            if position <= last:
-                continue
-            gradient.setColorAt(min(1.0, position), color)
-            last = position
-        painter.fillRect(self.rect(), QBrush(gradient))
+        painter = QPainter(self.viewport())
+        painter.drawImage(0, 0, self._render())
+
+    def _render(self, soften: bool = True) -> QImage:
+        """The viewport's type as an image, optionally edge-dissolved.
+
+        `soften=False` is the reference: exactly the pixels QTextEdit would
+        paint. The design checks use the pair to prove the middle of the
+        viewport is untouched and the edges are only attenuated.
+        """
+        viewport = self.viewport()
+        width, height = viewport.width(), viewport.height()
+        ratio = self.devicePixelRatioF()
+        image = QImage(max(1, int(round(width * ratio))),
+                       max(1, int(round(height * ratio))),
+                       QImage.Format_ARGB32_Premultiplied)
+        image.setDevicePixelRatio(ratio)
+        image.fill(Qt.transparent)
+
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.TextAntialiasing)
+        scroll = float(self.verticalScrollBar().value())
+        painter.translate(0.0, -scroll)
+
+        context = QAbstractTextDocumentLayout.PaintContext()
+        context.palette = self.palette()
+        context.clip = QRectF(0.0, scroll, float(width), float(height))
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            chosen = QTextCharFormat()
+            chosen.setBackground(self.palette().color(QPalette.Highlight))
+            chosen.setForeground(self.palette().color(QPalette.HighlightedText))
+            context.selections = [
+                QAbstractTextDocumentLayout.Selection(cursor, chosen)
+            ]
+        self.document().documentLayout().draw(painter, context)
+        painter.end()
+
+        if soften:
+            self._soften(image, ratio)
+        return image
+
+    def _soften(self, image: QImage, ratio: float) -> None:
+        """Ghost everything outside the reading line, sharply fading outward."""
+        height, width = image.height(), image.width()
+        if height <= 2 or width <= 2:
+            return
+
+        raw = image.bits()
+        raw.setsize(image.sizeInBytes())
+        pixels = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 4)
+        radius = max(1, int(round(self.BLUR_PX * ratio)))
+        alpha, blur = self._profile(height, ratio)
+
+        # Only the rows outside the reading line change. Painting is 60 Hz
+        # here, so the numpy work is cropped to those two stretches instead of
+        # the full viewport.
+        for start, stop in self._ghost_regions(height, ratio):
+            self._apply(pixels, start, stop, alpha[start:stop],
+                        blur[start:stop], radius)
+
+    def _profile(self, height: int, ratio: float):
+        """Per device row: (opacity, blur weight) for the whole viewport.
+
+        The line being read is opaque. Every row above it and below it loses
+        presence in proportion to how far it is from that line, reaching zero
+        at the top and bottom edge: the whole card above and below the reading
+        line is transparent, not just a border strip.
+        """
+        rows = np.arange(height, dtype=np.float32) / ratio
+        line_top, line_bottom = self.reading_band()
+        height_dip = float(height) / ratio
+
+        above = line_top - rows
+        below = rows - line_bottom
+        distance = np.maximum(above, below)
+        # Each ramp ends exactly on the card's outermost row, so the edge row
+        # itself is fully transparent rather than nearly so.
+        reach = np.where(
+            above > 0.0,
+            np.maximum(1.0, line_top),
+            np.maximum(1.0, height_dip - 1.0 / ratio - line_bottom),
+        )
+
+        fade = np.power(np.clip(distance / reach, 0.0, 1.0), self.TAIL_CURVE)
+        alpha = np.clip(1.0 - fade, 0.0, 1.0)
+        alpha = np.where(distance > 0.0, alpha, 1.0)
+        blur = np.where(distance > 0.0, fade, 0.0)
+        return alpha.astype(np.float32), blur.astype(np.float32)
+
+    def _ghost_regions(self, height: int, ratio: float):
+        """The device-row stretches that are not the reading line."""
+        line_top, line_bottom = self.reading_band()
+        first = min(height, max(0, int(np.ceil(line_top * ratio))))
+        last = min(height, max(0, int(np.floor(line_bottom * ratio))))
+        regions = []
+        if first > 0:
+            regions.append((0, first))
+        if last < height:
+            regions.append((last, height))
+        return regions
+
+    @classmethod
+    def _apply(cls, pixels, start: int, stop: int, alpha, blur_weight,
+               radius: int) -> None:
+        """Fade and blur rows [start, stop) in place, leaving the rest sharp."""
+        crop = pixels[start:stop].astype(np.float32)
+        if np.any(blur_weight > 0.0):
+            blurred = cls._blur(crop, radius)
+            weight = blur_weight[:, None, None]
+            crop = crop * (1.0 - weight) + blurred * weight
+        crop *= alpha[:, None, None]
+
+        np.clip(crop, 0.0, 255.0, out=crop)
+        pixels[start:stop] = crop.astype(np.uint8)
+
+    @staticmethod
+    def _blur(pixels, radius: int):
+        """Two box passes per axis: a small, cheap gaussian."""
+        out = pixels
+        for _ in range(2):
+            out = SoftEdgeTextEdit._blur_axis(out, radius, 0)
+            out = SoftEdgeTextEdit._blur_axis(out, radius, 1)
+        return out
+
+    @staticmethod
+    def _blur_axis(pixels, radius: int, axis: int):
+        """Moving average along one axis via shifted slices.
+
+        The bands are only a few dozen rows tall, so summing 2r+1 shifted
+        copies beats a cumsum plus fancy indexing, and keeps the paint under
+        a frame on a low-end machine.
+        """
+        length = int(pixels.shape[axis])
+        span = min(radius, max(0, length - 1))
+        if span <= 0:
+            return pixels
+        pad = [(0, 0)] * pixels.ndim
+        pad[axis] = (span, span)
+        padded = np.pad(pixels, pad, mode="edge")
+        total = None
+        for offset in range(2 * span + 1):
+            window = [slice(None)] * pixels.ndim
+            window[axis] = slice(offset, offset + length)
+            part = padded[tuple(window)]
+            total = part if total is None else total + part
+        return total * (1.0 / float(2 * span + 1))
 
 
 class RoundedMenu(QMenu):

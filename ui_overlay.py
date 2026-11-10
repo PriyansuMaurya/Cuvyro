@@ -13,7 +13,7 @@ from PyQt5.QtGui import (
     QFont, QFontMetrics, QColor, QPainter, QPen, QTextCursor, QTextCharFormat,
     QTextBlockFormat, QKeySequence,
     QDragEnterEvent, QDropEvent, QMouseEvent, QPaintEvent, QKeyEvent,
-    QRadialGradient, QLinearGradient, QBrush, QPainterPath, QRegion, QBitmap, QWheelEvent
+    QRadialGradient, QBrush, QPainterPath, QRegion, QBitmap, QWheelEvent
 )
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QFileDialog,
@@ -44,8 +44,8 @@ class _RenderedLine(NamedTuple):
 
 from spring import SpringGroup, system_allows_motion
 from controls import (
-    BottomFade, CompactButton, GlyphButton, MicButton, MoreButton,
-    MinimizeButton, NoteButton, RoundedMenu, TextButton,
+    CompactButton, GlyphButton, MicButton, MoreButton, MinimizeButton,
+    NoteButton, RoundedMenu, SoftEdgeTextEdit, TextButton,
 )
 from win_capture import exclude_from_capture
 
@@ -515,6 +515,9 @@ class NotchOverlay(QWidget):
         """Text has faded out; apply styling while invisible, then fade back in (or defer for collapse)."""
         if self._text_fade_for_expand:
             self._edit_mode = True
+            # The editor is a document, not a moving script: no dissolve
+            # around the caret and no mask over the scrollbars.
+            self._text_edit.set_soft_edges(False)
             self._text_edit.setReadOnly(False)
             self._text_edit.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -568,6 +571,8 @@ class NotchOverlay(QWidget):
                    bar_track, bar_handle, bar_hover))
             self._clear_edit_mode_char_formats()
             self._reserve_editor_footer(True)
+            # The editor takes the reading area back, below the floating bar.
+            self._apply_root_margins()
             self._text_edit.setFocus()
             self._layout_done_button()
             self._done_btn.show()
@@ -588,7 +593,10 @@ class NotchOverlay(QWidget):
             self._partial_word = -1
             self._voice_target_scroll = None
             self._edit_mode = False
+            self._text_edit.set_soft_edges(True)
             self._done_btn.hide()
+            # The reader gives the whole window back to the script.
+            self._apply_root_margins()
             self._reserve_editor_footer(False)
             self._text_edit.setReadOnly(True)
             self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -612,10 +620,10 @@ class NotchOverlay(QWidget):
         root = QVBoxLayout(self)
         self._root_layout = root
         s = self._scale
-        # The top inset is 4 px of margin plus 4 px of hit-box padding, so the
-        # glyphs sit where the reference puts them while the hit area is 32 px
-        # and nothing is clipped by the bar's own height.
-        root.setContentsMargins(int(18 * s), int(4 * s), int(18 * s), int(10 * s))
+        # The type owns the full height of the window: no header strip, no
+        # bottom strip, nothing between the script and the edges but the
+        # dissolve. The controls are positioned over it below.
+        root.setContentsMargins(int(18 * s), 0, int(18 * s), 0)
         root.setSpacing(0)
 
         # ── Chrome (top bar) ───────────────────────────────────────
@@ -659,9 +667,10 @@ class NotchOverlay(QWidget):
         self._set_top_bar_icon_size(int(24 * s))
 
         # The bar is as tall as the hit box: a 24 px bar clipped the bottom
-        # of every 24 px glyph drawn inside a 32 px target.
+        # of every 24 px glyph drawn inside a 32 px target. It is not in the
+        # layout: it floats over the script instead of taking a strip from it,
+        # so the type runs underneath the controls and out of the top edge.
         self._chrome.setFixedHeight(int(32 * s))
-        root.addWidget(self._chrome)
 
         # Idle recede: the chrome dissolves after a pause and returns the
         # moment the pointer comes back, so the script is the only thing
@@ -675,11 +684,15 @@ class NotchOverlay(QWidget):
         self.setMouseTracking(True)
         self._idle_timer = QTimer(self)
         self._idle_timer.setSingleShot(True)
-        self._idle_timer.setInterval(2200)
+        # Three seconds of stillness and the controls go: the script is the
+        # only thing the reader should be looking at.
+        self._idle_timer.setInterval(3000)
         self._idle_timer.timeout.connect(self._recede_chrome)
 
         # ── Script text area ─────────────────────────────────────────
-        self._text_edit = QTextEdit()
+        # The reader's own edges dissolve the type (see SoftEdgeTextEdit):
+        # the viewport still clips, but nothing reaches a hard cut.
+        self._text_edit = SoftEdgeTextEdit(self)
         self._text_edit.setAcceptRichText(False)  # Paste as plain text only (no colors, bg, etc.)
         self._text_edit.setReadOnly(True)
         self._text_edit.setFont(QFont(self._font_family, self._font_size))
@@ -691,6 +704,9 @@ class NotchOverlay(QWidget):
         self._apply_read_mode_style()
         self._text_edit.installEventFilter(self)
         self._text_edit.viewport().installEventFilter(self)
+        # The script is under the pointer almost everywhere in the window, so
+        # movement over it has to wake the controls as well.
+        self._text_edit.viewport().setMouseTracking(True)
         root.addWidget(self._text_edit)
 
         # The editor's way out. Escape works from the keyboard, but a
@@ -698,13 +714,6 @@ class NotchOverlay(QWidget):
         self._done_btn = TextButton("Done", self, primary=True)
         self._done_btn.clicked.connect(self._toggle_edit_mode)
         self._done_btn.hide()
-
-        # Lower-edge fade over the script (reference card detail)
-        self._bottom_fade = BottomFade(self)
-        self._layout_bottom_fade()
-        # The band sits on the clipped line, so it travels with the script.
-        self._text_edit.verticalScrollBar().valueChanged.connect(
-            lambda _value: self._layout_bottom_fade())
 
         # Text fade out/in for smooth mode transitions (expand/collapse)
         self._text_opacity = QGraphicsOpacityEffect(self._text_edit)
@@ -751,6 +760,8 @@ class NotchOverlay(QWidget):
         self._speed_feedback_timer.setSingleShot(True)
         self._speed_feedback_timer.timeout.connect(self._start_speed_feedback_fade_out)
 
+        self._apply_root_margins()
+
     def _setup_shortcuts(self):
         def _mk(seq, handler):
             sc = QShortcut(QKeySequence(seq), self)
@@ -795,8 +806,8 @@ class NotchOverlay(QWidget):
             self._reflow_pending_top = self._word_at_scroll_top()
         super().resizeEvent(event)
         # No mask needed - edges are smooth via paintEvent anti-aliasing
-        self._layout_bottom_fade()
         self._layout_done_button()
+        self._layout_chrome()
         # Line breaks depend on the viewport width: rebuild them once the
         # resize settles rather than on every animation frame.
         if self._script_text and not self._edit_mode:
@@ -815,7 +826,9 @@ class NotchOverlay(QWidget):
         path = QPainterPath()
         path.addRoundedRect(0, 0, w, h, radius, radius)
 
-        # 2. Draw Background
+        # 2. Draw Background. The card stays a solid surface: the script runs
+        #    the full height of the window behind floating controls, but the
+        #    window itself is still a card, not a hole in the desktop.
         painter.setPen(Qt.NoPen)
         bg_color = QColor("#ffffff") if not self._dark_theme else QColor("#000000")
         # Subtle translucency: enough to sit on the desktop without becoming a
@@ -866,7 +879,6 @@ class NotchOverlay(QWidget):
         #     centre read as a level meter, and they are the only element the
         #     peek state shows.
         if self._peeked:
-            s = self._scale
             level = max(0.0, min(1.0, self._smoothed_volume_level * 4.0))
             color = QColor(self.GLOW_COLOR if self._voice_mode else self.MANUAL_GLOW_COLOR)
             color.setAlpha(235)
@@ -1685,6 +1697,9 @@ class NotchOverlay(QWidget):
             if self._voice_mode:
                 self._scroll_to_reading_line(0)
                 self._start_listening()
+            else:
+                # The first line cannot reach the inset, so the band follows it.
+                self._scroll_word_to_top(0)
         except: pass
 
     def _toggle_mode(self, checked):
@@ -1822,7 +1837,6 @@ class NotchOverlay(QWidget):
         self._peeked = True
         self._motion_intent = "peek"
         self._text_edit.hide()
-        self._bottom_fade.hide()
         self._chrome.hide()
         self._fade_chrome(1.0)
         self._glow.set_target(20.0, carry_velocity=False)
@@ -1840,7 +1854,6 @@ class NotchOverlay(QWidget):
         self._motion_intent = "restore"
         self._chrome.show()
         self._text_edit.show()
-        self._layout_bottom_fade()
         self._glow.set_target(float(self._target_glow_alpha), carry_velocity=False)
         target = self._peek_restore or QRect(self.x(), self.y(), self.DEFAULT_W, self.DEFAULT_H)
         self._peek_restore = None
@@ -1858,6 +1871,74 @@ class NotchOverlay(QWidget):
         fmt = frame.frameFormat()
         fmt.setBottomMargin(int((44 if reserve else 0) * self._scale))
         frame.setFrameFormat(fmt)
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  Floating layout: the controls sit over the script, not beside it
+    # ═══════════════════════════════════════════════════════════════════
+
+    def _chrome_strip(self) -> int:
+        """Height of the strip the top controls float over, in window pixels."""
+        return int((4 + 32) * self._scale)
+
+    def _chrome_margin(self) -> int:
+        """Side inset the controls keep from the window edge."""
+        return int((12 if self._compact_mode else 18) * self._scale)
+
+    def _layout_chrome(self):
+        """Place the toolbar over the script without reserving space for it."""
+        chrome = getattr(self, "_chrome", None)
+        if chrome is None:
+            return
+        s = self._scale
+        side = self._chrome_margin()
+        chrome.setGeometry(side, int(4 * s),
+                           max(1, self.width() - 2 * side), int(32 * s))
+        chrome.raise_()
+
+    def _apply_root_margins(self):
+        """Reader: type fills the window. Editor: type starts below the bar.
+
+        The editor is a document you type into, so it keeps the reading area
+        it always had. The reader gives the whole window to the script and
+        lets the chrome float over the top of it, which is what makes the
+        card read as one continuous piece of type rather than a panel with
+        furniture bolted to its ends.
+        """
+        s = self._scale
+        side = self._chrome_margin()
+        if self._edit_mode:
+            self._root_layout.setContentsMargins(
+                side, self._chrome_strip(), side, int(10 * s))
+        else:
+            self._root_layout.setContentsMargins(side, 0, side, 0)
+        self._apply_document_lead()
+        self._sync_reading_leads()
+        self._layout_chrome()
+
+    def _apply_document_lead(self):
+        """Reserve the floating strip inside the document itself.
+
+        Without it the first line of a script cannot be scrolled down to the
+        anchor, so it would sit against the top edge underneath the controls.
+        Re-applied after every document load, because replacing the text
+        resets the root frame's format.
+        """
+        frame = self._text_edit.document().rootFrame()
+        fmt = frame.frameFormat()
+        lead = 0 if self._edit_mode else self._chrome_strip()
+        if abs(fmt.topMargin() - lead) < 0.5:
+            return
+        fmt.setTopMargin(lead)
+        frame.setFrameFormat(fmt)
+
+    def _sync_reading_leads(self):
+        """Keep the reading line where it was when the viewport grew."""
+        if not hasattr(self, "_text_edit"):
+            return
+        if self._edit_mode:
+            self._text_edit.set_reading_leads(0.0, 0.0)
+        else:
+            self._text_edit.set_reading_leads(self._chrome_strip(), 10 * self._scale)
 
     def _layout_done_button(self):
         """The editor needs a visible way out that is not a hidden key."""
@@ -1905,8 +1986,7 @@ class NotchOverlay(QWidget):
             self._compact_btn.setToolTip("Narrow reader (about two words per line)")
             if self._size_before_compact is None:
                 return
-            self._root_layout.setContentsMargins(
-                int(18 * s), int(4 * s), int(18 * s), int(10 * s))
+            self._apply_root_margins()
             target_w = self._size_before_compact.width()
             target_h = self._size_before_compact.height()
             self._animate_geometry_to(
@@ -1927,8 +2007,7 @@ class NotchOverlay(QWidget):
             self._size_before_compact = self.size()
             self._font_size_before_compact = self._font_size
             # Two words per line need the width the 18 px margins were using.
-            self._root_layout.setContentsMargins(
-                int(12 * s), int(4 * s), int(12 * s), int(10 * s))
+            self._apply_root_margins()
             self.setMinimumSize(self.COMPACT_W, self.MIN_H)
             self._font_size = self.COMPACT_FONT
             self._apply_typography()
@@ -1954,6 +2033,10 @@ class NotchOverlay(QWidget):
         self._refresh_lines()
         if self._voice_mode:
             self._scroll_to_reading_line(0)
+        else:
+            # Back at the document's first line: the reading band has to move
+            # with it, or the words at the top would sit in the dissolve.
+            self._scroll_word_to_top(0)
 
     def _font_increase(self):
         self._font_size += max(1, int(2 * self._scale))
@@ -2119,16 +2202,17 @@ class NotchOverlay(QWidget):
         anchor = None
         if self._line_spans and 0 <= self._current_line < len(self._line_spans):
             anchor = self._line_spans[self._current_line].first_word
+        # Loading a script replaces the document, which drops the reserved
+        # strip; put it back before the lines are measured.
+        self._apply_document_lead()
         self._line_spans = self._measure_lines()
         if not self._line_spans:
             self._current_line = 0
-            self._layout_bottom_fade()
             return
         focus = 0 if anchor is None else anchor
         if self._confirmed_word >= 0:
             focus = max(focus, self._confirmed_word)
         self._current_line = self._line_index_for_word(focus)
-        self._layout_bottom_fade()
 
     def _line_index_for_word(self, word: int) -> int:
         """Index of the rendered line containing a script word."""
@@ -2156,10 +2240,17 @@ class NotchOverlay(QWidget):
             return
         index = max(0, min(line_index, len(self._line_spans) - 1))
         line = self._line_spans[index]
-        margin = self._text_edit.document().documentMargin()
+        inset = self._text_edit.reading_inset()
         bar = self._text_edit.verticalScrollBar()
-        target = line.top - margin
-        self._voice_target_scroll = max(0.0, min(float(bar.maximum()), target))
+        # The line sits just below the top dissolve, in the sharp band, so
+        # the edge never carries the words being spoken away. `reading_inset`
+        # already includes the document's own margins.
+        target = line.top - inset
+        anchored = max(0.0, min(float(bar.maximum()), target))
+        self._voice_target_scroll = anchored
+        # Where the scrollbar could not follow (first and last lines), the
+        # reading band moves instead so the line is never left in the dissolve.
+        self._text_edit.set_reading_shift(target - anchored)
 
     def _set_reading_position(self, word: int, update_target: bool = True):
         """Move the reading position directly (wheel, checkpoints)."""
@@ -2195,7 +2286,6 @@ class NotchOverlay(QWidget):
             self._scroll_to_reading_line(self._current_line)
         elif top_word is not None:
             self._scroll_word_to_top(top_word)
-        self._layout_bottom_fade()
 
     def _text_font(self) -> QFont:
         """The reader's font, including size-dependent tracking.
@@ -2237,9 +2327,13 @@ class NotchOverlay(QWidget):
         if not self._line_spans:
             return None
         scroll = float(self._text_edit.verticalScrollBar().value())
+        # A line anchored at the top sits below the document margin and the
+        # dissolve inset; the threshold has to include both or the line just
+        # scrolled out reads as the top one.
+        reach = scroll + self._text_edit.reading_inset() + 1.0
         top = self._line_spans[0]
         for line in self._line_spans:
-            if line.top <= scroll + 1.0:
+            if line.top <= reach:
                 top = line
             else:
                 break
@@ -2250,9 +2344,12 @@ class NotchOverlay(QWidget):
         if not self._line_spans:
             return
         line = self._line_spans[self._line_index_for_word(word)]
-        margin = self._text_edit.document().documentMargin()
+        inset = self._text_edit.reading_inset()
         bar = self._text_edit.verticalScrollBar()
-        bar.setValue(max(0, min(bar.maximum(), int(round(line.top - margin)))))
+        target = line.top - inset
+        value = max(0, min(bar.maximum(), int(round(target))))
+        bar.setValue(value)
+        self._text_edit.set_reading_shift(target - value)
 
     def _scroll_to_word(self, position: int):
         start, _ = self._matching.word_span(position)
@@ -2271,10 +2368,6 @@ class NotchOverlay(QWidget):
             "  border: none;"
             "}"
         )
-        # The fade caches its colour; without this a theme restored from
-        # settings left a dark band across a light card until the next resize.
-        if hasattr(self, "_bottom_fade"):
-            self._layout_bottom_fade()
         if hasattr(self, "_close_btn"):
             self._apply_control_theme()
 
@@ -2408,6 +2501,10 @@ class NotchOverlay(QWidget):
         if hasattr(self, "_text_edit") and (
             obj == self._text_edit or obj == self._text_edit.viewport()
         ):
+            if event.type() in (QEvent.MouseMove, QEvent.Enter):
+                # Returning the chrome is the point of the idle recede: any
+                # movement, even over bare type, brings the controls back.
+                self._wake_chrome()
             if event.type() == QEvent.ContextMenu:
                 self._show_menu(event.globalPos())
                 return True
@@ -2511,7 +2608,6 @@ class NotchOverlay(QWidget):
             self._peek_restore = None
             self._chrome.show()
             self._text_edit.show()
-            self._layout_bottom_fade()
         self._edit_target = not self._edit_target
         screen = QApplication.primaryScreen().availableGeometry()
         s = self._scale
@@ -2589,62 +2685,6 @@ class NotchOverlay(QWidget):
     #  Session persistence (script + sticky notes)
     # ═══════════════════════════════════════════════════════════════════
 
-    def _layout_bottom_fade(self):
-        """Treat the line the viewport cuts off at the bottom edge.
-
-        A partial line there is unavoidable while the script scrolls, so it
-        gets one of two treatments. When only the tops of the glyphs are
-        inside the card the line is unreadable, and left alone it shows as a
-        grey smear: the band covers it outright. When more of it is in view
-        the band dissolves it instead, crisp at the top and fading into the
-        cut, because a line sliced in half ten pixels above the edge reads
-        as a mistake rather than as the script continuing.
-        """
-        if not hasattr(self, "_bottom_fade"):
-            return
-        if self._edit_mode or self._peeked:
-            self._bottom_fade.hide()
-            return
-        s = self._scale
-        area_top = float(self._text_edit.y())
-        area_bottom = float(self._text_edit.y() + self._text_edit.height())
-        scroll = float(self._text_edit.verticalScrollBar().value())
-
-        clipped = None
-        clipped_height = 0.0
-        for line in self._line_spans:
-            top = area_top + line.top - scroll
-            if top + line.height <= area_bottom + 0.5:
-                continue
-            if top < area_bottom:
-                clipped = top
-                clipped_height = line.height
-            break
-        if clipped is None:
-            self._bottom_fade.hide()
-            return
-
-        # A sliver is hidden: the ramp lives in the gap above it, so the
-        # cover is already solid where the glyph tops start and the line
-        # above keeps its descenders. A line with more of itself in view is
-        # dissolved instead, solid only at the cut.
-        sliver = area_bottom - clipped <= clipped_height * 0.3
-        band_top = max(area_top, clipped - (4.0 * s if sliver else 0.0))
-        height = max(1, int(round(area_bottom - band_top)))
-        if sliver:
-            solid_at = min(1.0, max(0.05, (clipped - band_top) / float(height)))
-        else:
-            # Solid a few pixels above the cut, so the glyphs never end on a
-            # bright half-pixel row at the very edge of the text area.
-            solid_at = max(0.2, 1.0 - (3.0 * s) / float(height))
-        left = int((12 if self._compact_mode else 18) * s)
-        right = int((12 if self._compact_mode else 18) * s)
-        width = max(1, self.width() - left - right)
-        self._bottom_fade.setGeometry(left, int(round(band_top)), width, height)
-        self._bottom_fade.set_solid_at(solid_at)
-        self._bottom_fade.set_fade_color("#000000" if self._dark_theme else "#ffffff")
-        self._bottom_fade.show()
-        self._bottom_fade.raise_()
 
     def _open_note(self):
         """Open a sticky note, offset from the overlay or from the last note."""
