@@ -21,10 +21,18 @@ from PyQt5.QtWidgets import (
 )
 
 
+from win_capture import exclude_from_capture
+
 class SettingsDialog(QDialog):
     """Modal dialog for microphone and audio settings."""
 
     CORNER_RADIUS = 16
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Settings shows device names and the model path; it belongs to the
+        # same capture policy as the reader and the notes.
+        exclude_from_capture(self)
 
     def __init__(self, current_device: Optional[int] = None,
                  current_noise_gate: float = 0.01,
