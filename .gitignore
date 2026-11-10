@@ -23,6 +23,20 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Run logs (start-notch.bat writes here)
+notch-run*.log
+notch-run*.err
+
+# Local agent/skill tooling, not part of the app
+.agents/
+.claude/
+agent/
+skills-lock.json
+
+# One-shot patch scripts and scratch captures
+packaging/patch_*.py
+
+
 # Large Models (Optional: Uncomment below if the 'model' folder contains files >100MB)
 model/
 
