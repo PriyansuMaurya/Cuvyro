@@ -11,15 +11,21 @@ set "VERSION=%~1"
 if "%VERSION%"=="" set "VERSION=1.0.0"
 
 set "PY=.venv\Scripts\python.exe"
+REM Prefer `python` (present on CI runners); fall back to the `py` launcher.
+REM Each check re-tests the result instead of relying on a variable, because
+REM %VAR% expands at parse time inside a parenthesised block.
+if exist "%PY%" echo [1/5] Virtual environment found.
 if not exist "%PY%" (
   echo [1/5] Creating virtual environment...
-  REM CI runners expose `python` but not the `py` launcher.
-  set "BOOTSTRAP=py -3.13"
-  where py >nul 2>nul || set "BOOTSTRAP=python"
-  %BOOTSTRAP% -m venv .venv
-  if errorlevel 1 goto :err
-) else (
-  echo [1/5] Virtual environment found.
+  python -m venv .venv
+)
+if not exist "%PY%" (
+  echo        Retrying with the py launcher...
+  py -3.13 -m venv .venv
+)
+if not exist "%PY%" (
+  echo ERROR: could not create a virtual environment. Install Python 3.13.
+  goto :err
 )
 
 echo [2/5] Installing dependencies...
