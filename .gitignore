@@ -12,6 +12,8 @@ env/
 build/
 dist/
 *.spec
+# ...except the hand-written PyInstaller spec, which is build config rather than output
+!packaging/notch.spec
 
 # IDE settings (Optional but recommended)
 .vscode/

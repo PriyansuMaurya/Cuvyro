@@ -1,0 +1,71 @@
+name: Build Windows installer
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Resolve version
+        run: |
+          $version = if ('${{ github.ref_type }}' -eq 'tag') {
+            '${{ github.ref_name }}'.TrimStart('v')
+          } else {
+            '0.0.0-dev'
+          }
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Building version $version"
+
+      - name: Fetch speech model
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'vosk-model.zip'
+          Invoke-WebRequest -Uri 'https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip' -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP -Force
+          if (Test-Path 'model') { Remove-Item -Recurse -Force 'model' }
+          Move-Item (Join-Path $env:RUNNER_TEMP 'vosk-model-small-en-us-0.15') 'model'
+          Write-Host "Model ready: $(Get-ChildItem model | Measure-Object | Select-Object -ExpandProperty Count) entries"
+
+      # Same one-command flow used locally; version comes from the tag.
+      - name: Build installer
+        shell: cmd
+        run: build-installer.bat %VERSION%
+
+      - name: Verify installer exists
+        run: |
+          $exe = Get-ChildItem 'dist/NotchSetup-*.exe' -ErrorAction SilentlyContinue
+          if (-not $exe) { throw 'No installer produced' }
+          $exe | ForEach-Object { Write-Host ("{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB)) }
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NotchSetup-windows-x64
+          path: dist/NotchSetup-*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach installer to release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/NotchSetup-*.exe
+          generate_release_notes: true
+          fail_on_unmatched_files: true

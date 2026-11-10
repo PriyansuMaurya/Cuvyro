@@ -1,0 +1,76 @@
+@echo off
+REM ============================================================
+REM  Notch - build a Windows installer in one command.
+REM  Usage:  build-installer.bat [version]     (default 1.0.0)
+REM  Output: dist\NotchSetup-<version>.exe
+REM ============================================================
+setlocal
+cd /d "%~dp0"
+
+set "VERSION=%~1"
+if "%VERSION%"=="" set "VERSION=1.0.0"
+
+set "PY=.venv\Scripts\python.exe"
+if not exist "%PY%" (
+  echo [1/5] Creating virtual environment...
+  REM CI runners expose `python` but not the `py` launcher.
+  set "BOOTSTRAP=py -3.13"
+  where py >nul 2>nul || set "BOOTSTRAP=python"
+  %BOOTSTRAP% -m venv .venv
+  if errorlevel 1 goto :err
+) else (
+  echo [1/5] Virtual environment found.
+)
+
+echo [2/5] Installing dependencies...
+"%PY%" -m pip install -q -r requirements.txt pyinstaller
+if errorlevel 1 goto :err
+
+if not exist "model" (
+  echo ERROR: model\ folder is missing.
+  echo Download vosk-model-small-en-us-0.15 and extract it so model\conf exists.
+  goto :err
+)
+
+echo [3/5] Freezing app with PyInstaller...
+if exist "build" rmdir /s /q "build"
+if exist "dist" rmdir /s /q "dist"
+"%PY%" -m PyInstaller --noconfirm --clean packaging\notch.spec
+if errorlevel 1 goto :err
+
+if not exist "dist\Notch\Notch.exe" (
+  echo ERROR: PyInstaller did not produce dist\Notch\Notch.exe
+  goto :err
+)
+
+echo [4/5] Placing speech model next to the executable...
+xcopy /e /i /y "model" "dist\Notch\model" >nul
+if errorlevel 1 goto :err
+
+echo [5/5] Compiling installer with Inno Setup...
+set "ISCC="
+if exist "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" set "ISCC=%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe"
+if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
+if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe"
+if not defined ISCC (
+  echo ERROR: Inno Setup 6 not found.
+  echo Install it with:  winget install JRSoftware.InnoSetup
+  goto :err
+)
+
+"%ISCC%" /Q /DMyAppVersion=%VERSION% packaging\notch.iss
+if errorlevel 1 goto :err
+
+echo.
+echo ============================================================
+echo  BUILD OK
+echo  Installer: dist\NotchSetup-%VERSION%.exe
+echo ============================================================
+exit /b 0
+
+:err
+echo.
+echo ============================================================
+echo  BUILD FAILED
+echo ============================================================
+exit /b 1
