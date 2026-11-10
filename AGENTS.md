@@ -19,6 +19,7 @@ diff.
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_behavior.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_voice_follow.py
 .venv/Scripts/python.exe packaging/check_design.py      # needs a real display
+.venv/Scripts/python.exe packaging/check_quality.py     # needs a real display
 ```
 
 `packaging/check_design.py` asserts surface invariants against rendered pixels

@@ -5,9 +5,9 @@ surface drifts back:
 
   * the reader keeps its solid card: fill, wash, level line and hairline are
     all still there, and the window is never a hole in the desktop,
-  * the script runs the full height of the card, underneath the floating
-    controls and out of both edges, losing presence progressively instead
-    of being clipped,
+  * the script runs the full height of the card, from its top edge down
+    behind the floating controls, fully opaque, with no fade or blur and no
+    reserved header band,
   * the controls keep the exact position and size they had, only without a
     header bar behind them,
   * the resting pill carries a visible level meter instead of being empty,
@@ -26,7 +26,6 @@ import os
 import sys
 import tempfile
 
-import numpy as np
 
 from PyQt5.QtCore import QPoint
 from PyQt5.QtTest import QTest
@@ -82,36 +81,6 @@ def ink_count(image, box, background, tolerance=12):
     return count
 
 
-def alpha_plane(image):
-    """The rendered type's alpha, one array of device pixels."""
-    raw = image.constBits()
-    raw.setsize(image.sizeInBytes())
-    grid = np.frombuffer(raw, dtype=np.uint8)
-    return grid.reshape(image.height(), image.width(), 4)[:, :, 3].astype(np.int64)
-
-
-def row_retention(sharp, soft):
-    """Per row of type: how much of its alpha survives the dissolve."""
-    sharp_total = sharp.sum(axis=1)
-    soft_total = soft.sum(axis=1)
-    return {
-        y: soft_total[y] / float(sharp_total[y])
-        for y in range(sharp.shape[0])
-        if sharp_total[y]
-    }
-
-
-def dilate(mask, radius):
-    """A mask grown by radius pixels, for judging where blur may reach."""
-    height, width = mask.shape
-    padded = np.pad(mask, radius, mode="constant", constant_values=False)
-    grown = np.zeros_like(mask)
-    for dy in range(2 * radius + 1):
-        for dx in range(2 * radius + 1):
-            grown |= padded[dy:dy + height, dx:dx + width]
-    return grown
-
-
 def main():
     app = QApplication(sys.argv)
     import ui_overlay
@@ -136,10 +105,11 @@ def main():
         # the full-height script runs on a card, not on the desktop.
         fill = pixel(image, 12, 60)
         name = "dark" if theme_dark else "light"
-        # 0.97 in the dark theme, fully opaque in the light one: a surface, not
-        # a transparent pane. The text behind it must not be readable.
+        # Fully opaque in both themes: a surface, not a transparent pane. The
+        # text behind it must not be readable, so transparency stays in the
+        # floating chrome alone; the type itself is opaque.
         centre_alpha = image.pixelColor(win.width() // 2, win.height() // 2).alpha()
-        check(f"{name}: the reader sits on a solid card", centre_alpha >= 245,
+        check(f"{name}: the reader sits on a solid card", centre_alpha == 255,
               f"centre alpha {centre_alpha}")
 
         # The script sits on a neutral material: the old glow pulled the
@@ -184,178 +154,48 @@ def main():
     body_ink = ink_count(image, (20, 34, win.width() - 20, 110), fill)
     check("script text is rendered in the window", body_ink > 80, f"{body_ink} ink px")
 
-    # The viewport no longer covers the line at the cut with a band: it
-    # dissolves the type itself. Only the line being read is opaque — the
-    # whole top of the card and the whole bottom of it are a ghost, so the
-    # dissolve is most of the column, not a strip at each edge. Nothing may be
-    # painted over the script, the reading line must survive untouched, and
-    # every scroll offset has to behave — this is the scrolling test as a
-    # pixel check.
+    # The reader is a plain, fully opaque text column: the viewport spans the
+    # card's full height and QTextEdit paints the script itself, with no
+    # offscreen alpha pass. A line near the top edge therefore paints at the
+    # script's full brightness instead of fading into a ghost.
     edit = win._text_edit
-    check("reader dissolves its own edges", edit.soft_edges())
-
-    # The band is measured mid-script, where the reader actually sits: at the
-    # document's first line the scrollbar has nowhere to go and the band is
-    # pinned to that line instead.
     bar = edit.verticalScrollBar()
-    ratio = edit.devicePixelRatioF()
-    win._scroll_to_reading_line(max(0, min(10, len(win._line_spans) - 2)))
-    bar.setValue(int(round(win._voice_target_scroll or 0)))
-    QTest.qWait(60)
+    check("the script viewport spans the card's full height",
+          edit.viewport().height() == win.height(),
+          f"viewport height {edit.viewport().height()} of {win.height()}")
 
-    line_top, line_bottom = edit.reading_band()
-    height_dip = float(edit.viewport().height())
-    top_band = line_top
-    bottom_band = height_dip - line_bottom
-    check("the whole top and bottom of the card are a dissolve",
-          top_band >= height_dip * 0.25 and bottom_band >= height_dip * 0.25,
-          f"top {top_band:.1f} px, bottom {bottom_band:.1f} px "
-          f"of {height_dip:.0f} px")
-    check("the reading line sits clear of the controls",
-          line_top >= 4 + 32, f"line top {line_top:.1f} of 36 px strip")
-
-    check("the reading line itself stays out of the dissolve",
-          line_bottom - line_top <= edit.height() * 0.45,
-          f"line band {line_bottom - line_top:.1f} of {edit.height()} px")
-
-    blur_reach = 2 * max(1, int(round(edit.BLUR_PX * ratio))) + 1
-    retained = {"top": [], "bottom": []}
-    added = 0
-    moved_line = 0.0
-    spread = 0
-    # The chrome floats over the script instead of sitting in a bar above it:
-    # the strip the controls occupy carries type of its own, at a fraction of
-    # the reading line's strength.
-    strip_peak = 0
-    band_peak = 0
-    offsets = list(range(0, int(min(bar.maximum(), 220)), 8))
-    for offset in offsets:
-        bar.setValue(offset)
-        sharp = alpha_plane(edit._render(soften=False))
-        soft = alpha_plane(edit._render())
-        # The blur is allowed to spread ink a few pixels; nothing may be
-        # painted outside the type's own neighbourhood. A band would be.
-        added += int(((soft > 0) & ~dilate(sharp > 0, blur_reach)).sum())
-        rows = row_retention(sharp, soft)
-        # The band moves with the scroll at the document's ends, so it is
-        # measured per offset rather than once.
-        band_top, band_bottom = edit.reading_band()
-        first = max(1, int(np.ceil(band_top * ratio)))
-        last = min(soft.shape[0] - 1, int(np.floor(band_bottom * ratio)))
-        strip_peak = max(strip_peak,
-                         int(soft[int(4 * ratio):int(32 * ratio)].max()))
-        band_peak = max(band_peak, int(soft[first:last].max()))
-        edge_rows = list(range(0, first)) + list(range(last, soft.shape[0]))
-        for y, value in rows.items():
-            if y < first:
-                retained["top"].append(value)
-            elif y >= last:
-                retained["bottom"].append(value)
-            else:
-                moved_line = max(moved_line, abs(1.0 - value))
-        spread += sum(
-            1 for y in edge_rows
-            if int((soft[y] > 0).sum()) > int((sharp[y] > 0).sum())
-        )
-
-    check("the dissolve never paints anything of its own", added == 0,
-          f"{added} px added outside the type")
-    check("the sharp band is untouched", moved_line < 1e-6,
-          f"max alpha loss {moved_line:.6f}")
-    check("type actually crosses both edges while scrolling",
-          len(retained["top"]) > 40 and len(retained["bottom"]) > 40,
-          f"{len(retained['top'])} top rows, {len(retained['bottom'])} bottom rows "
-          f"over {len(offsets)} offsets")
-    for edge_name, values in retained.items():
-        check(f"{edge_name} edge is near-transparent at the cut",
-              min(values) < 0.4, f"min retention {min(values):.2f}")
-        # The ramp is meant to reach nothing at the cut: the top and bottom
-        # of the card are fully transparent, so no type is visible there.
-        check(f"{edge_name} edge fades to fully transparent",
-              min(values) <= 0.01,
-              f"min retention {min(values) * 100:.1f}% of its sharp alpha")
-        levels = {round(value * 10) for value in values if 0.1 < value < 0.95}
-        check(f"{edge_name} edge fades progressively",
-              len(levels) >= 4, f"{len(levels)} levels between 10% and 95%")
-    check("edge type is spread by a light blur, not just dimmed",
-          spread > 20, f"{spread} blurred rows")
-    check("type runs underneath the floating controls",
-          0 < strip_peak < band_peak * 0.6,
-          f"strip peak {strip_peak} vs reading line {band_peak}")
-
-    # The line the speaker is on sits below the top dissolve, fully sharp.
-    reading_index = max(0, min(10, len(win._line_spans) - 2))
-    win._scroll_to_reading_line(reading_index)
-    # The scrollbar springs toward the target, so read it only once it has
-    # actually arrived, or the measurement lands mid-glide.
-    for _ in range(40):
-        if abs(bar.value() - (win._voice_target_scroll or 0)) <= 1:
-            break
-        QTest.qWait(20)
-    bar.setValue(int(round(win._voice_target_scroll or 0)))
-    QTest.qWait(60)
-    sharp = alpha_plane(edit._render(soften=False))
-    soft = alpha_plane(edit._render())
-    rows = row_retention(sharp, soft)
-    scroll = float(bar.value())
-    reading = win._line_spans[reading_index]
-    line_top = reading.top - scroll
-    inside = [value for y, value in rows.items()
-              if line_top - 0.5 <= y / ratio <= line_top + reading.height + 0.5]
-    anchor = edit.reading_inset()
-    check("the reading line is anchored below the dissolve",
-          abs(line_top - anchor) <= 1.5,
-          f"line top {line_top:.1f} vs anchor {anchor:.1f}")
-    check("the line being read is fully sharp",
-          bool(inside) and min(inside) > 0.999,
-          f"{len(inside)} rows, min retention "
-          f"{min(inside) if inside else 0:.4f}")
-
-    # Everything outside the reading line is a ghost. That is what makes the
-    # whole column see-through instead of a solid page with feathered ends.
-    first_row = int(np.ceil(line_top * ratio))
-    last_row = int(np.floor((line_top + reading.height) * ratio))
-    # Two rows of grace at the boundary: the edge blur can lift a neighbouring
-    # row back to full alpha without any of its own type being solid.
-    outside = [value for y, value in rows.items()
-               if y < first_row - 2 or y >= last_row + 2]
-    dim = sum(1 for value in outside if value < 0.9) / max(1, len(outside))
-    check("type outside the reading line is a ghost",
-          bool(outside) and float(np.median(outside)) <= 0.5 and dim >= 0.8,
-          f"{len(outside)} rows, median "
-          f"{float(np.median(outside)) if outside else 0:.2f}, "
-          f"{dim * 100:.0f}% below full strength")
-
-    # The dissolve is composited over the card, not painted as a band: at a
-    # scroll where a line crosses the bottom edge there is still type there,
-    # fainter than the line in the sharp band.
     win._dark_theme = True
     win._apply_read_mode_style()
     win._apply_highlight(-1)
     QTest.qWait(60)
-    # A wrapped line, so the line above it is in the sharp band while it
-    # crosses the bottom edge itself.
-    index = next(
-        k for k in range(2, len(win._line_spans))
-        if win._line_spans[k].top - win._line_spans[k - 1].top <= 32
-    )
-    line = win._line_spans[index]
-    bar.setValue(max(0, int(round(line.top - (edit.height() - 18)))))
+    wrapped = [k for k in range(2, len(win._line_spans))
+               if win._line_spans[k].top - win._line_spans[k - 1].top <= 32]
+    top_index = wrapped[0] if wrapped else max(1, len(win._line_spans) - 1)
+    bar.setValue(max(0, min(bar.maximum(),
+                           int(round(win._line_spans[top_index].top - 8)))))
     QTest.qWait(80)
-    soft = alpha_plane(edit._render())
-    band_top, band_bottom = edit.reading_band()
-    ratio = edit.devicePixelRatioF()
-    centre_peak = int(soft[max(1, int(np.ceil(band_top * ratio))):
-                           int(np.floor(band_bottom * ratio))].max())
-    # Sampled just above the outer rows: the last few are fully transparent
-    # by design, so the type has to be judged where the fade still leaves it.
-    bottom_peak = int(soft[max(0, soft.shape[0] - int(16 * ratio)):
-                           soft.shape[0] - int(10 * ratio)].max())
-    check("type still reaches the bottom region", bottom_peak > 10,
-          f"peak alpha {bottom_peak}")
-    check("type at the bottom edge is attenuated, not clipped",
-          bottom_peak < centre_peak * 0.7,
-          f"edge {bottom_peak} vs sharp {centre_peak}")
+    top_edge = edit.viewport().grab().toImage()
+    brightest = 0
+    for y in range(0, min(30, top_edge.height())):
+        for x in range(0, top_edge.width()):
+            colour = top_edge.pixelColor(x, y)
+            brightest = max(brightest, colour.red(), colour.green(), colour.blue())
+    check("text near the top edge is fully bright, not faded",
+          brightest >= 200, f"peak channel {brightest} in the top 30 px")
+
+    # The line the speaker is on sits below the control strip at the anchor.
+    reading_index = max(0, min(10, len(win._line_spans) - 2))
+    win._scroll_to_reading_line(reading_index)
+    QTest.qWait(60)
+    bar.setValue(int(round(win._voice_target_scroll or 0)))
+    win._sync_scroll_spring()
+    QTest.qWait(60)
+    reading = win._line_spans[reading_index]
+    line_top = reading.top - bar.value()
+    anchor = edit.reading_inset()
+    check("the reading line is anchored below the controls",
+          abs(line_top - anchor) <= 1.5,
+          f"line top {line_top:.1f} vs anchor {anchor:.1f}")
 
     # Narrow reader: legible type, and the narrow card keeps its own radius.
     win._toggle_compact_mode()
@@ -386,13 +226,33 @@ def main():
     # reserved strip under the text.
     win._toggle_edit_mode()
     QTest.qWait(700)
-    margin = win._text_edit.document().rootFrame().frameFormat().bottomMargin()
-    check("editor reserves room for the Done button", margin >= 36,
-          f"document bottom margin {margin}")
+    editor_margin = win._text_edit.document().rootFrame().frameFormat().bottomMargin()
+    check("editor reserves room for the Done button", editor_margin >= 36,
+          f"document bottom margin {editor_margin}")
     win._toggle_edit_mode()
     QTest.qWait(700)
-    margin = win._text_edit.document().rootFrame().frameFormat().bottomMargin()
-    check("reader mode gives the room back", margin == 0, f"margin {margin}")
+    reader_margin = win._text_edit.document().rootFrame().frameFormat().bottomMargin()
+    anchor_room = win._text_edit.anchor_padding()
+    check("reader keeps the anchor room, not the Done strip",
+          abs(reader_margin - anchor_room) <= 0.5 and 0 < reader_margin < 36,
+          f"reader {reader_margin:.1f} vs anchor {anchor_room:.1f}, "
+          f"editor {editor_margin:.1f}")
+    frame = win._text_edit.document().rootFrame().frameFormat()
+    first_line_room = frame.topMargin() + win._text_edit.document().documentMargin()
+    # No reserved header: the script starts at the card's top edge and runs
+    # behind the floating chrome. Only the foot keeps its room, so the last
+    # line can still be scrolled up onto the reading line.
+    check("the script reserves no header above its first line",
+          frame.topMargin() == 0 and first_line_room <= 12,
+          f"top margin {frame.topMargin():.1f}, "
+          f"first line at {first_line_room:.1f} px")
+    check("the last line can still reach the reading line",
+          reader_margin >= win._text_edit.viewport().height()
+          - win._text_edit.reading_inset()
+          - win._text_edit.fontMetrics().lineSpacing()
+          - win._text_edit.document().documentMargin() - 0.5,
+          f"bottom {reader_margin:.1f}, inset "
+          f"{win._text_edit.reading_inset():.1f}")
 
     # Menu: one mode control, a status line, and mode-dependent rows.
     win._voice_mode = True

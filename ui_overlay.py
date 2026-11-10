@@ -42,10 +42,10 @@ class _RenderedLine(NamedTuple):
     height: float
 
 
-from spring import SpringGroup, system_allows_motion
+from spring import Spring, SpringGroup, system_allows_motion
 from controls import (
     CompactButton, GlyphButton, MicButton, MoreButton, MinimizeButton,
-    NoteButton, RoundedMenu, SoftEdgeTextEdit, TextButton,
+    NoteButton, RoundedMenu, ScriptTextEdit, TextButton,
 )
 from win_capture import exclude_from_capture
 
@@ -418,6 +418,16 @@ class NotchOverlay(QWidget):
         self._reflow_pending_top: Optional[int] = None
         self._next_line_step_at = 0.0
 
+        # ── Scroll motion ────────────────────────────────────────────
+        # The script glides on a critically damped spring instead of an
+        # exponential step. A spring starts from the pixel already on screen
+        # and never overshoots, so a line advance reads as the page moving
+        # rather than the text jumping a whole line in one frame.
+        self._scroll_spring = Spring(0.0, damping=1.0, response=0.30,
+                                     rest_value=0.25, rest_velocity=6.0)
+        self._scroll_moving = False
+        self._scroll_last_time = 0.0
+
         # ── Timers ───────────────────────────────────────────────────
         # Scroll timer (glow + manual scroll); 60 FPS for smooth response
         self._scroll_timer = QTimer(self)
@@ -515,9 +525,6 @@ class NotchOverlay(QWidget):
         """Text has faded out; apply styling while invisible, then fade back in (or defer for collapse)."""
         if self._text_fade_for_expand:
             self._edit_mode = True
-            # The editor is a document, not a moving script: no dissolve
-            # around the caret and no mask over the scrollbars.
-            self._text_edit.set_soft_edges(False)
             self._text_edit.setReadOnly(False)
             self._text_edit.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -593,7 +600,6 @@ class NotchOverlay(QWidget):
             self._partial_word = -1
             self._voice_target_scroll = None
             self._edit_mode = False
-            self._text_edit.set_soft_edges(True)
             self._done_btn.hide()
             # The reader gives the whole window back to the script.
             self._apply_root_margins()
@@ -621,8 +627,8 @@ class NotchOverlay(QWidget):
         self._root_layout = root
         s = self._scale
         # The type owns the full height of the window: no header strip, no
-        # bottom strip, nothing between the script and the edges but the
-        # dissolve. The controls are positioned over it below.
+        # bottom strip, nothing between the script and the edges. The plain
+        # text column paints opaquely to the edges; the controls float over it.
         root.setContentsMargins(int(18 * s), 0, int(18 * s), 0)
         root.setSpacing(0)
 
@@ -690,9 +696,9 @@ class NotchOverlay(QWidget):
         self._idle_timer.timeout.connect(self._recede_chrome)
 
         # ── Script text area ─────────────────────────────────────────
-        # The reader's own edges dissolve the type (see SoftEdgeTextEdit):
-        # the viewport still clips, but nothing reaches a hard cut.
-        self._text_edit = SoftEdgeTextEdit(self)
+        # Plain, fully opaque type from the card's top edge down (see
+        # ScriptTextEdit): no fade, no blur, no reserved header above it.
+        self._text_edit = ScriptTextEdit(self)
         self._text_edit.setAcceptRichText(False)  # Paste as plain text only (no colors, bg, etc.)
         self._text_edit.setReadOnly(True)
         self._text_edit.setFont(QFont(self._font_family, self._font_size))
@@ -831,10 +837,11 @@ class NotchOverlay(QWidget):
         #    window itself is still a card, not a hole in the desktop.
         painter.setPen(Qt.NoPen)
         bg_color = QColor("#ffffff") if not self._dark_theme else QColor("#000000")
-        # Subtle translucency: enough to sit on the desktop without becoming a
-        # hole in it. At 0.95 the text behind showed through as ghosting and
-        # competed with the script; the editor sits a touch more solid.
-        bg_color.setAlphaF(1.0 if not self._dark_theme else (0.99 if self._edit_mode else 0.97))
+        # The card is a solid surface in both themes. Transparency belongs to
+        # the floating controls (the idle recede); letting the desktop ghost
+        # through the card put a second, moving layer behind the words and
+        # hurt the script's contrast.
+        bg_color.setAlphaF(1.0)
         painter.setBrush(bg_color)
         painter.drawPath(path)
 
@@ -951,20 +958,20 @@ class NotchOverlay(QWidget):
         if self._voice_mode and self._step_reading_line():
             self._apply_highlight(self._display_word())
 
-        if self._voice_mode and self._voice_target_scroll is not None:
-            # Don't override scroll for a short time after user scrolls manually
-            if time.monotonic() - self._last_manual_scroll_time >= 2.5:
-                current = float(bar.value())
-                target = self._voice_target_scroll
-                rate = 0.945 if self._compact_mode else 0.63  # 0.63 * 1.5
-                step = (target - current) * rate
-                if self._compact_mode:
-                    step = max(-10.0, min(10.0, step))  # cap step for smoother motion
-                if abs(step) < 0.5 and abs(target - current) < 2:
-                    bar.setValue(int(round(target)))
-                else:
-                    bar.setValue(int(round(current + step)))
-        elif not self._voice_mode and self._manual_running:
+        if self._voice_mode:
+            # Voice follow owns the scrollbar: a new line is a new target and
+            # the spring carries the page there. A manual wheel gets a short
+            # hold before the reader takes the scroll back.
+            if (self._voice_target_scroll is not None
+                    and time.monotonic() - self._last_manual_scroll_time >= 2.5
+                    and not self._scroll_moving
+                    and abs(self._scroll_spring.target - self._voice_target_scroll) > 0.5):
+                self._retarget_scroll(self._voice_target_scroll)
+            self._advance_scroll()
+        elif self._manual_running:
+            # Timed playback writes the scrollbar directly; make sure a glide
+            # left over from voice mode cannot fight it.
+            self._scroll_moving = False
             if bar.value() < bar.maximum():
                 interval_sec = self._scroll_timer.interval() / 1000.0
                 pixels_per_tick = (self._manual_wpm / 60.0) * 12.0 * interval_sec
@@ -1132,11 +1139,17 @@ class NotchOverlay(QWidget):
         return aligned.last_word if aligned is not None else None
 
     def _display_word(self) -> int:
-        """How far to shade the script, never past the line being read."""
-        if not self._line_spans or self._confirmed_word < 0:
-            return self._confirmed_word
+        """How far to shade the script, never past the line being read.
+
+        The tentative word counts as well: partial results drive the live
+        highlight, and re-applying the format for any reason must not pull
+        the shading back to the last confirmed word and flicker the boundary.
+        """
+        position = max(self._confirmed_word, self._partial_word)
+        if not self._line_spans or position < 0:
+            return position
         line = self._line_spans[self._current_line]
-        return min(self._confirmed_word, line.last_word)
+        return min(position, line.last_word)
 
     def _apply_partial_speech(self, text: str):
         """Shade words as they are heard, but never leave the current line.
@@ -1676,6 +1689,9 @@ class NotchOverlay(QWidget):
             with open(path, "r", encoding="utf-8") as f: text = f.read()
             print(f"[Notch] Script loaded: {path}", flush=True)
             self._text_edit.setPlainText(text)
+            # Replacing the text resets every block's format; the spacing key
+            # must not pretend the new document is already typeset.
+            self._spaced_key = None
             self._text_edit.setAlignment(Qt.AlignCenter) 
             self._script_text = text
             self._matching.load_script(text)
@@ -1698,7 +1714,8 @@ class NotchOverlay(QWidget):
                 self._scroll_to_reading_line(0)
                 self._start_listening()
             else:
-                # The first line cannot reach the inset, so the band follows it.
+                # Manual mode reads from the top of the column, not the
+                # voice-follow anchor, so the script starts at the first line.
                 self._scroll_word_to_top(0)
         except: pass
 
@@ -1716,6 +1733,7 @@ class NotchOverlay(QWidget):
             self._manual_scroll_accum = 0.0
             self._voice_scroll_accum = 0.0
             self._voice_target_scroll = None
+            self._sync_scroll_spring()
 
     def _mode_status_text(self) -> str:
         """One line of state, without repeating the number in the row below."""
@@ -1866,10 +1884,16 @@ class NotchOverlay(QWidget):
 
         The button floats inside the editor's bottom-right corner, so without
         a reserved strip a long script scrolls its final line underneath it.
+        In the reader the same margin is the anchor room below the last line,
+        so the final lines can sit on the reading line like every other line.
         """
         frame = self._text_edit.document().rootFrame()
         fmt = frame.frameFormat()
-        fmt.setBottomMargin(int((44 if reserve else 0) * self._scale))
+        bottom = float(int(44 * self._scale)) if reserve else float(
+            self._text_edit.anchor_padding())
+        if abs(fmt.bottomMargin() - bottom) < 0.5:
+            return
+        fmt.setBottomMargin(bottom)
         frame.setFrameFormat(fmt)
 
     # ═══════════════════════════════════════════════════════════════════
@@ -1911,24 +1935,41 @@ class NotchOverlay(QWidget):
                 side, self._chrome_strip(), side, int(10 * s))
         else:
             self._root_layout.setContentsMargins(side, 0, side, 0)
-        self._apply_document_lead()
+        # The leads define the reading area, and the document margins are
+        # derived from them, so the leads have to be current first.
         self._sync_reading_leads()
+        self._apply_document_lead()
         self._layout_chrome()
 
     def _apply_document_lead(self):
-        """Reserve the floating strip inside the document itself.
+        """Reserve the anchor room under the document, never above it.
 
-        Without it the first line of a script cannot be scrolled down to the
-        anchor, so it would sit against the top edge underneath the controls.
-        Re-applied after every document load, because replacing the text
-        resets the root frame's format.
+        The reader keeps blank space below its last line so the end of a
+        script can still be scrolled up onto the reading line. It reserves
+        nothing above the first line: a script opens at the top edge of the
+        card and runs behind the floating chrome, so the window is type from
+        its first pixel rather than type below an empty header band.
+
+        Re-applied after every document load and every resize, because
+        replacing the text resets the root frame's format and the anchor is
+        derived from the viewport height.
         """
         frame = self._text_edit.document().rootFrame()
         fmt = frame.frameFormat()
-        lead = 0 if self._edit_mode else self._chrome_strip()
-        if abs(fmt.topMargin() - lead) < 0.5:
+        if self._edit_mode:
+            top = 0.0
+            bottom = None  # the Done button's strip is owned by the footer
+        else:
+            top = 0.0
+            bottom = float(self._text_edit.anchor_padding())
+        changed = abs(fmt.topMargin() - top) >= 0.5
+        if bottom is not None and abs(fmt.bottomMargin() - bottom) >= 0.5:
+            changed = True
+        if not changed:
             return
-        fmt.setTopMargin(lead)
+        fmt.setTopMargin(top)
+        if bottom is not None:
+            fmt.setBottomMargin(bottom)
         frame.setFrameFormat(fmt)
 
     def _sync_reading_leads(self):
@@ -2034,8 +2075,8 @@ class NotchOverlay(QWidget):
         if self._voice_mode:
             self._scroll_to_reading_line(0)
         else:
-            # Back at the document's first line: the reading band has to move
-            # with it, or the words at the top would sit in the dissolve.
+            # Back at the document's first line: the view has to follow it,
+            # or the words at the top stay behind where the reader is.
             self._scroll_word_to_top(0)
 
     def _font_increase(self):
@@ -2228,13 +2269,73 @@ class NotchOverlay(QWidget):
                 low = mid + 1
         return low
 
+    def _retarget_scroll(self, target: float):
+        """Glide the script to a new pixel offset, or snap when motion is off.
+
+        A retarget keeps the spring's current value (and velocity where it
+        has one), so a line advance continues from the pixel already on
+        screen instead of restarting. A recent wheel scroll wins for its
+        hold period; the next voice line picks the scroll back up afterwards.
+        """
+        bar = self._text_edit.verticalScrollBar()
+        target = max(0.0, min(float(bar.maximum()), float(target)))
+        if (time.monotonic() - self._last_manual_scroll_time < 2.5
+                and self._voice_target_scroll is not None):
+            self._sync_scroll_spring()
+            return
+        if not system_allows_motion():
+            self._scroll_spring.jump_to(target)
+            self._scroll_moving = False
+            bar.setValue(int(round(target)))
+            return
+        # Start from the pixel on screen. If the bar was moved by something
+        # other than this spring (a Home key, a restored checkpoint), the
+        # spring's old value is stale and must not be resumed.
+        if (not self._scroll_moving
+                or abs(self._scroll_spring.value - bar.value()) > 1.5):
+            self._scroll_spring.jump_to(float(bar.value()))
+        self._scroll_last_time = 0.0
+        self._scroll_spring.set_target(target)
+        self._scroll_moving = True
+
+    def _sync_scroll_spring(self):
+        """A direct scroll (wheel, checkpoint) is the new resting point."""
+        self._scroll_spring.jump_to(float(self._text_edit.verticalScrollBar().value()))
+        self._scroll_moving = False
+        self._scroll_last_time = 0.0
+
+    def _advance_scroll(self):
+        """Step the scroll spring and write the rounded pixel to the bar."""
+        if not self._scroll_moving:
+            return
+        now = time.monotonic()
+        if not self._scroll_last_time:
+            # First frame only establishes the clock; stepping it with an
+            # unknown dt is what produced one-frame jumps in the old loop.
+            self._scroll_last_time = now
+            return
+        dt = min(0.064, max(0.0, now - self._scroll_last_time))
+        self._scroll_last_time = now
+        if dt <= 0.0:
+            return
+        self._scroll_spring.step(dt)
+        if self._scroll_spring.settled:
+            self._scroll_spring.land()
+            self._scroll_moving = False
+        bar = self._text_edit.verticalScrollBar()
+        value = int(round(self._scroll_spring.value))
+        if bar.value() != value:
+            bar.setValue(value)
+
     def _scroll_to_reading_line(self, line_index: int):
-        """Anchor the given line at the top of the text area.
+        """Anchor the given line at the reading line of the text area.
 
         The target depends only on the line, never on the word inside it, so
         pausing mid-line leaves the view perfectly still. It is recalculated
         whenever the layout changes, which is what preserves the reading
-        position across font and width changes.
+        position across font and width changes. The document reserves enough
+        room above and below for the first and last lines to reach the same
+        anchor as every line in between.
         """
         if not self._line_spans:
             return
@@ -2242,15 +2343,10 @@ class NotchOverlay(QWidget):
         line = self._line_spans[index]
         inset = self._text_edit.reading_inset()
         bar = self._text_edit.verticalScrollBar()
-        # The line sits just below the top dissolve, in the sharp band, so
-        # the edge never carries the words being spoken away. `reading_inset`
-        # already includes the document's own margins.
         target = line.top - inset
         anchored = max(0.0, min(float(bar.maximum()), target))
         self._voice_target_scroll = anchored
-        # Where the scrollbar could not follow (first and last lines), the
-        # reading band moves instead so the line is never left in the dissolve.
-        self._text_edit.set_reading_shift(target - anchored)
+        self._retarget_scroll(anchored)
 
     def _set_reading_position(self, word: int, update_target: bool = True):
         """Move the reading position directly (wheel, checkpoints)."""
@@ -2327,9 +2423,9 @@ class NotchOverlay(QWidget):
         if not self._line_spans:
             return None
         scroll = float(self._text_edit.verticalScrollBar().value())
-        # A line anchored at the top sits below the document margin and the
-        # dissolve inset; the threshold has to include both or the line just
-        # scrolled out reads as the top one.
+        # The reading line is the one the reader is looking at, so the
+        # threshold includes the anchor: without it the line just scrolled
+        # out above it would count as the top one.
         reach = scroll + self._text_edit.reading_inset() + 1.0
         top = self._line_spans[0]
         for line in self._line_spans:
@@ -2349,7 +2445,7 @@ class NotchOverlay(QWidget):
         target = line.top - inset
         value = max(0, min(bar.maximum(), int(round(target))))
         bar.setValue(value)
-        self._text_edit.set_reading_shift(target - value)
+        self._sync_scroll_spring()
 
     def _scroll_to_word(self, position: int):
         start, _ = self._matching.word_span(position)
@@ -2384,7 +2480,10 @@ class NotchOverlay(QWidget):
         # Resting text is the reference's near-white. Text already spoken
         # recedes, so the words still to come stay the brightest thing.
         base_hex = "#111111" if not self._dark_theme else "#fafafa"
-        spoken_hex = "#a0a0a0" if not self._dark_theme else "#8a8a8a"
+        # Already-spoken type recedes, but not below reading contrast: on
+        # paper the old #a0a0a0 was 2.5:1, which is faint even for text the
+        # eye has already left. #767676 keeps it clearly secondary at 4.5:1.
+        spoken_hex = "#767676" if not self._dark_theme else "#8a8a8a"
         base_format = QTextCharFormat()
         base_format.setForeground(QColor(base_hex))
         spoken_format = QTextCharFormat()
@@ -2408,11 +2507,18 @@ class NotchOverlay(QWidget):
         and recognizer updates do not touch block layout on every tick.
         Returns True when the layout was changed.
         """
+        line_px = self._line_pitch()
+        # A replaced document keeps the same length and font but loses its
+        # block formats. Checking the first block catches that even if the
+        # key matches, so a reload can never skip its leading.
+        first = self._text_edit.document().begin()
+        block_format = first.blockFormat()
+        typeset = (block_format.lineHeightType() == QTextBlockFormat.FixedHeight
+                   and abs(block_format.lineHeight() - line_px) <= 0.5)
         key = (len(self._script_text), self._font_family, self._font_size)
-        if getattr(self, "_spaced_key", None) == key:
+        if typeset and getattr(self, "_spaced_key", None) == key:
             return False
         self._spaced_key = key
-        line_px = self._line_pitch()
         cursor = QTextCursor(self._text_edit.document())
         cursor.select(QTextCursor.Document)
         block_format = QTextBlockFormat()
@@ -2490,6 +2596,7 @@ class NotchOverlay(QWidget):
         self._manual_running = False
         bar = self._text_edit.verticalScrollBar()
         bar.setValue(cp["scroll"])
+        self._sync_scroll_spring()
         match = cp["match"] if cp["match"] is not None else -1
         self._confirmed_word = match
         self._partial_word = -1
@@ -2535,6 +2642,7 @@ class NotchOverlay(QWidget):
                     step = max(1, int(line_h * 0.45))  # ~0.45 lines per tick (less sensitive)
                     step = step * (1 if delta_y > 0 else -1)
                     bar.setValue(bar.value() - step)
+                    self._sync_scroll_spring()
                     # Move read position with scroll: up = undo words, down = complete words (skip back / skip ahead)
                     if self._script_text and self._matching.word_count > 0:
                         SCROLL_WORDS = 2
@@ -2787,6 +2895,7 @@ class NotchOverlay(QWidget):
         script = state.get("script") or ""
         if script:
             self._text_edit.setPlainText(script)
+            self._spaced_key = None
             self._text_edit.setAlignment(Qt.AlignCenter)
             self._script_text = script
             self._matching.load_script(script)
