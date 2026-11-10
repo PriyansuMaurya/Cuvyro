@@ -2,7 +2,7 @@ import os
 import sys
 import time
 import ctypes
-from typing import Optional
+from typing import List, NamedTuple, Optional
 
 from PyQt5.QtCore import (
     Qt, QTimer, QPoint, pyqtSlot, QRectF, QRect, QEvent,
@@ -30,6 +30,15 @@ from matching_engine import MatchingEngine
 from settings_dialog import SettingsDialog
 from note_window import NoteWindow
 from store import Store
+
+
+class _RenderedLine(NamedTuple):
+    """One visual line of the script, resolved to script-word indices."""
+
+    first_word: int
+    last_word: int
+    top: float
+    height: float
 
 
 class AnimatedCloseButton(QAbstractButton):
@@ -660,6 +669,16 @@ class NotchOverlay(QWidget):
     GLOW_COLOR = QColor(41, 98, 255)       # Blue = Notch (follows voice)
     MANUAL_GLOW_COLOR = QColor(46, 204, 113)  # Green = Keys & Scroll
 
+    # Voice follow is line based. A recognised word must be this close to a
+    # script word to count, and it may match a few words ahead when the
+    # speaker stumbles or the recogniser drops a word.
+    WORD_MATCH_SCORE = 80
+    WORD_SKIP_TOLERANCE = 3
+    # When one final result confirms several lines at once (a long utterance
+    # with no pause), the reader catches up one line at a time instead of
+    # jumping, so the eye is never asked to skip a line.
+    LINE_STEP_INTERVAL = 0.18
+
     def __init__(self):
         super().__init__()
         # When packaged as exe, look for model next to the executable
@@ -735,11 +754,30 @@ class NotchOverlay(QWidget):
         self._voice_target_scroll: Optional[float] = None
         self._last_manual_scroll_time = 0.0  # don't override scroll for this long after user scrolls (seconds)
 
+        # ── Line-based voice follow ──────────────────────────────────
+        # The line being read is held still until its last word has been
+        # confirmed by a final speech result; only then does the reader step
+        # to the next visual line. Line breaks come from the rendered
+        # document layout, so they follow font size, style and width.
+        self._line_spans: List[_RenderedLine] = []
+        self._current_line = 0
+        self._confirmed_word = -1  # furthest word confirmed by final results
+        self._partial_word = -1    # furthest word seen in a tentative result
+        self._reflow_pending_top: Optional[int] = None
+        self._next_line_step_at = 0.0
+
         # ── Timers ───────────────────────────────────────────────────
         # Scroll timer (glow + manual scroll); 60 FPS for smooth response
         self._scroll_timer = QTimer(self)
         self._scroll_timer.setInterval(17)  # ~60 FPS
         self._scroll_timer.timeout.connect(self._tick)
+
+        # Resize events arrive every frame while the narrow/wide animation
+        # runs; rebuild the line map once the layout has settled.
+        self._reflow_timer = QTimer(self)
+        self._reflow_timer.setSingleShot(True)
+        self._reflow_timer.setInterval(120)
+        self._reflow_timer.timeout.connect(self._on_reflow_timeout)
 
         # ── Window Setup ─────────────────────────────────────────────
         self.setWindowFlags(
@@ -870,6 +908,11 @@ class NotchOverlay(QWidget):
             self._save_state()  # commit the edit now, not only on close
             self._last_match_time = None
             self._last_match_pos = -1
+            self._line_spans = []
+            self._current_line = 0
+            self._confirmed_word = -1
+            self._partial_word = -1
+            self._voice_target_scroll = None
             self._edit_mode = False
             self._text_edit.setReadOnly(True)
             self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -877,9 +920,12 @@ class NotchOverlay(QWidget):
             self._text_edit.setAlignment(Qt.AlignCenter)
             self._apply_read_mode_style()
             self._apply_highlight(-1)
+            self._refresh_lines()
             if script_changed:
                 self._text_edit.moveCursor(QTextCursor.Start)
                 self._text_edit.verticalScrollBar().setValue(0)
+            if self._voice_mode:
+                self._scroll_to_reading_line(0)
             # Text stays invisible; fade-in deferred to _on_edit_geometry_anim_finished
 
     # ═══════════════════════════════════════════════════════════════════
@@ -1043,9 +1089,18 @@ class NotchOverlay(QWidget):
         self.clearMask()
 
     def resizeEvent(self, event):
+        # Capture the manual reader's top line before the text area takes its
+        # new width, so reflowing can put the same words back under the eye.
+        if (self._script_text and not self._edit_mode and not self._voice_mode
+                and not self._reflow_timer.isActive()):
+            self._reflow_pending_top = self._word_at_scroll_top()
         super().resizeEvent(event)
         # No mask needed - edges are smooth via paintEvent anti-aliasing
         self._layout_bottom_fade()
+        # Line breaks depend on the viewport width: rebuild them once the
+        # resize settles rather than on every animation frame.
+        if self._script_text and not self._edit_mode:
+            self._reflow_timer.start()
 
     def paintEvent(self, event: QPaintEvent):
         painter = QPainter(self)
@@ -1134,6 +1189,10 @@ class NotchOverlay(QWidget):
         if self._edit_mode:
             return
         bar = self._text_edit.verticalScrollBar()
+
+        # Finish a multi-line catch-up one rendered line at a time.
+        if self._voice_mode and self._step_reading_line():
+            self._apply_highlight(self._display_word())
 
         if self._voice_mode and self._voice_target_scroll is not None:
             # Don't override scroll for a short time after user scrolls manually
@@ -1291,34 +1350,126 @@ class NotchOverlay(QWidget):
         if not self._script_text:
             return
 
-        # Partials: match with strict advance for fast, low-jitter response.
-        # Finals: match with larger advance and allow extended catch-up.
         if is_final:
-            max_jump = 12 if self._last_match_pos >= 0 else 20
-            position = self._matching.match_spoken(
-                text,
-                allow_extended=True,
-                max_advance=max_jump,
-            )
-            if position is not None:
-                self._apply_highlight(position)
-                self._voice_target_scroll = self._target_scroll_for_reading_position(position)
-                self._update_voice_speed(position, True)
-                self._speech_active_until = time.monotonic() + 1.0
+            self._apply_confirmed_speech(text)
         else:
-            # Partial: small advance so we follow in real time without big jumps
-            position = self._matching.match_spoken(
-                text,
-                allow_extended=False,
-                max_advance=5,
-            )
-            if position is not None:
-                self._apply_highlight(position)
-                self._voice_target_scroll = self._target_scroll_for_reading_position(position)
-                self._speech_active_until = max(
-                    self._speech_active_until,
-                    time.monotonic() + 0.8,
-                )
+            self._apply_partial_speech(text)
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  Voice follow (line based)
+    # ═══════════════════════════════════════════════════════════════════
+
+    def _align_speech(self, text: str, start_word: int, end_word: int) -> Optional[int]:
+        """Furthest script word reached by a recognised phrase, or None."""
+        aligned = self._matching.align_forward(
+            text,
+            start_word,
+            end_word,
+            min_score=self.WORD_MATCH_SCORE,
+            max_skip=self.WORD_SKIP_TOLERANCE,
+        )
+        return aligned.last_word if aligned is not None else None
+
+    def _display_word(self) -> int:
+        """How far to shade the script, never past the line being read."""
+        if not self._line_spans or self._confirmed_word < 0:
+            return self._confirmed_word
+        line = self._line_spans[self._current_line]
+        return min(self._confirmed_word, line.last_word)
+
+    def _apply_partial_speech(self, text: str):
+        """Shade words as they are heard, but never leave the current line.
+
+        Partials are rewritten by the recogniser and are not confirmation, so
+        they may only move the highlight inside the line on screen. They
+        never scroll the view or advance the reader: a pause mid-line leaves
+        the line exactly where it is.
+        """
+        if not self._line_spans:
+            return
+        line = self._line_spans[self._current_line]
+        start = max(line.first_word, self._confirmed_word + 1)
+        if start > line.last_word:
+            return  # line already fully spoken; waiting for a final result
+        last = self._align_speech(text, start, line.last_word + 1)
+        if last is None or last <= self._confirmed_word:
+            return
+        self._partial_word = last
+        self._apply_highlight(min(last, line.last_word))
+
+    def _apply_confirmed_speech(self, text: str):
+        """Confirm words from a final result, then step lines forward.
+
+        A line is only complete when its last word is among the confirmed
+        words. If one final covers several lines, they are stepped through
+        one at a time; the view is only re-anchored when the reader actually
+        changes line.
+        """
+        if not self._line_spans:
+            self._refresh_lines()
+        if not self._line_spans:
+            return
+
+        # Match from the first word that has not been confirmed yet. Words at
+        # the start of a final that were already confirmed are treated as
+        # noise, which keeps repeated words from matching behind the cursor.
+        start = max(0, self._confirmed_word + 1)
+        last = self._align_speech(text, start, self._matching.word_count)
+        if last is None or last <= self._confirmed_word:
+            # The final still replaces any tentative shading from partials.
+            self._partial_word = -1
+            self._apply_highlight(self._display_word())
+            return
+
+        self._confirmed_word = last
+        self._partial_word = -1
+        self._matching.set_position(last)
+        self._last_match_pos = last
+        self._update_voice_speed(last, True)
+
+        # Step immediately when the line just finished, then let _tick pace
+        # any further lines this result also confirmed.
+        moved = self._step_reading_line(force=True)
+        self._apply_highlight(self._display_word())
+        if moved:
+            self._speech_active_until = time.monotonic() + 1.0
+
+    def _reading_line_limit(self) -> int:
+        """Highest rendered line the reader may stand on.
+
+        That is the line after the last fully confirmed one. A line whose
+        last word has not been confirmed is never behind the limit, so the
+        reader cannot step past a line that is still being spoken.
+        """
+        if not self._line_spans or self._confirmed_word < 0:
+            return 0
+        index = self._line_index_for_word(self._confirmed_word)
+        if self._line_spans[index].last_word <= self._confirmed_word:
+            limit = index + 1
+        else:
+            limit = index
+        return max(0, min(limit, len(self._line_spans) - 1))
+
+    def _step_reading_line(self, force: bool = False) -> bool:
+        """Move the reader forward one rendered line, at most one per step.
+
+        Returns True when the line changed. A confirmed final steps straight
+        away; lines confirmed by the same result follow on the scroll timer so
+        the view glides a line at a time instead of jumping.
+        """
+        if not self._line_spans:
+            return False
+        if self._current_line >= len(self._line_spans) - 1:
+            return False
+        if self._current_line >= self._reading_line_limit():
+            return False
+        now = time.monotonic()
+        if not force and now < self._next_line_step_at:
+            return False
+        self._current_line += 1
+        self._next_line_step_at = now + self.LINE_STEP_INTERVAL
+        self._scroll_to_reading_line(self._current_line)
+        return True
 
     # ═══════════════════════════════════════════════════════════════════
     #  Context Menu
@@ -1683,7 +1834,7 @@ class NotchOverlay(QWidget):
             next_idx = (idx + 1) % len(font_options)
             _, next_family = font_options[next_idx]
             self._font_family = next_family
-            self._text_edit.setFont(QFont(self._font_family, self._font_size))
+            self._apply_typography()
             _apply_font_btn_style(font_type_btn, next_idx)
         font_type_btn.clicked.connect(_toggle_font_type)
         font_type_layout.addWidget(font_type_btn)
@@ -1763,7 +1914,7 @@ class NotchOverlay(QWidget):
             for btn in (self._close_btn, self._mic_btn, self._compact_btn, self._settings_btn):
                 if btn:
                     btn.update()
-            self._apply_highlight(self._matching.position if self._matching else -1)
+            self._apply_highlight(self._display_word())
         theme_btn.clicked.connect(_toggle_theme)
         theme_layout.addWidget(theme_btn)
         theme_action = QWidgetAction(menu)
@@ -1858,10 +2009,17 @@ class NotchOverlay(QWidget):
             self._voice_scroll_accum = 0.0
             self._voice_target_scroll = None
             self._checkpoints = {}
+            self._line_spans = []
+            self._current_line = 0
+            self._confirmed_word = -1
+            self._partial_word = -1
             self._apply_highlight(-1)
+            self._refresh_lines()
             self._text_edit.moveCursor(QTextCursor.Start)
             self._text_edit.verticalScrollBar().setValue(0)
-            if self._voice_mode: self._start_listening()
+            if self._voice_mode:
+                self._scroll_to_reading_line(0)
+                self._start_listening()
         except: pass
 
     def _toggle_mode(self, checked):
@@ -1922,12 +2080,14 @@ class NotchOverlay(QWidget):
         """Called when narrow/wide width animation finishes."""
         if self._compact_anim_going_narrow:
             self._center_top()
+            self._reflow_timer.start()
         else:
             self.setMinimumSize(self.MIN_W, self.MIN_H)  # restore min size after wide animation
             self._font_size = self._font_size_before_compact
-            self._text_edit.setFont(QFont(self._font_family, self._font_size))
+            self._apply_typography()
             self._size_before_compact = None
             self._center_top()
+            self._reflow_timer.start()
 
     def _toggle_compact_mode(self):
         """Switch between normal width and ~2-word width (smaller font), with animated width (centered)."""
@@ -1965,7 +2125,7 @@ class NotchOverlay(QWidget):
             self._font_size_before_compact = self._font_size
             self.setMinimumSize(self.COMPACT_W, self.MIN_H)
             self._font_size = self.COMPACT_FONT
-            self._text_edit.setFont(QFont(self._font_family, self._font_size))
+            self._apply_typography()
             self._compact_anim_going_narrow = True
             self._compact_anim_center_x = center_x
             self._compact_anim_y = y
@@ -1985,15 +2145,22 @@ class NotchOverlay(QWidget):
         self._voice_scroll_accum = 0.0
         self._voice_target_scroll = None
         self._checkpoints = {}
+        self._line_spans = []
+        self._current_line = 0
+        self._confirmed_word = -1
+        self._partial_word = -1
         self._apply_highlight(-1)
+        self._refresh_lines()
+        if self._voice_mode:
+            self._scroll_to_reading_line(0)
 
     def _font_increase(self):
         self._font_size += max(1, int(2 * self._scale))
-        QTimer.singleShot(0, lambda: self._text_edit.setFont(QFont(self._font_family, self._font_size)))
+        self._apply_typography()
 
     def _font_decrease(self):
         self._font_size = max(self.COMPACT_FONT, self._font_size - max(1, int(2 * self._scale)))
-        QTimer.singleShot(0, lambda: self._text_edit.setFont(QFont(self._font_family, self._font_size)))
+        self._apply_typography()
 
     def _set_speed(self, wpm, mode: str = "manual"):
         value = max(1, wpm)
@@ -2042,7 +2209,10 @@ class NotchOverlay(QWidget):
         if bar.value() >= bar.maximum():
             bar.setValue(0)
             self._matching.set_position(0)
+            self._confirmed_word = -1
+            self._partial_word = -1
             self._last_match_pos = -1
+            self._current_line = 0
             self._apply_highlight(-1)
         self._manual_scroll_accum = 0.0
         self._manual_running = True
@@ -2081,37 +2251,178 @@ class NotchOverlay(QWidget):
         self._last_match_time = now
         self._last_match_pos = position
 
-    def _doc_y_for_word(self, position: int) -> float:
-        """Document Y (pixels from top) of the line containing the word at index.
-        Uses line-within-block so wrapped paragraphs scroll correctly (notch is small)."""
-        doc = self._text_edit.document()
-        doc_layout = doc.documentLayout()
-        start, _ = self._matching.word_span(position)
-        cursor = QTextCursor(doc)
-        cursor.setPosition(start)
-        block = cursor.block()
-        block_top = 0.0
-        b = doc.firstBlock()
-        while b.isValid() and b != block:
-            block_top += doc_layout.blockBoundingRect(b).height()
-            b = b.next()
-        block_layout = block.layout()
-        if block_layout is not None and block_layout.lineCount() > 0:
-            pos_in_block = min(cursor.positionInBlock(), max(0, block.length() - 1))
-            line = block_layout.lineForTextPosition(pos_in_block)
-            line_y = line.position().y()
-            return block_top + line_y
-        return block_top
+    # ── Rendered lines ───────────────────────────────────────────────
 
-    def _target_scroll_for_reading_position(self, position: int) -> float:
-        doc_y = self._doc_y_for_word(position)
-        viewport_height = self._text_edit.viewport().height()
+    def _measure_lines(self) -> List[_RenderedLine]:
+        """Resolve every visual line to the script words rendered on it.
+
+        The document layout already knows where the text wraps for the
+        current font, style and viewport width, so it is the source of truth
+        for line breaks rather than the source formatting of the script.
+        """
+        if not self._script_text or not self._matching.word_count:
+            return []
+        doc = self._text_edit.document()
+        # Reading the size forces any pending font/width relayout to finish
+        # before the lines are measured.
+        doc.documentLayout().documentSize()
+
+        offsets = self._matching.char_offsets
+        total = len(offsets)
+        spans: List[_RenderedLine] = []
+        word = 0
+        block = doc.begin()
+        while block.isValid() and word < total:
+            # blockBoundingRect is already in document coordinates, which
+            # include the document margin.
+            block_top = doc.documentLayout().blockBoundingRect(block).top()
+            layout = block.layout()
+            if layout is None:
+                block_end = block.position() + block.length()
+                while word < total and offsets[word] < block_end:
+                    word += 1
+                block = block.next()
+                continue
+
+            for line_index in range(layout.lineCount()):
+                line = layout.lineAt(line_index)
+                start = block.position() + line.textStart()
+                end = start + line.textLength()
+                first = None
+                last = None
+                while word < total and offsets[word] < end:
+                    if offsets[word] >= start:
+                        if first is None:
+                            first = word
+                        last = word
+                    word += 1
+                if first is not None:
+                    spans.append(_RenderedLine(
+                        first_word=first,
+                        last_word=last,
+                        top=block_top + line.position().y(),
+                        height=max(1.0, float(line.height())),
+                    ))
+            block = block.next()
+        return spans
+
+    def _refresh_lines(self):
+        """Rebuild the line map, keeping the reader on the same words.
+
+        The current word position is the anchor across a reflow: line breaks
+        may move around it, but the reader stays on the text it was reading.
+        The current line is preferred over the confirmed word so a reader
+        sitting at the start of a fresh line is not pulled back to the end of
+        the previous one.
+        """
+        anchor = None
+        if self._line_spans and 0 <= self._current_line < len(self._line_spans):
+            anchor = self._line_spans[self._current_line].first_word
+        self._line_spans = self._measure_lines()
+        if not self._line_spans:
+            self._current_line = 0
+            return
+        focus = 0 if anchor is None else anchor
+        if self._confirmed_word >= 0:
+            focus = max(focus, self._confirmed_word)
+        self._current_line = self._line_index_for_word(focus)
+
+    def _line_index_for_word(self, word: int) -> int:
+        """Index of the rendered line containing a script word."""
+        if not self._line_spans:
+            return 0
+        word = max(0, word)
+        low, high = 0, len(self._line_spans) - 1
+        while low < high:
+            mid = (low + high) // 2
+            if self._line_spans[mid].last_word >= word:
+                high = mid
+            else:
+                low = mid + 1
+        return low
+
+    def _scroll_to_reading_line(self, line_index: int):
+        """Anchor the given line at the top of the text area.
+
+        The target depends only on the line, never on the word inside it, so
+        pausing mid-line leaves the view perfectly still. It is recalculated
+        whenever the layout changes, which is what preserves the reading
+        position across font and width changes.
+        """
+        if not self._line_spans:
+            return
+        index = max(0, min(line_index, len(self._line_spans) - 1))
+        line = self._line_spans[index]
+        margin = self._text_edit.document().documentMargin()
         bar = self._text_edit.verticalScrollBar()
-        line_height = float(self._text_edit.fontMetrics().lineSpacing())
-        # Narrow: scroll earlier and keep more lines ahead (small font = many lines visible)
-        lines_below = 5.5 if self._compact_mode else 4
-        target = doc_y - (viewport_height - lines_below * line_height)
-        return max(0.0, min(float(bar.maximum()), target))
+        target = line.top - margin
+        self._voice_target_scroll = max(0.0, min(float(bar.maximum()), target))
+
+    def _set_reading_position(self, word: int, update_target: bool = True):
+        """Move the reading position directly (wheel, checkpoints)."""
+        if not self._script_text or not self._matching.word_count:
+            return
+        word = max(0, min(word, self._matching.word_count - 1))
+        self._matching.set_position(word)
+        self._confirmed_word = word
+        self._partial_word = -1
+        self._last_match_pos = word
+        if self._line_spans:
+            self._current_line = self._line_index_for_word(word)
+        self._apply_highlight(word)
+        if update_target and self._voice_mode:
+            self._scroll_to_reading_line(self._current_line)
+
+    # ── Reflow (font, style, width) ──────────────────────────────────
+
+    def _on_reflow_timeout(self):
+        """Rebuild line breaks after a resize settles and restore the view."""
+        top_word = self._reflow_pending_top
+        self._reflow_pending_top = None
+        if not self._script_text or self._edit_mode:
+            return
+        self._refresh_lines()
+        self._restore_reading_view(top_word)
+
+    def _restore_reading_view(self, top_word: Optional[int]):
+        """Put the reader back on the same words after the layout changed."""
+        if not self._script_text or self._edit_mode or not self._line_spans:
+            return
+        if self._voice_mode:
+            self._scroll_to_reading_line(self._current_line)
+        elif top_word is not None:
+            self._scroll_word_to_top(top_word)
+
+    def _apply_typography(self):
+        """Apply the current font and recompute line breaks for the new layout."""
+        top_word = None
+        if not self._voice_mode and not self._edit_mode:
+            top_word = self._word_at_scroll_top()
+        self._text_edit.setFont(QFont(self._font_family, self._font_size))
+        self._refresh_lines()
+        self._restore_reading_view(top_word)
+
+    def _word_at_scroll_top(self) -> Optional[int]:
+        """First script word of the line currently at the top of the view."""
+        if not self._line_spans:
+            return None
+        scroll = float(self._text_edit.verticalScrollBar().value())
+        top = self._line_spans[0]
+        for line in self._line_spans:
+            if line.top <= scroll + 1.0:
+                top = line
+            else:
+                break
+        return top.first_word
+
+    def _scroll_word_to_top(self, word: int):
+        """Scroll so the line containing a word sits at the top of the view."""
+        if not self._line_spans:
+            return
+        line = self._line_spans[self._line_index_for_word(word)]
+        margin = self._text_edit.document().documentMargin()
+        bar = self._text_edit.verticalScrollBar()
+        bar.setValue(max(0, min(bar.maximum(), int(round(line.top - margin)))))
 
     def _scroll_to_word(self, position: int):
         start, _ = self._matching.word_span(position)
@@ -2138,7 +2449,9 @@ class NotchOverlay(QWidget):
     def _apply_highlight(self, position: int):
         if not self._script_text:
             return
-        self._apply_line_spacing()
+        if self._apply_line_spacing():
+            # Line spacing is part of the layout: measure the lines again.
+            self._refresh_lines()
         doc = self._text_edit.document()
         cursor = QTextCursor(doc)
         cursor.beginEditBlock()
@@ -2163,14 +2476,15 @@ class NotchOverlay(QWidget):
 
         cursor.endEditBlock()
 
-    def _apply_line_spacing(self):
+    def _apply_line_spacing(self) -> bool:
         """Reference rhythm: ~24 DIP between baselines for ~16 px text.
 
         Reflowed only when the script length changes, so caret moves and
-        recognizer updates do not touch block layout on every tick.
+        recognizer updates do not touch block layout on every tick. Returns
+        True when the layout was changed.
         """
         if getattr(self, "_spaced_len", -1) == len(self._script_text):
-            return
+            return False
         self._spaced_len = len(self._script_text)
         line_px = max(1, int(24 * self._scale))
         cursor = QTextCursor(self._text_edit.document())
@@ -2178,6 +2492,7 @@ class NotchOverlay(QWidget):
         block_format = QTextBlockFormat()
         block_format.setLineHeight(line_px, QTextBlockFormat.FixedHeight)
         cursor.mergeBlockFormat(block_format)
+        return True
 
     def _center_top(self):
         screen = QApplication.primaryScreen()
@@ -2249,11 +2564,12 @@ class NotchOverlay(QWidget):
         self._manual_running = False
         bar = self._text_edit.verticalScrollBar()
         bar.setValue(cp["scroll"])
-        if cp["match"] is not None and cp["match"] >= 0:
-            self._last_match_pos = cp["match"]
-            self._apply_highlight(self._last_match_pos)
-        else:
-            self._apply_highlight(-1)
+        match = cp["match"] if cp["match"] is not None else -1
+        self._confirmed_word = match
+        self._partial_word = -1
+        if self._line_spans:
+            self._current_line = self._line_index_for_word(max(0, match))
+        self._apply_highlight(match)
 
     def eventFilter(self, obj, event):
         if hasattr(self, "_text_edit") and (
@@ -2288,15 +2604,9 @@ class NotchOverlay(QWidget):
                         SCROLL_WORDS = 2
                         current = self._last_match_pos if self._last_match_pos >= 0 else 0
                         if delta_y > 0:  # scroll up -> move position back
-                            new_pos = max(0, current - SCROLL_WORDS)
-                            self._matching.set_position(new_pos)
-                            self._last_match_pos = self._matching.position
-                            self._apply_highlight(self._last_match_pos)
+                            self._set_reading_position(max(0, current - SCROLL_WORDS))
                         else:  # scroll down -> move position forward
-                            new_pos = min(self._matching.word_count - 1, current + SCROLL_WORDS)
-                            self._matching.set_position(new_pos)
-                            self._last_match_pos = self._matching.position
-                            self._apply_highlight(self._last_match_pos)
+                            self._set_reading_position(current + SCROLL_WORDS)
                 return True
         return super().eventFilter(obj, event)
 
@@ -2540,6 +2850,9 @@ class NotchOverlay(QWidget):
 
         self._text_edit.setFont(QFont(self._font_family, self._font_size))
         self._apply_read_mode_style()
+        if self._script_text:
+            self._refresh_lines()
+            self._restore_reading_view(None)
         self.update()
 
     def _save_state(self):
@@ -2560,9 +2873,16 @@ class NotchOverlay(QWidget):
             self._text_edit.setAlignment(Qt.AlignCenter)
             self._script_text = script
             self._matching.load_script(script)
+            self._line_spans = []
+            self._current_line = 0
+            self._confirmed_word = -1
+            self._partial_word = -1
             self._apply_highlight(-1)
+            self._refresh_lines()
             self._text_edit.moveCursor(QTextCursor.Start)
             self._text_edit.verticalScrollBar().setValue(0)
+            if self._voice_mode:
+                self._scroll_to_reading_line(0)
             print(f"[Notch] Restored saved script ({len(script)} chars)", flush=True)
 
         for entry in state.get("notes") or []:

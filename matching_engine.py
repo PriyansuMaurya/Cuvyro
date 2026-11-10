@@ -1,34 +1,43 @@
 """
-matching_engine.py — Word-matching logic for script alignment.
+matching_engine.py — Word alignment for script following.
 
-Takes the full script and recognised words from the speech engine, and
-figures out where in the script the speaker currently is. Uses a look-ahead
-window and fuzzy matching to tolerate stumbles, skips, and mispronunciations.
+Takes the full script and the words coming from the speech engine and reports
+how far through the script the speaker has got. Alignment only ever moves
+forward and tolerates the recogniser adding filler words, dropping a word, or
+transcribing one imperfectly, so a single bad result cannot throw the reader
+somewhere else in the script.
 """
 
 import re
-from typing import Optional, List
+from typing import List, NamedTuple, Optional
 
 from thefuzz import fuzz
+
+
+class Alignment(NamedTuple):
+    """Result of aligning recognised words against the script."""
+
+    last_word: int      # furthest script word that was matched
+    matched_words: int  # how many recognised words landed on the script
 
 
 class MatchingEngine:
     """Tracks the user's reading position inside the loaded script."""
 
-    # Minimum fraction of script word length required for a partial single-word match (stricter = fewer false advances)
-    MIN_PARTIAL_RATIO = 0.65
-    MIN_PARTIAL_CHARS = 3
+    # A recognised word may match this many script words ahead. This absorbs
+    # the speaker skipping a word and the recogniser dropping one, while
+    # keeping a noisy result from jumping across the script.
+    DEFAULT_MAX_SKIP = 3
 
-    def __init__(self, look_ahead: int = 30, match_threshold: int = 55):
-        self.look_ahead = look_ahead
+    def __init__(self, match_threshold: int = 80, max_skip: int = DEFAULT_MAX_SKIP):
         self.match_threshold = match_threshold
+        self.max_skip = max_skip
 
         self._words: List[str] = []
         self._raw_words: List[str] = []
         self._position: int = 0
         self._word_char_offsets: List[int] = []
         self._raw_text: str = ""
-        self._last_spoken_len: int = 0  # track partial growth
 
     # ── Public API ───────────────────────────────────────────────────
 
@@ -39,13 +48,12 @@ class MatchingEngine:
         self._raw_words = []
         self._word_char_offsets = []
         self._position = 0
-        self._last_spoken_len = 0
 
-        for m in re.finditer(r"\S+", text):
-            raw = m.group()
+        for match in re.finditer(r"\S+", text):
+            raw = match.group()
             self._raw_words.append(raw)
             self._words.append(self._normalise(raw))
-            self._word_char_offsets.append(m.start())
+            self._word_char_offsets.append(match.start())
 
     @property
     def word_count(self) -> int:
@@ -60,6 +68,26 @@ class MatchingEngine:
         if not self._words:
             return 0.0
         return self._position / len(self._words)
+
+    @property
+    def char_offsets(self) -> List[int]:
+        """Character offset in the raw script for every word."""
+        return self._word_char_offsets
+
+    def raw_word_at(self, word_index: int) -> str:
+        """The word as written in the script (punctuation included)."""
+        if not self._raw_words:
+            return ""
+        idx = max(0, min(word_index, len(self._raw_words) - 1))
+        return self._raw_words[idx]
+
+    def raw_words_in_range(self, first_word: int, last_word: int) -> List[str]:
+        """Script words for an inclusive word-index range."""
+        if not self._raw_words:
+            return []
+        first = max(0, first_word)
+        last = min(last_word, len(self._raw_words) - 1)
+        return self._raw_words[first:last + 1]
 
     def char_offset_at(self, word_index: int) -> int:
         """Return the character offset in the raw text for a given word index."""
@@ -82,7 +110,6 @@ class MatchingEngine:
 
     def reset(self):
         self._position = 0
-        self._last_spoken_len = 0
 
     def set_position(self, word_index: int) -> None:
         """Set reading position (e.g. when user scrolls to skip back/forward)."""
@@ -90,123 +117,63 @@ class MatchingEngine:
             return
         self._position = max(0, min(word_index, len(self._words) - 1))
 
-    def match_spoken(
+    def align_forward(
         self,
         spoken_text: str,
-        allow_extended: bool = True,
-        max_advance: Optional[int] = None,
-    ) -> Optional[int]:
-        """
-        Given a string of spoken words from the recogniser, find the best
-        matching position in the script and advance the internal pointer.
+        start_word: int,
+        end_word: int,
+        *,
+        min_score: Optional[int] = None,
+        max_skip: Optional[int] = None,
+    ) -> Optional[Alignment]:
+        """Align recognised words to the script, forward only.
 
-        Returns the new word-index position, or None if no match was found.
+        Each recognised word may match one of the next ``max_skip + 1`` script
+        words, so a stumble or a dropped filler word does not desynchronise
+        the reader. Words that do not match anything are treated as
+        recogniser noise and leave the pointer where it is.
+
+        The search is bounded by ``[start_word, end_word)``; callers use this
+        to keep matching inside the line that is currently on screen.
+        Returns the furthest script word reached, or None when nothing
+        matched.
         """
         if not self._words:
             return None
 
-        spoken_words = [self._normalise(w) for w in spoken_text.split() if w.strip()]
+        spoken_words = [self._normalise(w) for w in spoken_text.split()]
+        spoken_words = [w for w in spoken_words if w]
         if not spoken_words:
             return None
 
-        # Determine how many new words arrived since last call
-        new_word_count = len(spoken_words)
+        threshold = self.match_threshold if min_score is None else min_score
+        skip = self.max_skip if max_skip is None else max(0, max_skip)
 
-        # Use a sliding tail window: try multiple tail sizes for robustness
-        # This handles both single-word and multi-word matching
-        best_score = 0
-        best_index = None
+        cursor = max(0, min(start_word, len(self._words) - 1))
+        end = max(cursor + 1, min(end_word, len(self._words)))
+        last_word: Optional[int] = None
+        matched = 0
 
-        # Search windows: normal look-ahead, then extended for catch-up
-        window_start = max(0, self._position - 2)  # small lookback for tolerance
-        window_end = min(len(self._words), self._position + self.look_ahead)
-
-        # If near the end, widen the window
-        if window_end - window_start < 5 and len(self._words) > 5:
-            window_start = max(0, len(self._words) - self.look_ahead)
-            window_end = len(self._words)
-
-        # Try different tail sizes: 1, 2, 3, and up to 5 words from the end
-        tail_sizes = []
-        for sz in [1, 2, 3, 4, 5]:
-            if sz <= len(spoken_words):
-                tail_sizes.append(sz)
-
-        for tail_sz in tail_sizes:
-            spoken_tail = spoken_words[-tail_sz:]
-            spoken_phrase = " ".join(spoken_tail)
-
-            for i in range(window_start, window_end):
-                snippet = self._words[i : i + tail_sz]
-                if len(snippet) != tail_sz:
-                    continue
-                script_phrase = " ".join(snippet)
-
-                # Use token_sort_ratio for single words (handles slight variations)
-                # and ratio for phrases
-                if tail_sz == 1:
-                    # Stricter partials: require enough of the word before advancing (avoids "any word" advancing)
-                    spoken_len = len(spoken_phrase)
-                    script_len = len(script_phrase)
-                    if spoken_len < self.MIN_PARTIAL_CHARS:
-                        continue
-                    if script_len > 0 and spoken_len < script_len * self.MIN_PARTIAL_RATIO:
-                        continue
-                    score = fuzz.ratio(spoken_phrase, script_phrase)
-                    # Boost exact single-word matches
-                    if spoken_phrase == script_phrase:
-                        score = 100
-                else:
-                    score = fuzz.ratio(spoken_phrase, script_phrase)
-
-                # Prefer matches further along (closer to where we expect the reader)
-                # Give a small bonus for being near the current position
-                position_bonus = 0
-                match_end = i + tail_sz - 1
-                if match_end >= self._position:
-                    position_bonus = 2  # slight forward preference
-
-                adjusted = score + position_bonus
-
-                if adjusted > best_score:
-                    best_score = adjusted
-                    best_index = i + tail_sz - 1
-
-        # Accept match if above threshold
-        threshold = self.match_threshold
-        if best_score >= threshold and best_index is not None:
-            if best_index >= self._position:
-                if max_advance is None or (best_index - self._position) <= max_advance:
-                    self._position = best_index
-                else:
-                    return None
-            self._last_spoken_len = new_word_count
-            return self._position
-
-        # ── Extended catch-up scan (user skipped ahead) ──────────────
-        if not allow_extended:
-            self._last_spoken_len = new_word_count
-            return None
-        extended_end = min(len(self._words), self._position + self.look_ahead * 5)
-        for tail_sz in [3, 4, 5]:
-            if tail_sz > len(spoken_words):
+        for spoken in spoken_words:
+            if cursor >= end:
+                break
+            limit = min(end, cursor + skip + 1)
+            best_index = None
+            best_score = 0
+            for index in range(cursor, limit):
+                score = fuzz.ratio(spoken, self._words[index])
+                if score > best_score:
+                    best_score = score
+                    best_index = index
+            if best_index is None or best_score < threshold:
                 continue
-            spoken_tail = spoken_words[-tail_sz:]
-            spoken_phrase = " ".join(spoken_tail)
+            cursor = best_index + 1
+            last_word = best_index
+            matched += 1
 
-            for i in range(window_end, extended_end):
-                snippet = self._words[i : i + tail_sz]
-                if len(snippet) != tail_sz:
-                    continue
-                script_phrase = " ".join(snippet)
-                score = fuzz.ratio(spoken_phrase, script_phrase)
-                if score >= threshold + 10:  # stricter for big jumps
-                    self._position = i + tail_sz - 1
-                    self._last_spoken_len = new_word_count
-                    return self._position
-
-        self._last_spoken_len = new_word_count
-        return None
+        if last_word is None:
+            return None
+        return Alignment(last_word=last_word, matched_words=matched)
 
     # ── Internals ────────────────────────────────────────────────────
 

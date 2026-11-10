@@ -57,6 +57,9 @@ Surface treatment, also measured from the captures:
 
 # wheel scroll, timed playback, persistence, note lifecycle
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_behavior.py
+
+# line-gated voice follow: pauses, speeds, multi-line finals, reflow
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_voice_follow.py
 ```
 
 Screenshots are written to `%TEMP%\shots`. `verify_ui.py` lifts
