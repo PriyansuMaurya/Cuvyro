@@ -4,6 +4,11 @@
 The app looks for the speech model at <exe dir>/model when frozen
 (see ui_overlay.py), so the build script copies model/ next to Notch.exe
 instead of bundling it inside _internal.
+
+sherpa-onnx is the engine the app prefers. Its wheel carries the sherpa and
+onnxruntime DLLs inside ``sherpa_onnx/lib``, which PyInstaller's own hooks know
+nothing about, so the package is collected whole and keeps that layout next to
+``_sherpa_onnx.pyd``.
 """
 
 import os
@@ -13,11 +18,15 @@ from PyInstaller.utils.hooks import collect_all
 REPO_ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 
 datas, binaries, hiddenimports = [], [], []
-for pkg in ("vosk", "sounddevice", "thefuzz", "rapidfuzz"):
+for pkg in ("sherpa_onnx", "vosk", "sounddevice", "thefuzz", "rapidfuzz"):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
     datas += pkg_datas
     binaries += pkg_binaries
     hiddenimports += pkg_hidden
+
+# Imported from inside AudioWorker.run, so name it here rather than rely on the
+# analyser walking a function-local import.
+hiddenimports.append("speech_engine")
 
 # PyQt5 is resolved by PyInstaller's own hooks; only silence noisy optional modules.
 excludes = [

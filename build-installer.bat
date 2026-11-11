@@ -32,10 +32,18 @@ echo [2/5] Installing dependencies...
 "%PY%" -m pip install -q -r requirements.txt pyinstaller
 if errorlevel 1 goto :err
 
-if not exist "model" (
-  echo ERROR: model\ folder is missing.
-  echo Download vosk-model-small-en-us-0.15 and extract it so model\conf exists.
-  goto :err
+REM The app prefers the sherpa-onnx streaming model in model\sherpa; a Vosk
+REM model (model\conf + model\am) is only the fallback for old installs.
+if not exist "model\sherpa\tokens.txt" (
+  if not exist "model\conf" (
+    echo ERROR: no speech model found.
+    echo Put the sherpa-onnx streaming zipformer int8 export in model\sherpa:
+    echo   https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2
+    echo   ...so that model\sherpa\tokens.txt exists, and set
+    echo   model\silero_vad.onnx from
+    echo   https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+    goto :err
+  )
 )
 
 echo [3/5] Freezing app with PyInstaller...

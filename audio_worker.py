@@ -2,15 +2,20 @@
 audio_worker.py — Microphone audio worker running on a QThread.
 
 Reads raw PCM from the microphone via sounddevice and emits volume levels
-for voice-activity-driven scrolling. Optionally uses offline speech
-recognition for word alignment; volume detection always works independently.
+for voice-activity-driven scrolling. Optionally uses local speech recognition
+for word alignment; volume detection always works independently.
+
+The recogniser and the voice-activity detector both come from
+``speech_engine``, which decodes on this machine only. A Silero VAD segments
+utterances, so an utterance is closed when the speaker actually stops and
+silence never reaches the recogniser.
 """
 
-import json
 import os
 import queue
 import sys
 import traceback
+from collections import deque
 from typing import Optional
 
 import numpy as np
@@ -39,18 +44,23 @@ class AudioWorker(QThread):
     # silence. Expressed in time, not frames, so changing the block size
     # cannot silently change the feel of the reader.
     SILENCE_SECONDS = 0.75
+    # Blocks kept from before the VAD confirmed speech. The detector needs
+    # ~150 ms of speech before it reports any, so without this buffer the
+    # first word of every sentence would be clipped from the recogniser.
+    ONSET_SECONDS = 0.4
 
     @staticmethod
-    def _resolve_vosk_model_dir(model_path: str) -> str:
+    def _resolve_model_dir(model_path: str) -> str:
         """
         Make model loading resilient to common zip-extract layouts.
 
-        Expected structure (directly in model_path):
+        Expected structure (directly in model_path) for the Vosk fallback:
           model_path\\conf\\...
           model_path\\am\\...
 
         But the data is sometimes in a subfolder. If we detect that,
-        we automatically use the inner folder.
+        we automatically use the inner folder. A sherpa-onnx model is found
+        by speech_engine wherever it sits under the same root.
         """
         try:
             if not model_path:
@@ -117,6 +127,15 @@ class AudioWorker(QThread):
         self._muted = False
         self._reset_recognizer_requested = False
 
+        # Recognition state (assigned in run so a load failure leaves the
+        # volume meter working on its own).
+        self._engine = None          # speech_engine.StreamRecognizer
+        self._vad = None             # speech_engine.SpeechDetector
+        self._last_partial = ""
+        self._onset_blocks = max(
+            1, int(round(self.ONSET_SECONDS / self._block_seconds)))
+        self._pending = deque(maxlen=self._onset_blocks)
+
     # ── Public helpers ───────────────────────────────────────────────
     def set_muted(self, muted: bool):
         self._muted = bool(muted)
@@ -138,6 +157,74 @@ class AudioWorker(QThread):
 
     def stop(self):
         self._running = False
+
+    # ── Recognition helpers ──────────────────────────────────────────
+    def _reset_recognition(self):
+        """Forget the current utterance and any buffered onset audio."""
+        self._pending.clear()
+        self._last_partial = ""
+        if self._engine is not None:
+            try:
+                self._engine.reset()
+            except Exception:
+                pass
+        if self._vad is not None:
+            try:
+                self._vad.reset()
+            except Exception:
+                pass
+
+    def _accept_block(self, data: bytes):
+        """Feed one block to the recogniser and emit what it heard."""
+        try:
+            text, is_final = self._engine.accept(data)
+        except Exception:
+            return
+        if not text:
+            if is_final:
+                self._last_partial = ""
+            return
+        if is_final:
+            print(f"[Notch audio] (final): {text!r}", flush=True)
+            self.speech_text_signal.emit(text, True)
+            self._last_partial = ""
+            return
+        if text != self._last_partial:
+            print(f"[Notch audio] (partial): {text!r}", flush=True)
+            self.speech_text_signal.emit(text, False)
+            self._last_partial = text
+
+    def _close_utterance(self):
+        """The speaker stopped: confirm the words heard and start fresh."""
+        self._pending.clear()
+        text = ""
+        if self._engine is not None:
+            try:
+                text = self._engine.finalize()
+            except Exception:
+                text = ""
+        self._last_partial = ""
+        if text:
+            print(f"[Notch audio] (final): {text!r}", flush=True)
+            self.speech_text_signal.emit(text, True)
+
+    def _feed_recognizer(self, data: bytes, speech: Optional[bool]):
+        """Send a block to the recogniser, gated by the VAD when present."""
+        if self._engine is None:
+            return
+        if speech is None:
+            self._accept_block(data)  # no VAD: the engine sees everything
+            return
+        if speech:
+            # Replay the blocks captured before the detector confirmed speech,
+            # so the first word of the sentence is decoded too.
+            while self._pending:
+                self._accept_block(self._pending.popleft())
+            self._accept_block(data)
+            return
+        # Nobody is talking: remember a short window of audio in case a word
+        # started before the detector was sure, and skip the decode cost.
+        self._pending.append(data)
 
     # ── sounddevice callback (called from audio thread) ──────────────
     def _audio_callback(self, indata: np.ndarray, frames: int,
@@ -173,17 +260,21 @@ class AudioWorker(QThread):
             self.error_signal.emit(f"Microphone error:\n{exc}")
             return
 
-        # Optional speech recognizer (use instance attrs so we can reset on unmute)
-        self._vosk_model = None
-        self._recognizer = None
-        last_partial = ""
+        # Optional speech recogniser (use instance attrs so we can reset on
+        # unmute). speech_engine picks sherpa-onnx when its model is present
+        # and falls back to Vosk for an existing model folder.
         try:
-            from vosk import Model, KaldiRecognizer
-            model_dir = self._resolve_vosk_model_dir(self.model_path)
-            if os.path.isdir(model_dir):
-                self._vosk_model = Model(model_dir)
-                self._recognizer = KaldiRecognizer(self._vosk_model, self.SAMPLE_RATE)
-                print("[Notch] Speech recognition on", flush=True)
+            from speech_engine import create_recognizer, create_vad
+
+            model_dir = self._resolve_model_dir(self.model_path)
+            # The model load costs seconds on a cold start; say so instead of
+            # leaving the pill looking ready while nothing is being heard.
+            self.status_signal.emit("Preparing voice match...")
+            self._engine = create_recognizer(model_dir)
+            if self._engine is not None:
+                self._vad = create_vad(model_dir)
+                print("[Notch] Speech recognition on "
+                      f"({self._engine.name})", flush=True)
                 if getattr(sys, "frozen", False):
                     self._log_frozen_error(f"Speech data loaded from: {model_dir}")
             else:
@@ -193,7 +284,8 @@ class AudioWorker(QThread):
                 self.status_signal.emit("Speech recognition unavailable — voice match off")
                 self.error_signal.emit(
                     f"Speech data folder not found at:\n{model_dir}\n\n"
-                    "Voice-follow and word highlighting need the data folder. "
+                    "Voice-follow and word highlighting need the data folder "
+                    "(model\\sherpa, or a Vosk model\\conf + model\\am). "
                     "If you installed via the installer, reinstall and ensure the full package was used."
                 )
         except Exception as e:
@@ -207,7 +299,8 @@ class AudioWorker(QThread):
                 f"Speech recognition failed to load:\n{e}\n\n"
                 "Check that the data folder exists next to the app and contains the required files."
             )
-            self._recognizer = None
+            self._engine = None
+            self._vad = None
 
         # Processing loop — volume detection + VAD + optional speech recognition
         try:
@@ -218,10 +311,9 @@ class AudioWorker(QThread):
                     continue
 
                 # ── Reset recognizer (e.g. on unmute to clear backlog) ─
-                if self._reset_recognizer_requested and self._vosk_model is not None:
+                if self._reset_recognizer_requested and self._engine is not None:
                     self._reset_recognizer_requested = False
-                    self._recognizer = KaldiRecognizer(self._vosk_model, self.SAMPLE_RATE)
-                    last_partial = ""
+                    self._reset_recognition()
                     # Drain queued audio from during mute so we don't feed stale audio
                     drain = max(1, int(round(3.0 / self._block_seconds)))
                     for _ in range(drain):  # ~3 s, whatever the block size
@@ -230,25 +322,6 @@ class AudioWorker(QThread):
                         except queue.Empty:
                             break
 
-                # ── Speech recognition (optional) ───────────────────
-                if self._recognizer is not None and not self._muted:
-                    try:
-                        if self._recognizer.AcceptWaveform(data):
-                            result = json.loads(self._recognizer.Result())
-                            text = result.get("text", "").strip()
-                            if text:
-                                print(f"[Notch audio] (final): {text!r}", flush=True)
-                                self.speech_text_signal.emit(text, True)
-                                last_partial = ""
-                        else:
-                            partial = json.loads(self._recognizer.PartialResult()).get("partial", "").strip()
-                            if partial and partial != last_partial:
-                                print(f"[Notch audio] (partial): {partial!r}", flush=True)
-                                self.speech_text_signal.emit(partial, False)
-                                last_partial = partial
-                    except Exception:
-                        pass
-
                 # ── Volume metering ──────────────────────────────────
                 samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
                 rms = np.sqrt(np.mean(samples ** 2)) / 32768.0
@@ -256,19 +329,55 @@ class AudioWorker(QThread):
                 level = min(rms * 5.0, 1.0)  # amplified for UI
                 self.volume_level_signal.emit(level)
 
-                # ── Voice Activity Detection ─────────────────────────
-                if rms >= self.noise_gate:
-                    # Voice detected
+                # ── Voice activity ───────────────────────────────────
+                # Silero VAD when available: it hears speech through room
+                # noise that an RMS gate mistakes for a voice, and its
+                # trailing-silence window is the utterance boundary.
+                speech: Optional[bool] = None
+                utterance_ended = False
+                if self._vad is not None and not self._muted:
+                    try:
+                        speech, utterance_ended = self._vad.accept(data)
+                    except Exception:
+                        speech, utterance_ended = None, False
+
+                if speech is not None:
+                    if speech:
+                        self._silence_frames = 0
+                        if not self._is_speaking:
+                            self._is_speaking = True
+                            self.speaking_signal.emit(True)
+                    else:
+                        self._silence_frames += 1
+                        # The end of the pause, not the first silent block:
+                        # the glow stays lit through a breath mid-sentence.
+                        if self._is_speaking and (
+                                utterance_ended
+                                or self._silence_frames >= self._silence_threshold):
+                            self._is_speaking = False
+                            self.speaking_signal.emit(False)
+                    if utterance_ended and not self._muted:
+                        self._close_utterance()
+                elif rms >= self.noise_gate:
+                    # No VAD model: the RMS gate stands in for it.
                     self._silence_frames = 0
                     if not self._is_speaking:
                         self._is_speaking = True
                         self.speaking_signal.emit(True)
                 else:
-                    # Silence
                     self._silence_frames += 1
                     if self._is_speaking and self._silence_frames >= self._silence_threshold:
                         self._is_speaking = False
                         self.speaking_signal.emit(False)
+
+                # ── Speech recognition (optional) ───────────────────
+                if self._engine is not None and not self._muted:
+                    self._feed_recognizer(data, speech)
         finally:
             stream.stop()
             stream.close()
+            try:
+                from speech_engine import release_recognizer
+                release_recognizer(self._engine)
+            except Exception:
+                pass
