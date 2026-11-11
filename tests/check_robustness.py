@@ -132,6 +132,25 @@ def main():
     check("closing the app flushes a pending note edit",
           saved_note(tmp_close) == "flushed on close")
 
+    # A shutdown is a separate exit path (logoff, power off). It arrives as
+    # aboutToQuit, after which the notes list is cleared; saving that empty
+    # list would erase the state the close itself just wrote.
+    tmp_shutdown = tempfile.mkdtemp(prefix="notch-robust-shutdown-")
+    shutting = make_overlay(tmp_shutdown)
+    shutdown_note = shutting._open_note()
+    shutdown_note._edit.setPlainText("survives shutdown")
+    QTest.qWait(30)
+    app.aboutToQuit.emit()
+    check("an OS shutdown flushes a pending note edit",
+          saved_note(tmp_shutdown) == "survives shutdown",
+          repr(saved_note(tmp_shutdown)))
+    with patch.object(QApplication, "quit", lambda *_: None):
+        shutting.close()
+    app.aboutToQuit.emit()
+    check("a shutdown after close cannot erase saved notes",
+          saved_note(tmp_shutdown) == "survives shutdown",
+          repr(saved_note(tmp_shutdown)))
+
     # ── Menus are released, not accumulated ───────────────────────────
     menu_win = make_overlay(tempfile.mkdtemp(prefix="notch-robust-menu-"))
     menu_win._present_menu = lambda menu, pos: menu.close()  # no blocking exec_
@@ -161,6 +180,38 @@ def main():
     if restored_note is not None:
         check("the off-screen note keeps its text", restored_note.text() == "kept")
 
+    # A monitor disappearing while the app is running is the other half of
+    # the same problem: the saved geometry was valid at launch, then the
+    # display it lived on went away.
+    class FakeScreen:
+        def __init__(self, rect):
+            self._rect = rect
+
+        def availableGeometry(self):
+            return self._rect
+
+    tmp_display = tempfile.mkdtemp(prefix="notch-robust-display-")
+    display = make_overlay(tmp_display)
+    display.move(6000, 6000)
+    QTest.qWait(50)
+    small_screen = QRect(0, 0, 640, 400)
+    with patch.object(QApplication, "screens",
+                      return_value=[FakeScreen(small_screen)]):
+        display._on_screens_changed()
+        QTest.qWait(80)
+        check("a reader stranded by a display change is pulled back",
+              small_screen.contains(QRect(display.pos(), display.size())),
+              f"at {display.x()},{display.y()} "
+              f"size {display.width()}x{display.height()}")
+        stray_note = display._open_note()
+        stray_note.move(6000, 6000)
+        display._on_screens_changed()
+        check("a note stranded by a display change is pulled back",
+              small_screen.contains(QRect(stray_note.pos(), stray_note.size())),
+              f"at {stray_note.x()},{stray_note.y()}")
+    with patch.object(QApplication, "quit", lambda *_: None):
+        display.close()
+
     # A note opened while the reader sits against the right edge stays whole.
     restored.move(screen.right() - 60, screen.y())
     QTest.qWait(80)
@@ -178,6 +229,59 @@ def main():
     check("a valid reader position survives a relaunch",
           positioned.pos() == wanted.topLeft(),
           f"{positioned.x()},{positioned.y()} vs {wanted.x()},{wanted.y()}")
+
+    # Sticky notes own their position, not just their text.
+    tmp_note_pos = tempfile.mkdtemp(prefix="notch-robust-note-pos-")
+    note_wanted = QPoint(screen.x() + 120, screen.y() + 80)
+    Store(tmp_note_pos).save("", [{"id": "placed", "text": "placed note",
+                                   "x": note_wanted.x(), "y": note_wanted.y()}], {})
+    note_placed = make_overlay(tmp_note_pos)
+    check("a sticky note position survives a relaunch",
+          note_placed._notes and note_placed._notes[0].pos() == note_wanted,
+          str(note_placed._notes[0].pos()) if note_placed._notes else "missing")
+    with patch.object(QApplication, "quit", lambda *_: None):
+        note_placed.close()
+
+    # ── Font, mode and setup preferences survive a relaunch ──────────
+    tmp_prefs = tempfile.mkdtemp(prefix="notch-robust-prefs-")
+    prefs = make_overlay(tmp_prefs)
+    prefs._save_timer.stop()
+    prefs._font_size = 16
+    prefs._font_increase()
+    check("changing the font schedules a save", prefs._save_timer.isActive())
+    prefs._font_size = 18
+    prefs._font_family = "Consolas"
+    prefs._dark_theme = False
+    prefs._voice_mode = False
+    prefs._manual_wpm = 170
+    prefs._voice_wpm = 75
+    prefs._device_index = 3
+    prefs._noise_gate = 0.07
+    prefs._input_gain = 3.25
+    prefs._save_state()
+    with patch.object(QApplication, "quit", lambda *_: None):
+        prefs.close()
+    restarted = ui_overlay.NotchOverlay()
+    restarted._store = Store(tmp_prefs)
+    restarted._start_listening = lambda: None
+    restarted.show()
+    QTest.qWait(300)
+    check("font family and size survive a relaunch",
+          restarted._font_family == "Consolas" and restarted._font_size == 18,
+          f"{restarted._font_family} {restarted._font_size}")
+    check("theme, mode and reading speeds survive a relaunch",
+          restarted._dark_theme is False and restarted._voice_mode is False
+          and restarted._manual_wpm == 170 and restarted._voice_wpm == 75,
+          f"dark {restarted._dark_theme}, voice {restarted._voice_mode}, "
+          f"manual {restarted._manual_wpm}, voice {restarted._voice_wpm}")
+    check("microphone setup survives a relaunch",
+          restarted._device_index == 3
+          and abs(restarted._noise_gate - 0.07) < 1e-9
+          and abs(restarted._input_gain - 3.25) < 1e-9,
+          f"device {restarted._device_index}, gate {restarted._noise_gate}, "
+          f"gain {restarted._input_gain}")
+    with patch.object(QApplication, "quit", lambda *_: None):
+        restarted.close()
 
     # ── A saved size is restored, not just the position ───────────────
     tmp_size = tempfile.mkdtemp(prefix="notch-robust-size-")
@@ -238,8 +342,12 @@ def main():
                 {"id": "bools", "text": "kept too", "x": True, "y": False},
                 {"id": "nan", "text": "kept as well", "x": float("nan"), "y": 0},
                 {"id": "strings", "text": "and this", "x": "40", "y": "40"},
+                {"id": "not-text", "text": {"a": 1}, "x": 5, "y": 5},
             ],
             "settings": {
+                "device_index": -4,
+                "noise_gate": "loud",
+                "input_gain": float("nan"),
                 "font_family": "Comic Sans",
                 "font_size": 1e30,
                 "dark_theme": "yes",
@@ -273,6 +381,14 @@ def main():
           and all(on_screen(QRect(note.pos(), note.size()))
                   for note in bad._notes),
           f"{len(bad._notes)} note(s)")
+    check("a note whose text is corrupt is dropped, not stringified",
+          all(note.text() != "{'a': 1}" for note in bad._notes),
+          str([note.text() for note in bad._notes]))
+    check("corrupt microphone preferences fall back to defaults",
+          bad._noise_gate == 0.01 and bad._input_gain == 2.0
+          and bad._device_index is None,
+          f"device {bad._device_index}, gate {bad._noise_gate}, "
+          f"gain {bad._input_gain}")
     with patch.object(QApplication, "quit", lambda *_: None):
         bad.close()
 
@@ -292,6 +408,22 @@ def main():
     check("the backup keeps the notes it held",
           [n.get("text") for n in recovered.get("notes") or []]
           == ["recovered note"])
+
+    # Launching against a corrupt primary and then saving must not promote
+    # that corrupt file over the last good backup: the next crash would then
+    # have nothing valid to recover from.
+    tmp_guard = tempfile.mkdtemp(prefix="notch-robust-bak-guard-")
+    Store(tmp_guard).save("first good", [], {})
+    Store(tmp_guard).save("second good", [], {})
+    with open(os.path.join(tmp_guard, "state.json"), "w", encoding="utf-8") as handle:
+        handle.write("{broken")
+    Store(tmp_guard).save("rebuilt from the backup", [], {})
+    with open(os.path.join(tmp_guard, "state.json"), "w", encoding="utf-8") as handle:
+        handle.write("{broken again")
+    guarded = Store(tmp_guard).load()
+    check("a corrupt primary is not promoted over the last good backup",
+          guarded.get("script") == "first good",
+          repr(guarded.get("script")))
 
     fresh = Store(tempfile.mkdtemp(prefix="notch-robust-fresh-")).load()
     check("a first launch loads empty state",

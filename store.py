@@ -1,13 +1,16 @@
 """Local persistence for the Notch teleprompter.
 
-Stores the active script and any written sticky notes under the app-data
-folder. Writes go to a temp file and are then moved into place, so a crash
-mid-write cannot leave a truncated state file; the previous good copy is
-kept as ``state.json.bak`` and used if the primary file fails to parse.
+Stores the active script, any written sticky notes and the reader's
+preferences under the app-data folder. Writes go to a temp file and are then
+moved into place, so a crash mid-write cannot leave a truncated state file;
+the previous good copy is kept as ``state.json.bak`` and used if the primary
+file fails to parse.
 """
 
 import json
+import math
 import os
+import shutil
 import tempfile
 
 SCHEMA = 1
@@ -53,6 +56,24 @@ def sane_coord(value) -> int | None:
     return number
 
 
+def sane_number(value, low: float, high: float) -> float | None:
+    """A finite number inside ``[low, high]``, or None when unusable.
+
+    Used for preferences that are genuinely fractional. ``sane_coord``
+    truncates to an int, which would turn a saved noise gate of 0.01 into 0.
+    JSON can still hold ``true``, strings, NaN and infinity, so none of those
+    may reach the audio stack.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    if not low <= number <= high:
+        return None
+    return number
+
+
 def default_directory() -> str:
     # Deliberately not APPDATA/Notch: an installed Notch build keeps its own
     # trial, help and note files there, and this app must not touch them.
@@ -89,12 +110,42 @@ class Store:
                 }
         return empty_state()
 
-    def save(self, script: str, notes: list[dict], settings: dict | None = None) -> None:
-        """Write the whole state atomically; the previous file becomes .bak.
+    def _backup_current(self) -> None:
+        """Copy the last good primary aside, leaving the primary in place.
 
-        A reader that crashes between the two replaces leaves no primary file,
-        which ``load`` already handles by using the backup. Nothing is ever
-        written in place, so a partially written file cannot be observed.
+        Moving the primary to .bak and then moving the temp file in left a
+        window in which no primary file existed at all: a crash there made the
+        next launch fall back to a state one save older. Copying keeps the
+        primary readable until the final atomic replace, and a primary that no
+        longer parses is never promoted over the last good backup.
+        """
+        if not os.path.exists(self.path):
+            return
+        try:
+            with open(self.path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            return
+        if not isinstance(data, dict) or data.get("schema") != SCHEMA:
+            return
+        handle, temp_path = tempfile.mkstemp(dir=self.directory, suffix=".bak.tmp")
+        os.close(handle)
+        try:
+            shutil.copyfile(self.path, temp_path)
+            os.replace(temp_path, self.backup_path)
+        except OSError:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+    def save(self, script: str, notes: list[dict], settings: dict | None = None) -> None:
+        """Write the whole state atomically; the previous good state is .bak.
+
+        Nothing is ever written in place: the new file is complete and fsynced
+        before it replaces the primary, so a partially written file cannot be
+        observed. ``_backup_current`` copies the old primary without removing
+        it, so even a crash between the two replaces leaves a readable file.
         """
         os.makedirs(self.directory, exist_ok=True)
         payload = {
@@ -109,11 +160,7 @@ class Store:
                 json.dump(payload, out, ensure_ascii=False, indent=2)
                 out.flush()
                 os.fsync(out.fileno())
-            if os.path.exists(self.path):
-                try:
-                    os.replace(self.path, self.backup_path)
-                except OSError:
-                    pass
+            self._backup_current()
             os.replace(temp_path, self.path)
         except OSError:
             try:

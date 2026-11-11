@@ -30,7 +30,7 @@ from audio_worker import AudioWorker
 from matching_engine import MatchingEngine
 from settings_dialog import SettingsDialog
 from note_window import NoteWindow
-from store import Store, sane_coord
+from store import Store, sane_coord, sane_number
 
 
 class _RenderedLine(NamedTuple):
@@ -462,6 +462,10 @@ class NotchOverlay(QWidget):
         # script, and one flag for both would make the second restore bail
         # out because the first one already ran.
         self._prefs_restored = False
+        # Sticky notes are cleared while closing, so a shutdown flush that
+        # arrives after closeEvent must not write that empty list over the
+        # notes just saved. One flag closes the save path for good.
+        self._save_enabled = True
         self._last_match_time: Optional[float] = None
         self._last_match_pos = -1
         # Consecutive finals that confirmed nothing. One is normal (a cough,
@@ -574,6 +578,7 @@ class NotchOverlay(QWidget):
         # ── Build UI ─────────────────────────────────────────────────
         self._build_ui()
         self._setup_shortcuts()
+        self._connect_lifecycle()
         self._update_window_mask()
         QTimer.singleShot(0, self._apply_capture_exclusion)
         QTimer.singleShot(0, self._apply_blur_effect)
@@ -609,6 +614,9 @@ class NotchOverlay(QWidget):
             self._on_edit_motion_finished()
         elif intent in ("narrow", "wide"):
             self._on_compact_motion_finished(narrow=intent == "narrow")
+        # Every finished move is the geometry the next launch should restore.
+        if intent is not None:
+            self._schedule_save()
 
     def _on_text_fade_out_finished(self):
         """Text has faded out; apply styling while invisible, then fade back in (or defer for collapse)."""
@@ -1618,6 +1626,7 @@ class NotchOverlay(QWidget):
             speed_value.setText(str(value))
             self._set_speed(value, "manual")
             status.setText(self._mode_status_text())
+            self._schedule_save()
 
         slider.valueChanged.connect(on_speed)
         speed_action = add_widget(speed_row, top=row_gap, bottom=row_gap)
@@ -1724,6 +1733,7 @@ class NotchOverlay(QWidget):
             self._font_family = families[(index + 1) % len(families)]
             self._apply_typography()
             style_family_btn()
+            self._schedule_save()
 
         family_btn.clicked.connect(cycle_family)
         style_family_btn()
@@ -2039,6 +2049,7 @@ class NotchOverlay(QWidget):
         self._voice_mode = checked
         # The card's indicator colour and the meter belong to the mode.
         self.update()
+        self._schedule_save()
         if self._voice_mode:
             self._start_listening()
         else:
@@ -2355,7 +2366,8 @@ class NotchOverlay(QWidget):
 
     def _toggle_compact_mode(self):
         """Switch between the normal reader and a ~2-word narrow reader."""
-        screen = QApplication.primaryScreen().availableGeometry()
+        screen = (self._screen_for(QRect(self.geometry()))
+                  or QApplication.primaryScreen()).availableGeometry()
         s = self._scale
         y = screen.y() + int(self.TOP_INSET * s)
         center_x = screen.x() + screen.width() // 2
@@ -2429,10 +2441,12 @@ class NotchOverlay(QWidget):
         # growing past it used to be silently clamped on the next launch.
         self._font_size = min(24, self._font_size + max(1, int(2 * self._scale)))
         self._apply_typography()
+        self._schedule_save()
 
     def _font_decrease(self):
         self._font_size = max(self.COMPACT_FONT, self._font_size - max(1, int(2 * self._scale)))
         self._apply_typography()
+        self._schedule_save()
 
     def _set_speed(self, wpm, mode: str = "manual"):
         value = max(1, wpm)
@@ -2466,6 +2480,7 @@ class NotchOverlay(QWidget):
             delta = self._manual_wpm - prev
             if delta != 0:
                 self._show_speed_feedback(delta)
+        self._schedule_save()
 
     def _toggle_manual_playback(self):
         """Space in the reader: start or stop the timed scroll clock.
@@ -3011,9 +3026,37 @@ class NotchOverlay(QWidget):
         cursor.mergeBlockFormat(block_format)
         return True
 
+    @staticmethod
+    def _screen_for(rect: QRect):
+        """The screen a rectangle belongs to, by overlap then proximity.
+
+        ``QApplication.primaryScreen()`` is the wrong answer for a card on a
+        second monitor: centring every transition on the primary made opening
+        the editor drag the reader onto another display.
+        """
+        screens = QApplication.screens()
+        if not screens:
+            return None
+
+        def overlap(screen):
+            area = screen.availableGeometry().intersected(rect)
+            return max(0, area.width()) * max(0, area.height())
+
+        best = max(screens, key=overlap)
+        if overlap(best) > 0:
+            return best
+        centre = rect.center()
+        return min(screens, key=lambda screen: (
+            screen.availableGeometry().center() - centre).manhattanLength())
+
     def _center_top(self):
-        screen = QApplication.primaryScreen()
-        screen_geom = screen.availableGeometry()
+        # Before the first show the window still sits at the toolkit's default
+        # origin, which on a multi-monitor desktop can overlap a secondary
+        # display. Initial placement belongs on the primary; only a transition
+        # from a visible window follows the screen the card is already on.
+        screen = (self._screen_for(QRect(self.geometry()))
+                  if self.isVisible() else QApplication.primaryScreen())
+        screen_geom = (screen or QApplication.primaryScreen()).availableGeometry()
         # Centre the card, not the window: the rail is extra width on the
         # right and would otherwise pull the reading surface left of centre.
         x = screen_geom.x() + (screen_geom.width() - self._card_width()) // 2
@@ -3033,6 +3076,7 @@ class NotchOverlay(QWidget):
             self._device_index = dlg.selected_device
             self._noise_gate = dlg.noise_gate
             self._input_gain = dlg.input_gain
+            self._schedule_save()
         if self._voice_mode: self._start_listening()
 
     def keyPressEvent(self, event: QKeyEvent):
@@ -3087,6 +3131,7 @@ class NotchOverlay(QWidget):
             self._stop_listening()
             self._target_glow_alpha = 28
             self._smoothed_volume_level = 0.0
+            self._schedule_save()
         self._manual_running = False
         bar = self._text_edit.verticalScrollBar()
         bar.setValue(cp["scroll"])
@@ -3210,7 +3255,8 @@ class NotchOverlay(QWidget):
                          getattr(self, "_sc_right", None)):
             if shortcut is not None:
                 shortcut.setEnabled(not self._edit_target)
-        screen = QApplication.primaryScreen().availableGeometry()
+        screen = (self._screen_for(QRect(self.geometry()))
+                  or QApplication.primaryScreen()).availableGeometry()
         s = self._scale
 
         if self._edit_target:
@@ -3399,14 +3445,15 @@ class NotchOverlay(QWidget):
             width, height = collapsed.width(), collapsed.height()
             if (width < int(500 * self._scale)
                     and height < int(280 * self._scale)):
-                screen = QApplication.primaryScreen().availableGeometry()
+                screen = (self._screen_for(QRect(self.geometry()))
+                          or QApplication.primaryScreen()).availableGeometry()
                 card_w = width - self.RAIL_W
                 return QRect(screen.x() + (screen.width() - card_w) // 2,
                              self.y(), width, height)
         return QRect(self.geometry())
 
     def _settings_state(self) -> dict:
-        """Reader preferences that survive a relaunch."""
+        """Reader and microphone preferences that survive a relaunch."""
         card = self._persisted_card_rect()
         return {
             "font_family": self._font_family,
@@ -3419,10 +3466,17 @@ class NotchOverlay(QWidget):
             "window_y": int(card.y()),
             "window_w": int(card.width()),
             "window_h": int(card.height()),
+            # Microphone setup is a user preference too: reopening Setup on
+            # every launch re-selected the system default and undid the
+            # calibration the user had already done.
+            "device_index": (int(self._device_index)
+                             if self._device_index is not None else None),
+            "noise_gate": float(self._noise_gate),
+            "input_gain": float(self._input_gain),
         }
 
     def _restore_settings(self):
-        """Apply saved reader preferences; unknown or invalid values are ignored.
+        """Apply saved preferences; unknown or invalid values are ignored.
 
         Runs once per launch. A second call would overwrite whatever the user
         has changed since the file was read, so a window that is hidden and
@@ -3452,6 +3506,24 @@ class NotchOverlay(QWidget):
                 setattr(self, attr, max(low, min(high, value)))
         if isinstance(data.get("voice_mode"), bool):
             self._voice_mode = data["voice_mode"]
+
+        # Setup values are validated independently: a hand-edited gate of
+        # "loud", a NaN gain or a negative device index would otherwise reach
+        # the audio stack and fail at the first stream open.
+        if "device_index" in data:
+            device = data.get("device_index")
+            if device is None:
+                self._device_index = None
+            else:
+                index = sane_coord(device)
+                if index is not None and index >= 0:
+                    self._device_index = index
+        gate = sane_number(data.get("noise_gate"), 0.0, 1.0)
+        if gate is not None:
+            self._noise_gate = gate
+        gain = sane_number(data.get("input_gain"), 0.5, 5.0)
+        if gain is not None:
+            self._input_gain = gain
 
         # Put the card back where the user left it, at the size they left it,
         # if that spot still exists. A size is only trusted within the range
@@ -3491,12 +3563,88 @@ class NotchOverlay(QWidget):
             self._restore_reading_view(None)
         self.update()
 
+    def _connect_lifecycle(self) -> None:
+        """Flush state on every exit path and react to display changes."""
+        app = QApplication.instance()
+        if app is None:
+            return
+        app.aboutToQuit.connect(self._save_state)
+        self._watched_screens = []
+        self._watch_screens()
+        # Windows sends a commit request for logoff and shutdown, before the
+        # process is torn down. That is the last chance to flush the debounce.
+        for name, slot in (
+            ("commitDataRequest", self._on_commit_data_request),
+            ("saveStateRequest", self._on_save_state_request),
+            ("screenAdded", self._on_screen_added),
+            ("screenRemoved", self._on_screens_changed),
+        ):
+            signal = getattr(app, name, None)
+            if signal is not None:
+                signal.connect(slot)
+
+    def _watch_screens(self) -> None:
+        """Follow work-area changes too, not just monitors being plugged in.
+
+        A resolution or taskbar change does not add or remove a screen, so the
+        application-level signals never fire for it. Each existing screen has
+        to be watched directly, and every newly added screen as well.
+        """
+        for screen in QApplication.screens():
+            if screen in self._watched_screens:
+                continue
+            self._watched_screens.append(screen)
+            for name in ("availableGeometryChanged", "geometryChanged"):
+                signal = getattr(screen, name, None)
+                if signal is not None:
+                    signal.connect(self._on_screens_changed)
+
+    def _on_screen_added(self, screen=None) -> None:
+        self._watch_screens()
+        self._on_screens_changed()
+
+    def _on_commit_data_request(self, manager=None) -> None:
+        self._save_state()
+
+    def _on_save_state_request(self, manager=None) -> None:
+        self._save_state()
+
+    def _on_screens_changed(self, *_: object) -> None:
+        """Pull windows back after a monitor is added, removed or resized."""
+        if not self.isVisible():
+            return
+        current = QRect(self.geometry())
+        safe = self._clamp_to_available(current)
+        if safe != current:
+            self.setGeometry(safe)
+            self._motion.jump(x=float(safe.x()), y=float(safe.y()),
+                              w=float(safe.width()), h=float(safe.height()))
+            if self._peeked and self._peek_restore is not None:
+                self._peek_restore = self._clamp_to_available(
+                    QRect(safe.topLeft(), self._peek_restore.size()))
+            # The shapes the reader returns to have to fit the new display
+            # too, or leaving the editor or the narrow reader lands off-screen.
+            if self._size_before_compact is not None:
+                self._size_before_compact = self._clamp_to_available(
+                    QRect(safe.topLeft(), self._size_before_compact)).size()
+            if self._collapsed_size is not None:
+                self._collapsed_size = self._clamp_to_available(
+                    QRect(safe.topLeft(), self._collapsed_size)).size()
+        for note in list(self._notes):
+            rect = QRect(note.pos(), note.size())
+            safe_note = self._clamp_to_available(rect)
+            if safe_note != rect:
+                note.move(safe_note.topLeft())
+        self._schedule_save()
+
     def _schedule_save(self):
         """Write the state once the user pauses, not on every keystroke."""
         self._save_timer.start()
 
     def _save_state(self):
         """Flush the current state to disk. Safe to call at any time."""
+        if not self._save_enabled:
+            return
         self._save_timer.stop()
         try:
             self._store.save(self._script_text, self._note_state(), self._settings_state())
@@ -3531,10 +3679,16 @@ class NotchOverlay(QWidget):
             print(f"[Notch] Restored saved script ({len(script)} chars)", flush=True)
 
         for entry in state.get("notes") or []:
-            text = str(entry.get("text") or "")
-            if not text.strip():
+            # A container where the text belongs is corrupt data, not a note.
+            # Coercing it with str() used to restore "{'a': 1}" as if the user
+            # had typed it.
+            text = entry.get("text")
+            if not isinstance(text, str) or not text.strip():
                 continue
-            note = NoteWindow(text=text, note_id=str(entry.get("id") or ""),
+            raw_id = entry.get("id")
+            note = NoteWindow(text=text,
+                              note_id=(raw_id if isinstance(raw_id, str) and raw_id
+                                       else None),
                               scale=self._scale, dark=self._dark_theme)
             # Coordinates go through sane_coord: JSON can hold a float, a
             # boolean or a number past QRect's 32-bit range, and the last one
@@ -3558,6 +3712,9 @@ class NotchOverlay(QWidget):
 
     def closeEvent(self, event):
         self._save_state()
+        # Notes are about to be cleared. A later shutdown flush must not write
+        # that empty list over the state just saved.
+        self._save_enabled = False
         self._close_all_notes()
         self._scroll_timer.stop()
         self._stop_listening()
