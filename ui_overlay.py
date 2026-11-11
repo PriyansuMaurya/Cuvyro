@@ -1393,7 +1393,7 @@ class NotchOverlay(QWidget):
             QMenu::separator {{
                 height: 1px;
                 background: {line};
-                margin: {px(6)}px {px(8)}px;
+                margin: {px(4)}px {px(8)}px;
             }}
             QToolTip {{
                 background: {panel};
@@ -1425,9 +1425,11 @@ class NotchOverlay(QWidget):
 
         # ── Mode: one control, one state ─────────────────────────────
         segmented = QWidget(menu)
-        segmented.setStyleSheet(f"background: {track}; border-radius: {px(9)}px;")
+        segmented.setStyleSheet(
+            f"{field_style} border-radius: {control_radius}px;")
         segmented_layout = QHBoxLayout(segmented)
-        segmented_layout.setContentsMargins(px(2), px(2), px(2), px(2))
+        segmented_layout.setContentsMargins(field_pad, field_pad,
+                                            field_pad, field_pad)
         segmented_layout.setSpacing(px(2))
         mode_group = QButtonGroup(menu)
         mode_group.setExclusive(True)
@@ -1436,19 +1438,25 @@ class NotchOverlay(QWidget):
             btn = QPushButton(text)
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setFixedHeight(px(28))
+            # A stylesheet border is painted inside the widget, so it does
+            # not add to a layout-driven height: the inside gets the padding.
+            btn.setFixedHeight(field_height - 2 * field_pad)
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent;
                     color: {fg2};
                     border: none;
-                    border-radius: {px(7)}px;
+                    border-radius: {segment_radius}px;
                     padding: 0 {px(6)}px;
                     font-family: "Segoe UI", system-ui, sans-serif;
                     font-size: {px(12)}px;
                     font-weight: 500;
                 }}
                 QPushButton:hover {{ color: {fg}; }}
+                QPushButton[picked="true"]:!checked {{
+                    background: {hover};
+                    color: {fg};
+                }}
                 QPushButton:checked {{ background: {thumb}; color: {fg}; }}
             """)
             mode_group.addButton(btn)
@@ -1565,9 +1573,11 @@ class NotchOverlay(QWidget):
         size_layout.addStretch(1)
 
         stepper = QWidget(menu)
-        stepper.setStyleSheet(f"background: {track}; border-radius: {px(8)}px;")
+        stepper.setStyleSheet(
+            f"{field_style} border-radius: {control_radius}px;")
         stepper_layout = QHBoxLayout(stepper)
-        stepper_layout.setContentsMargins(0, 0, 0, 0)
+        stepper_layout.setContentsMargins(field_pad, field_pad,
+                                          field_pad, field_pad)
         stepper_layout.setSpacing(0)
         size_value = label(str(self._font_size), size=11, color=fg)
         size_value.setAlignment(Qt.AlignCenter)
@@ -1576,7 +1586,8 @@ class NotchOverlay(QWidget):
         def step_button(text, handler, tip):
             btn = QPushButton(text)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setFixedSize(px(26), px(26))
+            side = field_height - 2 * field_pad
+            btn.setFixedSize(side, side)
             btn.setToolTip(tip)
             btn.setAccessibleName(tip)
             btn.setStyleSheet(f"""
@@ -1584,10 +1595,12 @@ class NotchOverlay(QWidget):
                     background: transparent;
                     color: {fg};
                     border: none;
-                    border-radius: {px(7)}px;
+                    border-radius: {segment_radius}px;
                     font-size: {px(14)}px;
                 }}
-                QPushButton:hover {{ background: {hover}; }}
+                QPushButton:hover, QPushButton[picked="true"] {{
+                    background: {hover};
+                }}
                 QPushButton:pressed {{ background: {thumb}; }}
             """)
             btn.clicked.connect(handler)
@@ -1615,7 +1628,7 @@ class NotchOverlay(QWidget):
         font_layout.addStretch(1)
         family_btn = QPushButton()
         family_btn.setCursor(Qt.PointingHandCursor)
-        family_btn.setFixedHeight(px(26))
+        family_btn.setFixedHeight(field_height)
         family_btn.setMinimumWidth(px(104))
         family_btn.setToolTip("Click to try the next typeface")
         family_btn.setAccessibleName("Typeface")
@@ -1628,16 +1641,17 @@ class NotchOverlay(QWidget):
             family_btn.setText(f"{display}  ▾")
             family_btn.setStyleSheet(f"""
                 QPushButton {{
-                    background: {track};
+                    {field_style}
                     color: {fg};
-                    border: none;
-                    border-radius: {px(7)}px;
+                    border-radius: {control_radius}px;
                     padding: 0 {px(8)}px;
                     text-align: left;
                     font-family: "{family}", "Segoe UI", sans-serif;
                     font-size: {px(12)}px;
                 }}
-                QPushButton:hover {{ background: {hover}; }}
+                QPushButton:hover, QPushButton[picked="true"] {{
+                    background: {thumb};
+                }}
             """)
 
         def cycle_family():
@@ -1663,9 +1677,11 @@ class NotchOverlay(QWidget):
         theme_layout.addWidget(label("Appearance", size=13))
         theme_layout.addStretch(1)
         theme_seg = QWidget(menu)
-        theme_seg.setStyleSheet(f"background: {track}; border-radius: {px(8)}px;")
+        theme_seg.setStyleSheet(
+            f"{field_style} border-radius: {control_radius}px;")
         theme_seg_layout = QHBoxLayout(theme_seg)
-        theme_seg_layout.setContentsMargins(px(2), px(2), px(2), px(2))
+        theme_seg_layout.setContentsMargins(field_pad, field_pad,
+                                            field_pad, field_pad)
         theme_seg_layout.setSpacing(px(2))
         theme_group = QButtonGroup(menu)
         theme_group.setExclusive(True)
@@ -1674,17 +1690,21 @@ class NotchOverlay(QWidget):
             btn = QPushButton(text)
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setFixedSize(px(46), px(22))
+            btn.setFixedSize(px(46), field_height - 2 * field_pad)
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent;
                     color: {fg2};
                     border: none;
-                    border-radius: {px(6)}px;
+                    border-radius: {segment_radius}px;
                     font-family: "Segoe UI", system-ui, sans-serif;
                     font-size: {px(11)}px;
                 }}
                 QPushButton:hover {{ color: {fg}; }}
+                QPushButton[picked="true"]:!checked {{
+                    background: {hover};
+                    color: {fg};
+                }}
                 QPushButton:checked {{ background: {thumb}; color: {fg}; }}
             """)
             theme_group.addButton(btn)

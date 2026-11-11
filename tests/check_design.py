@@ -9,13 +9,14 @@ surface drifts back:
     behind the floating controls, fully opaque, with no fade or blur and no
     reserved header band,
   * the controls keep the exact position and size they had, only without a
-    header bar behind them, and each one carries a subtle rounded glass
-    plate that lifts its glyph off the script,
+    header bar behind them, and each one carries a rounded opaque plate that
+    lifts its glyph off the script and hides the words passing under it,
   * the resting pill carries a visible level meter instead of being empty,
   * the narrow reader no longer sets type below 8 pt,
   * the editor reserves a strip so its last line never runs under Done,
-  * the menu is one panel with one mode control, and its secondary rows
-    stay legible in both themes.
+  * the menu is one panel with one mode control, its three commands share a
+    single row instead of a stack, and its secondary rows stay legible in
+    both themes.
 
 Run it on a real display, not offscreen: the text-ink checks need the
 platform's font database, which the offscreen plugin does not provide.
@@ -339,6 +340,265 @@ def main():
           f"{menu._status_label.text()!r}")
     check("menu switches the mode control", menu._manual_btn.isChecked()
           and not menu._voice_btn.isChecked())
+
+    # ── Help, Setup and Quit: one row, not three ──────────────────────
+    # Laid out side by side they cost the panel one row instead of three.
+    # The popup has to be shown for the row's layout to run, so it is opened
+    # off the corner and closed at the end of this block.
+    menu.popup(win.mapToGlobal(QPoint(0, 0)))
+    menu.adjustSize()
+    QTest.qWait(120)
+    plates = [menu._help_btn, menu._setup_btn, menu._quit_btn]
+    spots = [b.mapTo(menu, QPoint(0, 0)) for b in plates]
+    widths = [b.width() for b in plates]
+    gaps = [spots[1].x() - (spots[0].x() + widths[0]),
+            spots[2].x() - (spots[1].x() + widths[1])]
+    item_height = max(menu.actionGeometry(a).height() for a in menu.actions()
+                      if a.text() == "Load Script…")
+    check("Help, Setup and Quit share one row",
+          len({p.y() for p in spots}) == 1
+          and len({b.height() for b in plates}) == 1,
+          f"y {[p.y() for p in spots]}, "
+          f"heights {[b.height() for b in plates]}")
+    check("the row keeps menu order, one even gap and equal plates",
+          [b.text() for b in plates] == ["Help", "Setup…", "Quit"]
+          and spots[0].x() < spots[1].x() < spots[2].x()
+          and gaps[0] == gaps[1] > 0
+          and max(widths) - min(widths) <= 1,
+          f"x {[p.x() for p in spots]}, w {widths}, gaps {gaps}")
+    check("the row is flush with the panel's side margins",
+          spots[0].x() == menu.width() - (spots[2].x() + widths[2]),
+          f"left {spots[0].x()}, "
+          f"right {menu.width() - (spots[2].x() + widths[2])}")
+    check("the three actions cost one row of panel height",
+          plates[0].height() <= item_height + 1
+          and menu.sizeHint().height() < 351,
+          f"row {plates[0].height()} vs item {item_height}, "
+          f"panel {menu.sizeHint().height()} px")
+
+    # ── The value rows share one right edge ───────────────────────
+    # Speed, size and typeface all end their control on the panel's inner
+    # edge; the speed number used to stop two pixels short of it.
+    def right_edge(widget):
+        return widget.mapTo(menu, QPoint(0, 0)).x() + widget.width()
+
+    stepper_plus = [b for b in menu.findChildren(QAbstractButton) if b.text() == "+"][0]
+    family_button = [b for b in menu.findChildren(QAbstractButton) if "▾" in b.text()][0]
+    # The stepper's field is what closes on the edge now: its border is the
+    # control's visible right side, and the buttons sit inside it.
+    stepper_field = stepper_plus.parentWidget()
+    edges = {"speed": right_edge(menu._speed_value),
+             "size": right_edge(stepper_field),
+             "typeface": right_edge(family_button)}
+    check("the value rows close on one right edge",
+          len(set(edges.values())) == 1,
+          f"{edges} in {menu.width()} px")
+
+    # ── One button language, one vertical rhythm ────────────────
+    # The panel used to mix five button dialects (filled and borderless, two
+    # radii, three heights) over a stack of rows that touched each other.
+    # Every control is now a field or a plate: same hairline, same radius,
+    # and the text rows keep one height with equal air between them.
+    def row_with(text):
+        for action in menu.actions():
+            if not isinstance(action, QWidgetAction):
+                continue
+            holder = action.defaultWidget()
+            if any(isinstance(c, QLabel) and c.text() == text
+                   for c in holder.findChildren(QLabel)):
+                return holder
+        return None
+
+    theme_field = [b for b in menu.findChildren(QAbstractButton)
+                   if b.text() == "Dark"][0].parentWidget()
+    mode_field = menu._voice_btn.parentWidget()
+    fields = {"mode": mode_field, "size": stepper_field,
+              "typeface": family_button, "appearance": theme_field}
+    text_fields = [fields["size"], fields["typeface"], fields["appearance"]]
+    check("every field is one height",
+          len({f.height() for f in text_fields}) == 1,
+          f"{[f.height() for f in text_fields]} px")
+
+    controls = dict(fields)
+    controls.update({"help": menu._help_btn, "setup": menu._setup_btn,
+                     "quit": menu._quit_btn})
+    hairlines = {}
+    for name, widget in controls.items():
+        found = re.search(r"border:\s*1px solid (#[0-9A-Fa-f]{6})",
+                          widget.styleSheet())
+        hairlines[name] = found.group(1) if found else None
+    check("every control wears the same hairline",
+          len(set(hairlines.values())) == 1
+          and None not in hairlines.values(), f"{hairlines}")
+
+    rows = [row_with("Font size"), row_with("Typeface"),
+            row_with("Appearance")]
+    tops = []
+    for row in rows:
+        text = row.findChildren(QLabel)[0]
+        tops.append((text.mapTo(menu, QPoint(0, 0)).y(), text.height()))
+    gaps = [tops[i + 1][0] - (tops[i][0] + tops[i][1]) for i in range(2)]
+    check("the text rows keep one height and equal air between them",
+          len({row.height() for row in rows}) == 1
+          and len(set(gaps)) == 1 and gaps[0] >= 8,
+          f"heights {[row.height() for row in rows]}, gaps {gaps}")
+
+    # ── The speed row leaves nothing behind in voice mode ────────
+    # Hiding a QWidgetAction's action takes the row out of the menu's layout
+    # but not its widget, so the slider kept painting where the row used to
+    # be: one trip to Manual and back left it floating over the rows below.
+    speed_row = menu._speed_action.defaultWidget()
+    win._voice_mode = True
+    win._refresh_menu_mode_display(menu)
+    QTest.qWait(60)
+    check("voice mode hides the speed row, widget and all",
+          not menu._speed_action.isVisible() and not speed_row.isVisible(),
+          f"action {menu._speed_action.isVisible()}, "
+          f"row {speed_row.isVisible()}")
+    win._voice_mode = False
+    win._refresh_menu_mode_display(menu)
+    QTest.qWait(60)
+    check("manual mode brings the speed row back",
+          menu._speed_action.isVisible() and speed_row.isVisible(),
+          f"action {menu._speed_action.isVisible()}, "
+          f"row {speed_row.isVisible()}")
+
+    # ── The speed control reads as a knob on a track ─────────────
+    # The old pair put the remaining track 1.16:1 off the panel, all but
+    # invisible, and the knob darker than its own fill: a bar with a hole.
+    def painted(shot, origin, size, background):
+        """Per-column and per-row painted extents inside a widget rect."""
+        columns, rows = {}, {}
+        for y in range(origin.y(), origin.y() + size.height()):
+            for x in range(origin.x(), origin.x() + size.width()):
+                if pixel(shot, x, y) != background:
+                    columns[x] = (min(columns.get(x, (y, y))[0], y),
+                                  max(columns.get(x, (y, y))[1], y))
+                    rows[y] = (min(rows.get(y, (x, x))[0], x),
+                               max(rows.get(y, (x, x))[1], x))
+        return columns, rows
+
+    def slider_shot(menu_widget):
+        slider = menu_widget._speed_slider
+        origin = slider.mapTo(menu_widget, QPoint(0, 0))
+        shot = menu_widget.grab().toImage()
+        middle = origin.y() + slider.height() // 2
+        panel = pixel(shot, origin.x() - 3, middle)
+        return slider, origin, shot, panel, middle
+
+    slider, origin, shot, panel, middle = slider_shot(menu)
+    rail = pixel(shot, origin.x() + slider.width() - 3, middle)
+    columns, _ = painted(shot, origin, slider.size(), panel)
+    knob_edge = max(columns, key=lambda x: columns[x][1] - columns[x][0])
+    knob = pixel(shot, knob_edge, middle)
+    check("the speed track stays visible past the knob",
+          max(abs(a - b) for a, b in zip(rail, panel)) >= 20,
+          f"{rail} on {panel}")
+    check("the knob stands off the track it sits on",
+          max(abs(a - b) for a, b in zip(knob, rail)) >= 40,
+          f"{knob} on {rail}")
+
+    # ── The knob is round, centred, and never clipped ────────────
+    # Qt takes the handle's width from the stylesheet but adds the border to
+    # its height, and a slider pinned to one height cuts a knob that grows
+    # with the interface scale: a squashed blob at 2x.
+    keep_scale = win._scale
+    win._scale = 2.0
+    zoom = win._build_menu()
+    win._refresh_menu_mode_display(zoom)
+    zoom.popup(win.mapToGlobal(QPoint(0, 0)))
+    zoom.adjustSize()
+    QTest.qWait(120)
+    zslider, zorigin, zshot, zpanel, zmiddle = slider_shot(zoom)
+    zcolumns, _ = painted(zshot, zorigin, zslider.size(), zpanel)
+    ztop, zbottom = max(zcolumns.values(), key=lambda b: b[1] - b[0])
+    knob_height = zbottom - ztop + 1
+    # Across the knob's centre line only the knob is neither the filled run,
+    # the rail nor the panel, so that run is the knob's own width.
+    zrail = pixel(zshot, zorigin.x() + zslider.width() - 3, zmiddle)
+    zfill = pixel(zshot, zorigin.x() + 3, zmiddle)
+    knob_x = max(zcolumns, key=lambda x: zcolumns[x][1] - zcolumns[x][0])
+    seen = (zfill, zrail, zpanel)
+    left, right = knob_x, knob_x
+    while left > zorigin.x() and pixel(zshot, left - 1, zmiddle) not in seen:
+        left -= 1
+    while (right < zorigin.x() + zslider.width() - 1
+           and pixel(zshot, right + 1, zmiddle) not in seen):
+        right += 1
+    knob_width = right - left + 1
+    check("the speed knob keeps its size at 2x",
+          abs(knob_height - round(14 * win._scale)) <= 1,
+          f"{knob_height} px, wanted {round(14 * win._scale)}")
+    check("the speed knob is round",
+          abs(knob_height - knob_width) <= 1,
+          f"{knob_width} x {knob_height} px")
+    check("the speed knob is centred and not clipped",
+          abs((ztop + zbottom) / 2
+              - (zorigin.y() + zorigin.y() + zslider.height() - 1) / 2) <= 0.5
+          and ztop > zorigin.y()
+          and zbottom < zorigin.y() + zslider.height() - 1,
+          f"knob {ztop}..{zbottom} in "
+          f"{zorigin.y()}..{zorigin.y() + zslider.height() - 1}")
+    zoom.close()
+    zoom.deleteLater()
+    win._scale = keep_scale
+
+    # ── Hover and keyboard picks wear the same material ───────────
+    # A pick has to be visible: the typeface button used to sit between two
+    # greys one level apart, so neither hover nor a keyboard pick showed.
+    resting = pixel(family_button.grab().toImage(), 3, 3)
+    family_button.setProperty("picked", True)
+    family_button.style().unpolish(family_button)
+    family_button.style().polish(family_button)
+    QTest.qWait(60)
+    picked = pixel(family_button.grab().toImage(), 3, 3)
+    shift = max(abs(a - b) for a, b in zip(resting, picked))
+    check("the picked typeface button lifts off its track",
+          shift >= 20, f"{resting} -> {picked} ({shift} levels)")
+
+    # ── The panel stays on the usable screen ─────────────────────
+    # Qt places a popup against the full screen, taskbar included, so a
+    # right click near the bottom edge hid the action row under it.
+    screen = app.primaryScreen().availableGeometry()
+    corner = QPoint(screen.right() - 2, screen.bottom() - 2)
+    fitted = win._fit_menu_to_screen(menu, corner)
+    placed = QRect(fitted, menu.sizeHint())
+    check("the menu fits inside the usable screen at the corner",
+          screen.contains(placed),
+          f"{placed.x()},{placed.y()} {placed.width()}x{placed.height()} "
+          f"in {screen.width()}x{screen.height()}")
+
+    # ── Names for the assistive layer ────────────────────────────
+    named = {
+        "menu": bool(menu.accessibleName()),
+        "help": bool(menu._help_btn.accessibleName()),
+        "setup": bool(menu._setup_btn.accessibleName()),
+        "quit": bool(menu._quit_btn.accessibleName()),
+        "typeface": bool(family_button.accessibleName()),
+        "stepper": bool(stepper_plus.accessibleName()),
+    }
+    check("every control in the menu has an accessible name",
+          all(named.values()), f"{named}")
+
+    menu.close()
+    QTest.qWait(60)
+
+    # Each plate still runs its own command: the handlers are read when the
+    # menu is built, so swapping them on the overlay before that is enough.
+    calls = []
+    keep_help, keep_setup, keep_close = (win._show_help, win._open_settings,
+                                         win.close)
+    win._show_help = lambda: calls.append("help")
+    win._open_settings = lambda: calls.append("setup")
+    win.close = lambda *args, **kwargs: calls.append("quit")
+    probe = win._build_menu()
+    for plate in (probe._help_btn, probe._setup_btn, probe._quit_btn):
+        plate.click()
+    win._show_help, win._open_settings, win.close = (keep_help, keep_setup,
+                                                     keep_close)
+    check("each plate keeps its own action",
+          calls == ["help", "setup", "quit"], f"{calls}")
+    probe.deleteLater()
 
     # Contrast of the menu's two type levels against its own material.
     for dark, panel, primary, secondary in (
