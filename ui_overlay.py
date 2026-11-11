@@ -31,6 +31,7 @@ from audio_worker import AudioWorker
 from matching_engine import MatchingEngine
 from settings_dialog import SettingsDialog
 from note_window import NoteWindow
+from note_placement import choose_position
 from store import Store, sane_coord, sane_number
 
 
@@ -3521,17 +3522,9 @@ class NotchOverlay(QWidget):
 
 
     def _open_note(self):
-        """Open a sticky note, offset from the overlay or from the last note."""
+        """Open a sticky note somewhere it covers nothing that matters."""
         note = NoteWindow(scale=self._scale, dark=self._dark_theme)
-        if self._notes:
-            last = self._notes[-1]
-            wanted = QRect(last.x() + int(24 * self._scale),
-                           last.y() + int(24 * self._scale),
-                           note.width(), note.height())
-        else:
-            wanted = QRect(self.x() + self.width() + int(12 * self._scale),
-                           self.y(), note.width(), note.height())
-        note.move(self._clamp_to_available(wanted).topLeft())
+        note.move(self._note_home(note.size()))
         note.changed.connect(self._schedule_save)
         note.closed.connect(self._on_note_closed)
         self._notes.append(note)
@@ -3539,6 +3532,63 @@ class NotchOverlay(QWidget):
         note.raise_()
         note.activateWindow()
         return note
+
+    def _note_home(self, size: QSize) -> QPoint:
+        """Where a new note should open.
+
+        Randomized so a session's notes do not pile up, but scored against
+        the notes already open and the reader's controls: a new note never
+        covers either, and stays on the reader's screen while there is room.
+        """
+        areas = [screen.availableGeometry() for screen in QApplication.screens()]
+        if not areas:
+            return QPoint(0, 0)
+        return choose_position(
+            size, areas,
+            notes=[QRect(note.pos(), note.size()) for note in self._notes],
+            controls=self._control_rects(),
+            avoid=[QRect(self.geometry())],
+            preferred=self._reading_area(),
+        )
+
+    def _reading_area(self) -> QRect | None:
+        """Work area of the screen the reader is on.
+
+        Notes are written against the script on that screen, so that is where
+        they belong. ``screenAt`` needs a shown window; before that the
+        primary screen is the only sensible answer.
+        """
+        screen = None
+        screen_at = getattr(QApplication, "screenAt", None)
+        if screen_at is not None and self.isVisible():
+            screen = screen_at(self.frameGeometry().center())
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        return screen.availableGeometry() if screen is not None else None
+
+    def _control_rects(self) -> list:
+        """Global rectangles of the controls a note must never cover.
+
+        The rail is the only way to mute, open another note or narrow the
+        reader while a note is up, so a note that opens over it takes the
+        app's controls away. The card itself is passed separately as a soft
+        zone: a note beside the script is fine, a note on the mute button is
+        not.
+        """
+        rects = []
+        for name in ("_close_btn", "_note_btn", "_mic_btn", "_compact_btn",
+                     "_done_btn"):
+            button = getattr(self, name, None)
+            if button is None:
+                continue
+            try:
+                if not button.isVisible():
+                    continue
+                rects.append(QRect(button.mapToGlobal(QPoint(0, 0)),
+                                   button.size()))
+            except RuntimeError:
+                continue  # the widget was already deleted
+        return rects
 
     @staticmethod
     def _clamp_to_available(rect: QRect) -> QRect:
@@ -3845,7 +3895,10 @@ class NotchOverlay(QWidget):
             rect = QRect(note.pos(), note.size())
             safe_note = self._clamp_to_available(rect)
             if safe_note != rect:
-                note.move(safe_note.topLeft())
+                # setGeometry, not move: the clamp also shrinks a note that a
+                # now-smaller display cannot hold, and taking only the corner
+                # left its close glyph past the screen edge.
+                note.setGeometry(safe_note)
         self._schedule_save()
 
     def _schedule_save(self):
@@ -3912,14 +3965,16 @@ class NotchOverlay(QWidget):
             # boolean or a number past QRect's 32-bit range, and the last one
             # raises OverflowError, which is not a ValueError and used to take
             # the whole launch down.
+            # A note the reader placed is right where they left it, so the
+            # saved corner wins; only a note with no usable corner is placed
+            # fresh. Notes already restored are obstacles for the next one.
             note_x = sane_coord(entry.get("x"))
             note_y = sane_coord(entry.get("y"))
             if note_x is None or note_y is None:
-                saved = QRect(self.x() + self.width() + int(12 * self._scale),
-                              self.y(), note.width(), note.height())
+                note.move(self._note_home(note.size()))
             else:
                 saved = QRect(note_x, note_y, note.width(), note.height())
-            note.move(self._clamp_to_available(saved).topLeft())
+                note.move(self._clamp_to_available(saved).topLeft())
             note.changed.connect(self._schedule_save)
             note.closed.connect(self._on_note_closed)
             self._notes.append(note)
