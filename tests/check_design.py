@@ -324,7 +324,11 @@ def main():
           menu._status_label.text() == "Following your voice"
           and menu._voice_btn.isChecked() and not menu._manual_btn.isChecked(),
           f"{menu._status_label.text()!r}")
-    check("menu hides speed in voice mode", not menu._speed_action.isVisible())
+    check("menu hides speed in voice mode",
+          not menu._speed_action.isVisible()
+          and not menu._speed_action.defaultWidget().isVisible(),
+          f"action {menu._speed_action.isVisible()}, "
+          f"row {menu._speed_action.defaultWidget().isVisible()}")
 
     win._voice_mode = False
     win._refresh_menu_mode_display(menu)

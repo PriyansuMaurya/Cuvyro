@@ -44,8 +44,8 @@ class _RenderedLine(NamedTuple):
 
 from spring import Spring, SpringGroup, system_allows_motion
 from controls import (
-    CompactButton, GlyphButton, MicButton, MinimizeButton, NoteButton,
-    RoundedMenu, ScriptTextEdit, TextButton,
+    CompactButton, GlyphButton, MenuRowNav, MicButton, MinimizeButton,
+    NoteButton, RoundedMenu, ScriptTextEdit, TextButton,
 )
 from win_capture import exclude_from_capture
 
@@ -1342,6 +1342,7 @@ class NotchOverlay(QWidget):
         menu = RoundedMenu(self, dark=dark)
         menu._radius = px(14)
         menu.setFixedWidth(px(236))
+        menu.setAccessibleName("Reader menu")
 
         fg = "#EDEDEF" if dark else "#151517"
         fg2 = "#9C9CA2" if dark else "#6E6E73"
@@ -1350,6 +1351,29 @@ class NotchOverlay(QWidget):
         track = "#2A2A2C" if dark else "#EDEDEF"
         thumb = "#48484A" if dark else "#FFFFFF"
         panel = "#1E1E1E" if dark else "#F7F7F8"
+        # The slider needs a ladder the shared tokens do not provide: a rail
+        # that is quiet but still a rail, a mid fill, and a knob above both.
+        # On the old colours the remaining track was 1.16:1 against the panel
+        # (all but invisible) and the knob sat darker than its own fill, so
+        # the control read as a bar with a hole punched in it.
+        rail = "#3E3E41" if dark else "#D8D8DD"
+        fill = "#6E6E73"
+
+        # ── One control language ─────────────────────────────────────
+        # The panel had five button dialects: filled and borderless, bare
+        # text, two different radii, three heights. Now a control is either a
+        # field (a container that holds a choice: the mode pair, the size
+        # stepper, the typeface) or a plate (a lone action), and both wear the
+        # same hairline, radius and press materials. The hairline is what
+        # separates a control from the panel it floats on.
+        field_style = f"background: {track}; border: 1px solid {line};"
+        field_pad = px(1)          # the border's thickness comes back here
+        field_height = px(28)      # one height for every control in the panel
+        control_radius = px(8)     # and one radius
+        segment_radius = control_radius - px(2)
+        # One vertical rhythm: every row keeps the same air above and below
+        # it, so the panel reads as spaced sections instead of a stack.
+        row_gap = px(5)
 
         menu.setStyleSheet(f"""
             QMenu {{
@@ -1449,7 +1473,6 @@ class NotchOverlay(QWidget):
 
         voice_btn.clicked.connect(lambda: choose_mode(True))
         manual_btn.clicked.connect(lambda: choose_mode(False))
-        add_widget(segmented, top=2, bottom=7)
 
         # ── Status: what the reader is doing right now ───────────────
         status_row = QWidget(menu)
@@ -1463,34 +1486,54 @@ class NotchOverlay(QWidget):
         status_layout.addWidget(status, 1)
         menu._status_dot = dot
         menu._status_label = status
-        add_widget(status_row, bottom=4)
+
+        # The mode and what it is doing are one section: the status line is
+        # text, so giving it its own row would make arrow keys stop twice on
+        # a line that has nothing to press.
+        mode_section = QWidget(menu)
+        mode_layout = QVBoxLayout(mode_section)
+        mode_layout.setContentsMargins(0, 0, 0, 0)
+        mode_layout.setSpacing(px(7))
+        mode_layout.addWidget(segmented)
+        mode_layout.addWidget(status_row)
+        mode_action = add_widget(mode_section, top=2, bottom=row_gap)
 
         # ── Speed (manual mode only) ─────────────────────────────────
         speed_row = QWidget(menu)
         speed_layout = QHBoxLayout(speed_row)
-        speed_layout.setContentsMargins(px(10), 0, px(10), 0)
+        # Right inset matches the other value rows: their controls close on
+        # the same edge as the stepper and the typeface buttons.
+        speed_layout.setContentsMargins(px(10), 0, px(8), 0)
         speed_layout.setSpacing(px(8))
         speed_layout.addWidget(label("Speed", size=13))
         slider = QSlider(Qt.Horizontal)
         slider.setRange(1, 400)
+        # Two single steps per arrow press, matching the reader's own keys.
+        slider.setSingleStep(5)
         slider.setValue(self._manual_wpm)
         slider.setAccessibleName("Scroll speed")
+        # The knob is a circle only if its box is square. Qt adds the border
+        # to the handle's height but not to its width, so the old 1 px ring
+        # drew an oval; the knob now carries no border and is sized exactly.
+        # The slider also has to grow with the interface: Qt sizes it from the
+        # style's fixed metrics, so at 1.5x and 2x the knob was cut off top
+        # and bottom. Its height follows the row instead.
+        slider.setFixedHeight(px(22))
         slider.setStyleSheet(f"""
             QSlider::groove:horizontal {{
                 height: {px(4)}px;
-                background: {track};
+                background: {rail};
                 border-radius: {px(2)}px;
             }}
             QSlider::sub-page:horizontal {{
-                background: {fg2};
+                background: {fill};
                 border-radius: {px(2)}px;
             }}
             QSlider::handle:horizontal {{
                 width: {px(14)}px;
                 height: {px(14)}px;
                 margin: {px(-5)}px 0;
-                background: {thumb};
-                border: 1px solid {line};
+                background: {fg};
                 border-radius: {px(7)}px;
             }}
         """)
@@ -1508,7 +1551,8 @@ class NotchOverlay(QWidget):
             status.setText(self._mode_status_text())
 
         slider.valueChanged.connect(on_speed)
-        menu._speed_action = add_widget(speed_row, bottom=4)
+        speed_action = add_widget(speed_row, top=row_gap, bottom=row_gap)
+        menu._speed_action = speed_action
 
         menu.addSeparator()
 
@@ -1557,11 +1601,11 @@ class NotchOverlay(QWidget):
                 self._font_increase()
             size_value.setText(str(self._font_size))
 
-        step_button("−", lambda: bump_size(-1), "Smaller script")
+        step_down = step_button("−", lambda: bump_size(-1), "Smaller script")
         stepper_layout.addWidget(size_value)
-        step_button("+", lambda: bump_size(1), "Larger script")
+        step_up = step_button("+", lambda: bump_size(1), "Larger script")
         size_layout.addWidget(stepper)
-        add_widget(size_row)
+        size_action = add_widget(size_row, top=row_gap, bottom=row_gap)
 
         font_row = QWidget(menu)
         font_layout = QHBoxLayout(font_row)
@@ -1609,7 +1653,7 @@ class NotchOverlay(QWidget):
         family_btn.clicked.connect(cycle_family)
         style_family_btn()
         font_layout.addWidget(family_btn)
-        add_widget(font_row)
+        font_action = add_widget(font_row, top=row_gap, bottom=row_gap)
 
         # ── Appearance ───────────────────────────────────────────────
         theme_row = QWidget(menu)
@@ -1672,18 +1716,88 @@ class NotchOverlay(QWidget):
         dark_btn.clicked.connect(lambda: choose_theme(True))
         light_btn.clicked.connect(lambda: choose_theme(False))
         theme_layout.addWidget(theme_seg)
-        add_widget(theme_row, bottom=2)
+        theme_action = add_widget(theme_row, top=row_gap, bottom=row_gap)
 
         menu.addSeparator()
 
         menu.addAction("Load Script…", self._load_file)
-        menu.addAction("Help", self._show_help)
-        menu.addAction("Setup…", self._open_settings)
-        menu.addSeparator()
-        menu.addAction("Quit", self.close)
+
+        # ── Help, Setup and Quit: one row, not three ─────────────────
+        # Three stacked items spent three rows of panel height plus a
+        # separator on three short words. One row of equal plates keeps the
+        # item's material and order and gives both back.
+        action_row = QWidget(menu)
+        action_layout = QHBoxLayout(action_row)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(px(6))
+
+        def action_button(text, handler):
+            btn = QPushButton(text, action_row)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedHeight(field_height)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent;
+                    color: {fg};
+                    border: 1px solid {line};
+                    border-radius: {control_radius}px;
+                    font-family: "Segoe UI", system-ui, sans-serif;
+                    font-size: {px(13)}px;
+                }}
+                QPushButton:hover, QPushButton[picked="true"] {{
+                    background: {hover};
+                }}
+                QPushButton:pressed {{ background: {thumb}; }}
+            """)
+
+            def run():
+                # A widget action does not dismiss the popup the way a menu
+                # item does, and Help and Setup open on top of it.
+                menu.close()
+                handler()
+
+            btn.clicked.connect(run)
+            action_layout.addWidget(btn, 1)
+            return btn
+
+        menu._help_btn = action_button("Help", self._show_help)
+        menu._setup_btn = action_button("Setup…", self._open_settings)
+        menu._quit_btn = action_button("Quit", self.close)
+        for plate, name in ((menu._help_btn, "Help"),
+                            (menu._setup_btn, "Setup"),
+                            (menu._quit_btn, "Quit")):
+            plate.setAccessibleName(name)
+        menu._action_row = action_row
+        row_action = add_widget(action_row, top=row_gap)
+
+        # ── Keyboard: every widget row answers Left/Right/Return ─────
+        # Without this a widget row is a place the menu's own navigation stops
+        # and Return silently closes the panel instead of running anything.
+        rows = MenuRowNav(menu)
+        rows.row(mode_action, [voice_btn, manual_btn])
+        rows.row(speed_action, slider=slider)
+        rows.row(size_action, [step_down, step_up])
+        rows.row(font_action, [family_btn])
+        rows.row(theme_action, [dark_btn, light_btn])
+        rows.row(row_action, [menu._help_btn, menu._setup_btn, menu._quit_btn])
+        menu._rows = rows
 
         self._refresh_menu_mode_display(menu)
         return menu
+
+    def _fit_menu_to_screen(self, menu: QMenu, pos: QPoint) -> QPoint:
+        """Keep the whole panel on the usable part of the screen.
+
+        Qt places a popup against the full screen, taskbar included, so a
+        right click near the bottom edge used to put the last row - the one
+        with Help, Setup and Quit - underneath it.
+        """
+        screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
+        area = screen.availableGeometry()
+        size = menu.sizeHint()
+        x = min(max(pos.x(), area.left()), area.right() - size.width() + 1)
+        y = min(max(pos.y(), area.top()), area.bottom() - size.height() + 1)
+        return QPoint(int(x), int(y))
 
     def _present_menu(self, menu: QMenu, pos: QPoint):
         """Show the menu as a material arriving, not as a system popup."""
@@ -1701,7 +1815,7 @@ class NotchOverlay(QWidget):
                 anim.start()
 
             QTimer.singleShot(0, fade_in)
-        menu.exec_(QPoint(pos))
+        menu.exec_(self._fit_menu_to_screen(menu, pos))
 
     def _show_menu(self, global_pos):
         if self._edit_mode:
@@ -1880,8 +1994,16 @@ class NotchOverlay(QWidget):
                 btn.setChecked(checked)
                 btn.blockSignals(False)
         # A hidden QAction leaves the menu layout instead of leaving a gap.
+        # Its widget does not follow: hiding an action while the menu is open
+        # only unlists it, so the row would stay painted where the layout
+        # used to put it - a speed slider floating over the rows below it in
+        # voice mode. The widget has to be hidden with it.
         if hasattr(menu, "_speed_action"):
-            menu._speed_action.setVisible(not self._voice_mode)
+            shown = not self._voice_mode
+            menu._speed_action.setVisible(shown)
+            row = menu._speed_action.defaultWidget()
+            if row is not None:
+                row.setVisible(shown)
         if hasattr(menu, "_speed_slider"):
             menu._speed_slider.blockSignals(True)
             menu._speed_slider.setValue(self._manual_wpm)

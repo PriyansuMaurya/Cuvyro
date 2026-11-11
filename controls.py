@@ -12,7 +12,9 @@ The rules these implement:
   see is not reachable.
 """
 
-from PyQt5.QtCore import QRectF, QPointF, Qt, QTimer, QVariantAnimation, QEasingCurve
+from PyQt5.QtCore import (
+    QEvent, QObject, QRectF, QPointF, Qt, QTimer, QVariantAnimation, QEasingCurve,
+)
 from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen, QTextBlockFormat
 from PyQt5.QtWidgets import QAbstractButton, QMenu, QTextEdit, QWidget
 
@@ -538,3 +540,141 @@ class RoundedMenu(QMenu):
 
         painter.setClipPath(path)
         super().paintEvent(event)
+
+
+class MenuRowNav(QObject):
+    """Keyboard for the menu rows that are built out of widgets.
+
+    A QWidgetAction is where a menu's own keyboard navigation stops. The popup
+    can highlight the row, but Return has no action to trigger, so Qt closes
+    the whole panel having done nothing at all - a silent dismissal instead of
+    a command. Each row registers the buttons it can press, or its slider, and
+    gets them back on the keyboard:
+
+      * Left and Right pick inside a row, or nudge a row's slider,
+      * Return and Space press the pick,
+      * Up and Down still move between rows.
+
+    The pick is styled exactly like hover, so the row has one language for
+    "this control is about to be pressed" whichever input picked it.
+    """
+
+    def __init__(self, menu: QMenu, parent=None):
+        super().__init__(parent if parent is not None else menu)
+        self._menu = menu
+        self._rows = {}
+        self._action = None
+        self._picked = -1
+        self._keyboard = False
+        menu.installEventFilter(self)
+
+    # ── wiring ────────────────────────────────────────────────────────
+    def row(self, action, buttons=(), slider=None):
+        """Register one widget row: what it can press, or what it can nudge."""
+        self._rows[action] = (list(buttons), slider)
+        return action
+
+    # ── state ─────────────────────────────────────────────────────────
+    def picked(self) -> int:
+        """Index of the picked button in the active row, or -1."""
+        return self._picked
+
+    def active_row(self):
+        return self._action
+
+    def pick(self, index: int):
+        if index == self._picked:
+            return
+        self._picked = index
+        for position, button in enumerate(self._buttons()):
+            self._style(button, position == index)
+
+    # ── internals ─────────────────────────────────────────────────────
+    def _buttons(self):
+        return self._rows.get(self._action, ((), None))[0]
+
+    @staticmethod
+    def _style(button, picked: bool):
+        button.setProperty("picked", picked)
+        # A dynamic property only reaches the stylesheet on a re-polish.
+        button.style().unpolish(button)
+        button.style().polish(button)
+
+    def _clear(self):
+        for button in self._buttons():
+            if button.property("picked"):
+                self._style(button, False)
+        self._picked = -1
+
+    def _enter(self, action):
+        """Make a row current, picking a sensible control for the keyboard."""
+        if action is self._action:
+            return
+        self._clear()
+        self._action = action
+        buttons = self._buttons()
+        if self._keyboard and buttons:
+            # Start on the state the row is already showing, so Enter re-applies
+            # it instead of switching blind, and one Right reaches the other.
+            checked = [i for i, b in enumerate(buttons) if b.isChecked()]
+            self.pick(checked[0] if checked else 0)
+
+    def _sync(self):
+        # The single-shot can outlive the popup: a menu closed on the same key
+        # that scheduled it deletes its widgets before this runs.
+        try:
+            action = self._menu.activeAction()
+        except RuntimeError:
+            return
+        self._enter(action if action in self._rows else None)
+
+    def eventFilter(self, obj, event):
+        if obj is not self._menu:
+            return False
+        kind = event.type()
+        if kind in (QEvent.MouseMove, QEvent.MouseButtonPress):
+            # The pointer takes over: a leftover pick would light a control
+            # away from the cursor.
+            self._keyboard = False
+            self._clear()
+            return False
+        if kind != QEvent.KeyPress:
+            return False
+        self._keyboard = True
+        key = event.key()
+        if key in (Qt.Key_Home, Qt.Key_End):
+            # QMenu's own handling of these can leave it with no active
+            # action, where Return then does nothing at all.
+            stops = [a for a in self._menu.actions()
+                     if a.isVisible() and not a.isSeparator()]
+            if stops:
+                target = stops[0] if key == Qt.Key_Home else stops[-1]
+                self._menu.setActiveAction(target)
+                self._enter(target if target in self._rows else None)
+            return True
+        # Qt does not emit hovered() for keyboard selection, so the current
+        # row is read from the menu itself on every key.
+        action = self._menu.activeAction()
+        if action in self._rows:
+            self._enter(action)
+            buttons, slider = self._rows[action]
+            if key in (Qt.Key_Left, Qt.Key_Right):
+                step = -1 if key == Qt.Key_Left else 1
+                if buttons:
+                    self.pick((max(self._picked, 0) + step) % len(buttons))
+                elif slider is not None:
+                    # Two single steps per press: the same 10 words a minute
+                    # the reader's own arrow keys move by.
+                    slider.setValue(slider.value()
+                                    + step * max(1, slider.singleStep() * 2))
+                return True
+            if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+                if 0 <= self._picked < len(buttons):
+                    buttons[self._picked].click()
+                # Swallow the key either way: the menu's default would close
+                # the panel without running the row.
+                return True
+        # Up and Down belong to the menu. It moves after this filter runs, so
+        # the row it lands on is picked once the move has happened.
+        QTimer.singleShot(0, self._sync)
+        return False

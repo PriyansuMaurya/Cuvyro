@@ -20,7 +20,7 @@ from unittest.mock import patch
 from PyQt5.QtCore import QObject, QPoint, QRect, QSettings, Qt
 from PyQt5.QtGui import QTextCursor
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QLabel, QShortcut
+from PyQt5.QtWidgets import QApplication, QLabel, QShortcut, QWidgetAction
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
@@ -321,6 +321,203 @@ def main():
     check("the speed slider has an accessible name",
           bool(menu._speed_slider.accessibleName()))
     menu.deleteLater()
+
+    # ── Every row answers the keyboard ─────────────────────────────────
+    # Every row is a QWidgetAction, and that is exactly where a menu's own
+    # navigation stops: Qt highlights the row, then Return closes the whole
+    # panel having run nothing. Each row therefore carries its own Left,
+    # Right and Return, and these checks pin that down row by row.
+    menu_hits = []
+    keep = (import_win._show_help, import_win._open_settings, import_win.close,
+            import_win._start_listening, import_win._stop_listening,
+            import_win._load_file)
+    import_win._show_help = lambda: menu_hits.append("help")
+    import_win._open_settings = lambda: menu_hits.append("setup")
+    import_win.close = lambda *args, **kwargs: menu_hits.append("quit")
+    # The microphone stays out of an automated run; the mode itself is real.
+    import_win._start_listening = lambda: None
+    import_win._stop_listening = lambda: None
+    import_win._load_file = lambda: menu_hits.append("load")
+
+    def probe_menu():
+        built = import_win._build_menu()
+        built.popup(import_win.mapToGlobal(QPoint(0, 0)))
+        built.adjustSize()
+        QTest.qWait(120)
+        return built
+
+    def arrow_onto(built, row_action):
+        """Walk down until the row is the menu's active action."""
+        for _ in range(len(built.actions()) + 1):
+            if built.activeAction() is row_action:
+                return True
+            QTest.keyClick(built, Qt.Key_Down)
+            QTest.qWait(25)
+        return False
+
+    # One stop for the mode and its status line: the status is text, and a
+    # row that cannot be pressed should not take a keyboard stop of its own.
+    peek = probe_menu()
+    first_row = peek.actions()[0]
+    check("the mode and its status line are one keyboard stop",
+          isinstance(first_row, QWidgetAction)
+          and peek._status_label in first_row.defaultWidget().findChildren(QLabel),
+          f"{len(peek.actions())} rows")
+    peek.close()
+    QTest.qWait(40)
+
+    # Each row: Return runs it, or keeps the panel open - never a silent exit.
+    silent = []
+    snapshot = (import_win._voice_mode, import_win._dark_theme,
+                import_win._font_size, import_win._font_family,
+                import_win._manual_wpm)
+    row_count = len(probe_menu().actions())
+    for index in range(row_count):
+        built = probe_menu()
+        target = built.actions()[index]
+        if not arrow_onto(built, target):
+            built.close()
+            QTest.qWait(30)
+            continue
+        before = (import_win._voice_mode, import_win._dark_theme,
+                  import_win._font_size, import_win._font_family,
+                  import_win._manual_wpm, tuple(menu_hits))
+        QTest.keyClick(built, Qt.Key_Return)
+        QTest.qWait(70)
+        after = (import_win._voice_mode, import_win._dark_theme,
+                 import_win._font_size, import_win._font_family,
+                 import_win._manual_wpm, tuple(menu_hits))
+        if not built.isVisible() and before == after:
+            silent.append(target.text() or target.defaultWidget().__class__.__name__)
+        built.close()
+        QTest.qWait(30)
+        (import_win._voice_mode, import_win._dark_theme, import_win._font_size,
+         import_win._font_family, import_win._manual_wpm) = snapshot
+        QTest.qWait(20)
+    check("Return never closes the menu without running its row",
+          not silent, f"silent: {silent}")
+
+    # ── Rows that change a setting ────────────────────────────────────
+    built = probe_menu()
+    mode_row = built.actions()[0]
+    arrow_onto(built, mode_row)
+    nav = built._rows
+    check("a row picks its current state on arrival",
+          nav.active_row() is mode_row and nav.picked() == 1,
+          f"picked {nav.picked()}")
+    QTest.keyClick(built, Qt.Key_Right)
+    QTest.qWait(30)
+    QTest.keyClick(built, Qt.Key_Return)
+    QTest.qWait(120)
+    check("Right and Return switch the mode from the keyboard",
+          import_win._voice_mode and built.isVisible()
+          and built._status_label.text() == "Following your voice",
+          f"voice {import_win._voice_mode}, "
+          f"status {built._status_label.text()!r}")
+    built.close()
+    QTest.qWait(40)
+    import_win._voice_mode = False
+    import_win._toggle_mode(False)
+
+    built = probe_menu()
+    speed_row = built._speed_action
+    arrow_onto(built, speed_row)
+    speed_before = import_win._manual_wpm
+    QTest.keyClick(built, Qt.Key_Left)
+    QTest.qWait(40)
+    check("Left moves a row's slider by ten words a minute",
+          import_win._manual_wpm == speed_before - 10
+          and built._speed_value.text() == str(import_win._manual_wpm),
+          f"{speed_before} -> {import_win._manual_wpm}, "
+          f"label {built._speed_value.text()!r}")
+    QTest.keyClick(built, Qt.Key_Right)
+    QTest.qWait(40)
+    check("Right moves it back", import_win._manual_wpm == speed_before,
+          f"{import_win._manual_wpm}")
+    built.close()
+    QTest.qWait(40)
+
+    built = probe_menu()
+    arrow_onto(built, built.actions()[3])          # font size
+    size_before = import_win._font_size
+    QTest.keyClick(built, Qt.Key_Return)
+    QTest.qWait(80)
+    check("Return on the size row steps the script down",
+          import_win._font_size < size_before,
+          f"{size_before} -> {import_win._font_size}")
+    QTest.keyClick(built, Qt.Key_Right)
+    QTest.qWait(30)
+    QTest.keyClick(built, Qt.Key_Return)
+    QTest.qWait(80)
+    check("and Right then Return steps it back up",
+          import_win._font_size == size_before,
+          f"{import_win._font_size}")
+    built.close()
+    QTest.qWait(40)
+
+    built = probe_menu()
+    arrow_onto(built, built.actions()[4])          # typeface
+    family_before = import_win._font_family
+    QTest.keyClick(built, Qt.Key_Return)
+    QTest.qWait(80)
+    check("Return on the typeface row tries the next face",
+          import_win._font_family != family_before,
+          f"{family_before} -> {import_win._font_family}")
+    import_win._font_family = family_before
+    import_win._apply_typography()
+    built.close()
+    QTest.qWait(40)
+
+    built = probe_menu()
+    arrow_onto(built, built.actions()[5])          # appearance
+    theme_before = import_win._dark_theme
+    QTest.keyClick(built, Qt.Key_Right)
+    QTest.qWait(30)
+    QTest.keyClick(built, Qt.Key_Return)
+    QTest.qWait(100)
+    check("Right and Return switch the theme and close the menu",
+          import_win._dark_theme != theme_before and not built.isVisible(),
+          f"dark {import_win._dark_theme}, open {built.isVisible()}")
+    import_win._dark_theme = theme_before
+    import_win._apply_read_mode_style()
+    QTest.qWait(40)
+
+    # ── The action row: plates, order, Home and End ───────────────────
+    menu_hits.clear()
+    built = probe_menu()
+    QTest.keyClick(built, Qt.Key_End)
+    QTest.qWait(40)
+    check("End reaches the action row",
+          built._rows.active_row() is built.actions()[-1],
+          f"{built._rows.active_row() is built.actions()[-1]}")
+    nav = built._rows
+    check("the row picks its first plate", nav.picked() == 0,
+          f"picked {nav.picked()}")
+    QTest.keyClick(built, Qt.Key_Left)
+    QTest.qWait(30)
+    check("Left wraps to the last plate", nav.picked() == 2,
+          f"picked {nav.picked()}")
+    QTest.keyClick(built, Qt.Key_Return)
+    QTest.qWait(90)
+    check("Return presses the picked plate and closes the menu",
+          menu_hits == ["quit"] and not built.isVisible(),
+          f"{menu_hits}, open {built.isVisible()}")
+    built.close()
+    QTest.qWait(40)
+    menu_hits.clear()
+
+    built = probe_menu()
+    QTest.keyClick(built, Qt.Key_Home)
+    QTest.qWait(40)
+    check("Home returns to the first row",
+          built._rows.active_row() is built.actions()[0],
+          f"{built._rows.active_row() is built.actions()[0]}")
+    built.close()
+    QTest.qWait(40)
+
+    (import_win._show_help, import_win._open_settings, import_win.close,
+     import_win._start_listening, import_win._stop_listening,
+     import_win._load_file) = keep
 
     note_window = import_win._open_note()
     check("the note close control has an accessible name",
