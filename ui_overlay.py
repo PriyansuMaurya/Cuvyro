@@ -30,7 +30,7 @@ from audio_worker import AudioWorker
 from matching_engine import MatchingEngine
 from settings_dialog import SettingsDialog
 from note_window import NoteWindow
-from store import Store
+from store import Store, sane_coord
 
 
 class _RenderedLine(NamedTuple):
@@ -458,6 +458,10 @@ class NotchOverlay(QWidget):
         self._notes: list[NoteWindow] = []
         self._store = Store()
         self._state_restored = False
+        # Kept apart from ``_state_restored``: settings are applied before the
+        # script, and one flag for both would make the second restore bail
+        # out because the first one already ran.
+        self._prefs_restored = False
         self._last_match_time: Optional[float] = None
         self._last_match_pos = -1
         # Consecutive finals that confirmed nothing. One is normal (a cough,
@@ -3310,7 +3314,9 @@ class NotchOverlay(QWidget):
 
         Monitors get unplugged, resolutions change, and a note saved on the
         second display would otherwise restore into coordinates that no
-        longer exist: still running, but impossible to see or click.
+        longer exist: still running, but impossible to see or click. The
+        returned rectangle is both moved inside the screen and shrunk to fit
+        it, so a card saved on a larger display still comes back whole.
         """
         screens = QApplication.screens()
         if not screens:
@@ -3323,13 +3329,22 @@ class NotchOverlay(QWidget):
             area = overlap.width() * overlap.height()
             if area > best:
                 best, target = area, available
+        if best <= 0:
+            # Nothing overlaps: the display the window was left on is gone.
+            # Land on the screen nearest those saved coordinates instead of
+            # whichever screen Qt happens to list first, so a laptop docked
+            # at home opens where the user is now looking.
+            centre = rect.center()
+            target = min(
+                (screen.availableGeometry() for screen in screens),
+                key=lambda area: (area.center() - centre).manhattanLength())
         if target is None:
             target = QApplication.primaryScreen().availableGeometry()
-        width = min(rect.width(), target.width())
-        height = min(rect.height(), target.height())
+        width = max(1, min(rect.width(), target.width()))
+        height = max(1, min(rect.height(), target.height()))
         x = max(target.x(), min(rect.x(), target.x() + target.width() - width))
         y = max(target.y(), min(rect.y(), target.y() + target.height() - height))
-        return QRect(x, y, rect.width(), rect.height())
+        return QRect(x, y, width, height)
 
     def _on_note_closed(self, note_id: str):
         for note in list(self._notes):
@@ -3364,9 +3379,10 @@ class NotchOverlay(QWidget):
     def _persisted_card_rect(self) -> QRect:
         """The reader's normal-card rectangle, whatever state it is in now.
 
-        A position saved while peeked or narrow would restore the wrong card
-        shape on the next launch, so those states map back to the wide card
-        first. This is also the rectangle the reader comes back to.
+        A position saved while peeked, narrow or expanded into the editor
+        would restore the wrong card shape on the next launch, so those states
+        map back to the reading card first. This is also the rectangle the
+        reader comes back to.
         """
         if self._peeked and self._peek_restore is not None:
             return QRect(self._peek_restore)
@@ -3375,6 +3391,18 @@ class NotchOverlay(QWidget):
             height = self._size_before_compact.height()
             return QRect(self.x() + (self.width() - width) // 2,
                          self.y(), width, height)
+        collapsed = self._collapsed_size
+        if self._edit_target and collapsed is not None:
+            # Closing with the editor open would otherwise save the 860x320
+            # editing card as the reader's size, and the next launch would
+            # come back as an editor with no text in it.
+            width, height = collapsed.width(), collapsed.height()
+            if (width < int(500 * self._scale)
+                    and height < int(280 * self._scale)):
+                screen = QApplication.primaryScreen().availableGeometry()
+                card_w = width - self.RAIL_W
+                return QRect(screen.x() + (screen.width() - card_w) // 2,
+                             self.y(), width, height)
         return QRect(self.geometry())
 
     def _settings_state(self) -> dict:
@@ -3389,17 +3417,29 @@ class NotchOverlay(QWidget):
             "voice_wpm": self._voice_wpm,
             "window_x": int(card.x()),
             "window_y": int(card.y()),
+            "window_w": int(card.width()),
+            "window_h": int(card.height()),
         }
 
     def _restore_settings(self):
-        """Apply saved reader preferences; unknown or invalid values are ignored."""
+        """Apply saved reader preferences; unknown or invalid values are ignored.
+
+        Runs once per launch. A second call would overwrite whatever the user
+        has changed since the file was read, so a window that is hidden and
+        shown again keeps its live state instead of the saved one.
+        """
+        if self._prefs_restored:
+            return
+        self._prefs_restored = True
         data = self._store.load().get("settings") or {}
+        if not isinstance(data, dict):
+            data = {}
 
         family = data.get("font_family")
         if isinstance(family, str) and family in {fam for _, fam in self.FONT_OPTIONS}:
             self._font_family = family
-        size = data.get("font_size")
-        if isinstance(size, int) and not isinstance(size, bool) and 6 <= size <= 24:
+        size = sane_coord(data.get("font_size"))
+        if size is not None and 6 <= size <= 24:
             self._font_size = size
         if isinstance(data.get("dark_theme"), bool):
             self._dark_theme = data["dark_theme"]
@@ -3407,22 +3447,42 @@ class NotchOverlay(QWidget):
             ("manual_wpm", "_manual_wpm", 10, 600),
             ("voice_wpm", "_voice_wpm", 10, 600),
         ):
-            value = data.get(key)
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                setattr(self, attr, max(low, min(high, int(value))))
+            value = sane_coord(data.get(key))
+            if value is not None:
+                setattr(self, attr, max(low, min(high, value)))
         if isinstance(data.get("voice_mode"), bool):
             self._voice_mode = data["voice_mode"]
 
-        # Put the card back where the user left it, if that spot still
-        # exists. The springs start at the restored rectangle too, or the
-        # next animation would snap the window back to its launch position.
-        x, y = data.get("window_x"), data.get("window_y")
-        if (isinstance(x, int) and not isinstance(x, bool)
-                and isinstance(y, int) and not isinstance(y, bool)):
-            card = self._clamp_to_available(
-                QRect(x, y, self.width(), self.height()))
+        # Put the card back where the user left it, at the size they left it,
+        # if that spot still exists. A size is only trusted within the range
+        # the reader can actually be in; anything else keeps the default, and
+        # the clamp shrinks a card saved on a display that is now smaller.
+        x = sane_coord(data.get("window_x"))
+        y = sane_coord(data.get("window_y"))
+        width = sane_coord(data.get("window_w"))
+        height = sane_coord(data.get("window_h"))
+        if x is not None and y is not None:
+            # The reader only ever occupies the reading card or the expanded
+            # editor, so those are the real bounds of a saved size. A value
+            # outside them is corrupt rather than a window the user chose,
+            # and falling back to the default keeps a bad number from turning
+            # the card into a full-screen panel.
+            max_w = int(860 * self._scale) + self.RAIL_W
+            max_h = int(320 * self._scale)
+            if width is None or not self.MIN_W <= width <= max_w:
+                width = self.DEFAULT_W
+            if height is None or not self.MIN_H <= height <= max_h:
+                height = self.DEFAULT_H
+            card = self._clamp_to_available(QRect(x, y, width, height))
+            self.resize(card.size())
             self.move(card.topLeft())
-            self._motion.jump(x=float(card.x()), y=float(card.y()))
+            # The card the reader collapses back to is the restored one, or
+            # leaving the editor would snap it to the launch default.
+            self._collapsed_size = QSize(card.width(), card.height())
+            # The springs start at the restored rectangle too, or the next
+            # animation would snap the window back to its launch position.
+            self._motion.jump(x=float(card.x()), y=float(card.y()),
+                              w=float(card.width()), h=float(card.height()))
 
         self._text_edit.setFont(self._text_font())
         self._apply_read_mode_style()
@@ -3476,12 +3536,17 @@ class NotchOverlay(QWidget):
                 continue
             note = NoteWindow(text=text, note_id=str(entry.get("id") or ""),
                               scale=self._scale, dark=self._dark_theme)
-            try:
-                saved = QRect(int(entry["x"]), int(entry["y"]),
-                              note.width(), note.height())
-            except (KeyError, TypeError, ValueError):
+            # Coordinates go through sane_coord: JSON can hold a float, a
+            # boolean or a number past QRect's 32-bit range, and the last one
+            # raises OverflowError, which is not a ValueError and used to take
+            # the whole launch down.
+            note_x = sane_coord(entry.get("x"))
+            note_y = sane_coord(entry.get("y"))
+            if note_x is None or note_y is None:
                 saved = QRect(self.x() + self.width() + int(12 * self._scale),
                               self.y(), note.width(), note.height())
+            else:
+                saved = QRect(note_x, note_y, note.width(), note.height())
             note.move(self._clamp_to_available(saved).topLeft())
             note.changed.connect(self._schedule_save)
             note.closed.connect(self._on_note_closed)

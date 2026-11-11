@@ -17,7 +17,7 @@ import tempfile
 import time
 from unittest.mock import patch
 
-from PyQt5.QtCore import QObject, QPoint, QRect, QSettings, Qt
+from PyQt5.QtCore import QObject, QPoint, QRect, QSettings, QSize, Qt
 from PyQt5.QtGui import QTextCursor
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QLabel, QShortcut, QWidgetAction
@@ -178,6 +178,144 @@ def main():
     check("a valid reader position survives a relaunch",
           positioned.pos() == wanted.topLeft(),
           f"{positioned.x()},{positioned.y()} vs {wanted.x()},{wanted.y()}")
+
+    # ── A saved size is restored, not just the position ───────────────
+    tmp_size = tempfile.mkdtemp(prefix="notch-robust-size-")
+    wanted_size = QSize(win.DEFAULT_W + 40, win.DEFAULT_H + 60)
+    Store(tmp_size).save("", [], {"window_x": screen.x() + 25,
+                                   "window_y": screen.y() + 15,
+                                   "window_w": wanted_size.width(),
+                                   "window_h": wanted_size.height()})
+    sized = make_overlay(tmp_size)
+    check("a saved window size survives a relaunch",
+          sized.size() == wanted_size,
+          f"{sized.width()}x{sized.height()} vs "
+          f"{wanted_size.width()}x{wanted_size.height()}")
+    check("the reader collapses back to the restored size",
+          sized._collapsed_size == wanted_size, str(sized._collapsed_size))
+    with patch.object(QApplication, "quit", lambda *_: None):
+        sized.close()
+
+    # A size saved on a bigger display cannot put the card off the screen.
+    tmp_oversize = tempfile.mkdtemp(prefix="notch-robust-oversize-")
+    Store(tmp_oversize).save("", [], {"window_x": 0, "window_y": 0,
+                                       "window_w": int(860 * win._scale)
+                                       + win.RAIL_W,
+                                       "window_h": int(320 * win._scale)})
+    oversized = make_overlay(tmp_oversize)
+    check("a window saved larger than the screen is shrunk to fit",
+          on_screen(QRect(oversized.pos(), oversized.size())),
+          f"{oversized.width()}x{oversized.height()} at "
+          f"{oversized.x()},{oversized.y()}")
+    with patch.object(QApplication, "quit", lambda *_: None):
+        oversized.close()
+
+    # A size no reader state could have produced is corrupt, not a resize.
+    tmp_absurd_size = tempfile.mkdtemp(prefix="notch-robust-absurd-size-")
+    Store(tmp_absurd_size).save("", [], {"window_x": 10, "window_y": 10,
+                                          "window_w": 999999,
+                                          "window_h": 999999})
+    absurd = make_overlay(tmp_absurd_size)
+    check("a corrupt size restores as the default card, not a full screen",
+          absurd.size() == QSize(absurd.DEFAULT_W, absurd.DEFAULT_H),
+          f"{absurd.width()}x{absurd.height()} vs "
+          f"{absurd.DEFAULT_W}x{absurd.DEFAULT_H}")
+    with patch.object(QApplication, "quit", lambda *_: None):
+        absurd.close()
+
+    # ── Invalid saved values are rejected, never trusted ──────────────
+    # Everything here is what a hand-edited or half-written file can hold:
+    # a list where a string belongs, coordinates past QRect's 32-bit range
+    # (which raises OverflowError, not ValueError), booleans, numeric
+    # strings, NaN and infinity, and sizes below the minimum.
+    tmp_bad = tempfile.mkdtemp(prefix="notch-robust-bad-")
+    with open(os.path.join(tmp_bad, "state.json"), "w", encoding="utf-8") as handle:
+        json.dump({
+            "schema": 1,
+            "script": ["not", "a", "script"],
+            "notes": [
+                {"id": "absurd", "text": "kept", "x": 1e30, "y": 1e30},
+                {"id": "bools", "text": "kept too", "x": True, "y": False},
+                {"id": "nan", "text": "kept as well", "x": float("nan"), "y": 0},
+                {"id": "strings", "text": "and this", "x": "40", "y": "40"},
+            ],
+            "settings": {
+                "font_family": "Comic Sans",
+                "font_size": 1e30,
+                "dark_theme": "yes",
+                "manual_wpm": "fast",
+                "voice_wpm": float("inf"),
+                "voice_mode": 3,
+                "window_x": 1e30,
+                "window_y": 1e30,
+                "window_w": -5,
+                "window_h": True,
+            },
+        }, handle)
+    bad = make_overlay(tmp_bad)
+    check("a corrupt script field is dropped instead of rendered",
+          bad._script_text == "" and bad._text_edit.toPlainText() == "",
+          repr(bad._text_edit.toPlainText()[:40]))
+    check("an unknown font family falls back to the default",
+          bad._font_family == "Segoe UI", bad._font_family)
+    check("an absurd font size falls back into the readable range",
+          6 <= bad._font_size <= 24, str(bad._font_size))
+    check("a non-boolean theme flag is ignored", bad._dark_theme is True)
+    check("text speeds that are strings or infinite are ignored",
+          bad._manual_wpm == 150 and bad._voice_wpm == 60,
+          f"manual {bad._manual_wpm}, voice {bad._voice_wpm}")
+    check("a corrupt position leaves the reader on a real screen",
+          on_screen(QRect(bad.pos(), bad.size())),
+          f"at {bad.x()},{bad.y()}")
+    check("notes with unusable coordinates still come back readable",
+          len(bad._notes) == 4
+          and all(note.text() for note in bad._notes)
+          and all(on_screen(QRect(note.pos(), note.size()))
+                  for note in bad._notes),
+          f"{len(bad._notes)} note(s)")
+    with patch.object(QApplication, "quit", lambda *_: None):
+        bad.close()
+
+    # ── Recovery: a truncated file falls back to the last good copy ───
+    tmp_bak = tempfile.mkdtemp(prefix="notch-robust-bak-")
+    Store(tmp_bak).save("recovered script",
+                        [{"id": "n1", "text": "recovered note",
+                          "x": 10, "y": 10}], {})
+    # The second save moves the first file to .bak before replacing it.
+    Store(tmp_bak).save("newer script", [], {})
+    with open(os.path.join(tmp_bak, "state.json"), "w", encoding="utf-8") as handle:
+        handle.write('{"schema": 1, "script": ')
+    recovered = Store(tmp_bak).load()
+    check("a truncated state file falls back to the backup",
+          recovered.get("script") == "recovered script",
+          repr(recovered.get("script")))
+    check("the backup keeps the notes it held",
+          [n.get("text") for n in recovered.get("notes") or []]
+          == ["recovered note"])
+
+    fresh = Store(tempfile.mkdtemp(prefix="notch-robust-fresh-")).load()
+    check("a first launch loads empty state",
+          fresh.get("schema") == 1 and fresh.get("script") == ""
+          and fresh.get("notes") == [])
+    fresh["notes"].append({"id": "leak"})
+    check("a failed load cannot pollute the shared defaults",
+          Store(tempfile.mkdtemp(prefix="notch-robust-fresh-")).load().get("notes") == [],
+          "defaults were mutated by a caller")
+
+    # ── Showing the window again keeps the live state ────────────────
+    tmp_live = tempfile.mkdtemp(prefix="notch-robust-live-")
+    Store(tmp_live).save("", [], {"font_size": 10, "font_family": "Segoe UI"})
+    live = make_overlay(tmp_live)
+    live._font_size = 19
+    live._font_family = "Consolas"
+    live.hide()
+    live.show()
+    QTest.qWait(150)
+    check("re-showing the window keeps the live preferences",
+          live._font_size == 19 and live._font_family == "Consolas",
+          f"{live._font_family} {live._font_size}")
+    with patch.object(QApplication, "quit", lambda *_: None):
+        live.close()
 
     # ── Import: encodings, failures, and honesty ─────────────────────
     import_win = make_overlay(tempfile.mkdtemp(prefix="notch-robust-import-"))
