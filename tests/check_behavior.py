@@ -116,6 +116,63 @@ def main():
     QTest.qWait(700)
     check("clock stops at the end of the script", not win._manual_running)
 
+    # Manual playback is driven by window-scoped keys. A reader that is not
+    # the active window drops Space without a word while the microphone
+    # keeps Voice alive, which made Manual look dead after the menu, Help or
+    # Setup had closed. Every surface that takes the keyboard has to hand it
+    # back; the activation request is what is checked here, because an
+    # offscreen desktop cannot report a real one.
+    activations = []
+    original_activate = win.activateWindow
+    win.activateWindow = lambda: activations.append(True)
+    try:
+        win._focus_reader()
+    finally:
+        win.activateWindow = original_activate
+    check("the reader asks for the keyboard back", bool(activations))
+
+    # ── System-wide Manual controls ─────────────────────────────────
+    # Registration is a Windows service, so this run can only prove the
+    # fallback: the chords are refused offscreen and window-scoped Space
+    # stays in charge. OS-level delivery is covered by check_hotkeys.py.
+    win._hotkey_consent = "granted"
+    win._hotkeys_enabled = True
+    win._voice_mode = False
+    win._apply_global_hotkeys()
+    check("a refused registration reports every chord as unregistered",
+          win._hotkey_status and not any(win._hotkey_status.values()),
+          f"{win._hotkey_status}")
+    check("the scoped keys are still the fallback",
+          win._sc_space.isEnabled() and win._sc_space.context() == Qt.WindowShortcut)
+    win._manual_running = False
+    win._on_global_hotkey("toggle")
+    check("a global chord drives Manual through the same path",
+          win._manual_running)
+    win._on_global_hotkey("toggle")
+
+    # Voice mode ignores the chords completely, including the speed ones.
+    win._voice_mode = True
+    win._voice_wpm = 60
+    win._on_global_hotkey("toggle")
+    win._on_global_hotkey("faster")
+    check("Voice mode ignores the global chords",
+          win._voice_wpm == 60 and not win._manual_running)
+    win._voice_mode = False
+
+    # A note being typed into owns the keyboard; the reader stays quiet.
+    focus_note = win._open_note()
+    note_active = focus_note.isActiveWindow
+    focus_note.isActiveWindow = lambda: True
+    try:
+        win._manual_running = False
+        win._on_global_hotkey("toggle")
+        check("a focused note keeps the global chords out of the way",
+              not win._manual_running)
+    finally:
+        focus_note.isActiveWindow = note_active
+        focus_note.close()
+        QTest.qWait(100)
+
     # The controls are on a three-second leash: stillness dissolves them and
     # any pointer movement brings them back. Both are what lets the window
     # read as floating type instead of a toolbar with a script under it.
@@ -154,6 +211,9 @@ def main():
     edited = "Edited script for the persistence check.\nSecond line stays put."
     win._text_edit.setPlainText(edited)
     win._script_text = edited
+    win._hotkey_consent = "granted"
+    win._hotkeys_enabled = True
+    win._hotkey_toggle = "Ctrl+Shift+Space"
     win._save_state()
     saved = Store(tmp).load()
     check("edited script is written to the state file", saved["script"] == edited)
@@ -167,6 +227,13 @@ def main():
         "a fresh launch restores the edited script",
         win2._text_edit.toPlainText() == edited,
         f"{len(win2._text_edit.toPlainText())} chars",
+    )
+    check(
+        "global-key consent and chord survive a relaunch",
+        win2._hotkey_consent == "granted" and win2._hotkeys_enabled
+        and win2._hotkey_toggle == "Ctrl+Shift+Space",
+        f"{win2._hotkey_consent}, {win2._hotkeys_enabled}, "
+        f"{win2._hotkey_toggle}",
     )
 
     # Notes: blank notes are dropped, written notes survive.

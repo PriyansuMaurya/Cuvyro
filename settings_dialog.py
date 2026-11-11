@@ -16,11 +16,12 @@ import sounddevice as sd
 from PyQt5.QtCore import Qt, QTimer, QRectF, QRect, QPropertyAnimation, QEasingCurve, QAbstractAnimation
 from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox,
     QSlider, QProgressBar, QPushButton, QGroupBox, QMessageBox,
 )
 
 
+import hotkeys as hk
 from win_capture import exclude_from_capture
 
 class SettingsDialog(QDialog):
@@ -38,7 +39,10 @@ class SettingsDialog(QDialog):
                  current_noise_gate: float = 0.01,
                  current_input_gain: float = 2.0,
                  model_path: str = "model",
-                 parent=None, dark: bool = True):
+                 parent=None, dark: bool = True,
+                 hotkeys_enabled: bool = False,
+                 hotkey_toggle: str = hk.DEFAULT_CHORDS["toggle"],
+                 hotkey_status: Optional[dict] = None):
         super().__init__(parent)
         self.setWindowTitle("Notch Settings")
         self.setAccessibleName("Notch settings")
@@ -52,6 +56,12 @@ class SettingsDialog(QDialog):
         self._noise_gate = current_noise_gate
         self._input_gain = current_input_gain
         self._model_path = model_path
+        self._hotkeys_enabled = bool(hotkeys_enabled)
+        self._hotkey_toggle = (hotkey_toggle
+                               if hotkey_toggle in hk.TOGGLE_CHOICES
+                               else hk.DEFAULT_CHORDS["toggle"])
+        self._hotkey_status = dict(hotkey_status or {})
+        self._hotkeys_initial = (self._hotkeys_enabled, self._hotkey_toggle)
 
         # VU meter stream
         self._vu_stream = None
@@ -202,6 +212,50 @@ class SettingsDialog(QDialog):
         mic_layout.addLayout(rec_row)
 
         layout.addWidget(mic_group)
+
+        # ── Global keys ──────────────────────────────────────────────
+        # Manual mode's system-wide controls. The checkbox is the consent:
+        # nothing is registered while it is off, and turning it on here is
+        # the same explicit choice as the menu's Global keys row.
+        keys_group = QGroupBox("Global keys")
+        keys_layout = QVBoxLayout(keys_group)
+        keys_layout.setSpacing(6)
+
+        self._hotkeys_check = QCheckBox(
+            "Control Notch while another app has focus")
+        self._hotkeys_check.setAccessibleName("Global keys")
+        self._hotkeys_check.setChecked(self._hotkeys_enabled)
+        self._hotkeys_check.setEnabled(hk.available())
+        keys_layout.addWidget(self._hotkeys_check)
+
+        key_row = QHBoxLayout()
+        key_lbl = QLabel("Start / pause:")
+        key_lbl.setFont(QFont("Segoe UI", 9))
+        self._hotkey_combo = QComboBox()
+        self._hotkey_combo.setAccessibleName("Play pause shortcut")
+        for chord in hk.TOGGLE_CHOICES:
+            self._hotkey_combo.addItem(chord)
+        self._hotkey_combo.setCurrentText(self._hotkey_toggle)
+        self._hotkey_combo.setEnabled(self._hotkeys_enabled and hk.available())
+        key_lbl.setBuddy(self._hotkey_combo)
+        key_row.addWidget(key_lbl)
+        key_row.addWidget(self._hotkey_combo, 1)
+        keys_layout.addLayout(key_row)
+
+        self._hotkey_status_lbl = QLabel(self._hotkey_status_text())
+        self._hotkey_status_lbl.setWordWrap(True)
+        self._hotkey_status_lbl.setStyleSheet(
+            f"color: {'#888888' if self._dark else '#666666'}; font-size: 9px;")
+        keys_layout.addWidget(self._hotkey_status_lbl)
+        speed_note = QLabel("Slower / faster: Ctrl+Alt+Left / Right")
+        speed_note.setStyleSheet(
+            f"color: {'#888888' if self._dark else '#666666'}; font-size: 9px;")
+        keys_layout.addWidget(speed_note)
+
+        self._hotkeys_check.toggled.connect(self._on_hotkeys_toggled)
+        self._hotkey_combo.currentTextChanged.connect(
+            self._on_hotkey_toggle_changed)
+        layout.addWidget(keys_group)
 
         # ── Speech data section (hidden) ──────────────────────────────
         # model_group = QGroupBox("Speech data")
@@ -366,6 +420,37 @@ class SettingsDialog(QDialog):
     @property
     def input_gain(self) -> float:
         return self._input_gain
+
+    @property
+    def hotkeys_enabled(self) -> bool:
+        return self._hotkeys_enabled
+
+    @property
+    def hotkey_toggle(self) -> str:
+        return self._hotkey_toggle
+
+    @property
+    def hotkeys_changed(self) -> bool:
+        return (self._hotkeys_enabled, self._hotkey_toggle) != self._hotkeys_initial
+
+    def _hotkey_status_text(self) -> str:
+        if not hk.available():
+            return "System-wide keys are only available on Windows."
+        if not self._hotkeys_enabled:
+            return "Off. Space and the arrow keys work while Notch has focus."
+        if self._hotkey_status.get("toggle"):
+            return "Registered. These keys work even when Notch is not focused."
+        if not self._hotkey_status:
+            return "Applies in Manual mode."
+        return ("Could not register; another application may be using the "
+                "combination. Choose another one.")
+
+    def _on_hotkeys_toggled(self, checked: bool):
+        self._hotkeys_enabled = bool(checked)
+        self._hotkey_combo.setEnabled(checked and hk.available())
+
+    def _on_hotkey_toggle_changed(self, chord: str):
+        self._hotkey_toggle = chord
 
     # ── Cleanup ──────────────────────────────────────────────────────
 

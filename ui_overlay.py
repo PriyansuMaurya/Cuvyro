@@ -46,12 +46,19 @@ class _RenderedLine(NamedTuple):
 
 from spring import Spring, SpringGroup, system_allows_motion
 import head_tracking as ht
+import hotkeys as hk
 
 # Measurement aid, not a feature: NOTCH_HEAD_TRACE=1 prints the tracker's raw
 # reading and the offsets it produced five times a second, so a head turn can be
 # watched as numbers instead of guessed at from a six-pixel card edge. Nothing
 # is printed unless the variable is set.
 _HEAD_TRACE = os.environ.get("NOTCH_HEAD_TRACE", "") not in ("", "0")
+# The same kind of aid for the installed build: the reader hides itself from
+# screen capture on purpose, so its pixels cannot be sampled from outside.
+# NOTCH_MANUAL_TRACE=1 appends one line per Manual start and pause, with the
+# scroll offset reached, to notch.log beside the executable. Nothing is
+# written unless the variable is set.
+_MANUAL_TRACE = os.environ.get("NOTCH_MANUAL_TRACE", "") not in ("", "0")
 from controls import (
     CompactButton, GlyphButton, MenuRowNav, MicButton, MinimizeButton,
     NoteButton, RoundedMenu, ScriptTextEdit, TextButton,
@@ -202,7 +209,7 @@ class HelpDialog(QDialog):
             "<ul style='margin:0; padding-left:16px;'>"
             "<li><b>Load a script</b> — Double-click Notch to edit, drag a .txt file, or use <i>Load Script</i>.</li>"
             "<li><b>Voice</b> — the script follows your speech. Switch modes in the right-click menu.</li>"
-            "<li><b>Manual</b> — press <b>Space</b> to start or pause timed scroll. <b>Arrow keys</b> adjust speed.</li>"
+            "<li><b>Manual</b> — press <b>Space</b> to start or pause timed scroll; <b>Arrow keys</b> adjust speed. Turn on <b>Global keys</b> in the menu to control it while another app is focused.</li>"
             "<li><b>Right-click</b> the card for mode, font, theme, Help, Setup and Quit.</li>"
             "<li><b>Minimize</b> (the − control) puts the card away as a small pill; click it to bring it back.</li>"
             "</ul>"
@@ -225,6 +232,8 @@ class HelpDialog(QDialog):
             "<li><i>Ctrl+N</i> — New note</li>"
             "<li><i>Ctrl+=</i> / <i>Ctrl+-</i> — Larger / smaller script</li>"
             "<li><i>Space</i> — Start or pause timed scroll (Manual)</li>"
+            "<li><i>Ctrl+Shift+Space</i> — Start or pause Manual from any app (global keys)</li>"
+            "<li><i>Ctrl+Alt+Left / Right</i> — Slower / faster from any app (global keys)</li>"
             "<li><i>Esc</i> — Leave the editor or pill; closes Notch when reading</li>"
             "</ul>"
         ))
@@ -328,6 +337,105 @@ class HelpDialog(QDialog):
             self._opacity_anim.start()
 
 
+class NoticeDialog(QDialog):
+    """A one-button card that explains something, in the app's own palette.
+
+    Used when a system-wide chord could not be taken. Deliberately not a
+    QMessageBox: every other surface here is a frameless rounded card, and a
+    system dialog would be the only leftover UI in the app.
+    """
+
+    CORNER_RADIUS = 16
+
+    def __init__(self, parent=None, title="", body="", dark: bool = True,
+                 button_text: str = "OK"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setAccessibleName(title)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._dark = dark
+        if dark:
+            surface, border = "#1e1e1e", "#333333"
+            text, strong = "#c8c8c8", "#ffffff"
+            button_bg, button_text_colour, button_border = "#2a2a2a", "#b0b0b0", "#444444"
+            hover = "#007AFF"
+        else:
+            surface, border = "#F7F7F8", "#DCDCDE"
+            text, strong = "#1C1C1E", "#111111"
+            button_bg, button_text_colour, button_border = "#F2F2F3", "#1C1C1E", "#DCDCDE"
+            hover = "#0066CC"
+        self._surface = surface
+        self._border = border
+        self.setFixedWidth(320)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+
+        header = QLabel(title)
+        header.setWordWrap(True)
+        header.setStyleSheet(
+            f"font-size: 13px; font-weight: 600; color: {strong}; "
+            "background: transparent;")
+        layout.addWidget(header)
+
+        label = QLabel(body)
+        label.setWordWrap(True)
+        label.setTextFormat(Qt.PlainText)
+        label.setStyleSheet(
+            f"color: {text}; font-family: 'Poppins', 'Segoe UI', sans-serif; "
+            "font-size: 10px; background: transparent;")
+        layout.addWidget(label)
+
+        ok = QPushButton(button_text)
+        ok.setCursor(Qt.PointingHandCursor)
+        ok.setAccessibleName(button_text)
+        ok.setStyleSheet(f"""
+            QPushButton {{
+                background: {button_bg};
+                color: {button_text_colour};
+                border: 1px solid {button_border};
+                border-radius: 8px;
+                padding: 5px 16px;
+                font-family: "Poppins", "Segoe UI", sans-serif;
+                font-size: 10px;
+            }}
+            QPushButton:hover {{ background: {hover}; color: #ffffff; }}
+        """)
+        ok.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(ok)
+        layout.addLayout(row)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), self.CORNER_RADIUS,
+                            self.CORNER_RADIUS)
+        painter.setPen(QPen(QColor(self._border), 1))
+        painter.setBrush(QColor(self._surface))
+        painter.drawPath(path)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        exclude_from_capture(self)
+        parent = self.parent()
+        area = QApplication.desktop().availableGeometry(self)
+        self.adjustSize()
+        if parent is not None and parent.isVisible():
+            centre = parent.mapToGlobal(parent.rect().center())
+        else:
+            centre = area.center()
+        x = centre.x() - self.width() // 2
+        y = centre.y() - self.height() // 2
+        x = max(area.left(), min(x, area.right() - self.width()))
+        y = max(area.top(), min(y, area.bottom() - self.height()))
+        self.move(x, y)
+
+
 class NotchOverlay(QWidget):
     """
     Minimalist 'Dynamic Island' style teleprompter.
@@ -426,6 +534,16 @@ class NotchOverlay(QWidget):
         self._voice_wpm = 60
         self._manual_wpm = 150
         self._manual_running = False
+        # System-wide Manual controls. Off until the user grants consent;
+        # a declined or failed registration leaves the window-scoped keys in
+        # place, so the reader works without them.
+        self._hotkey_consent: Optional[str] = None   # "granted" | "declined"
+        self._hotkeys_enabled = False
+        self._hotkey_toggle = hk.DEFAULT_CHORDS["toggle"]
+        self._hotkeys = hk.GlobalHotkeys(self)
+        self._hotkey_status: dict = {}
+        self._hotkey_notice = None
+        self._hotkeys.triggered.connect(self._on_global_hotkey)
         self._manual_scroll_accum = 0.0
         self._voice_scroll_accum = 0.0
         self._drag_pos: Optional[QPoint] = None
@@ -2231,6 +2349,65 @@ class NotchOverlay(QWidget):
         head_layout.addWidget(head_seg)
         head_action = add_widget(head_row, top=row_gap, bottom=row_gap)
 
+        # ── Global keys: Manual controls with another app in front ────
+        # Off until switched on. This row is the explicit consent: nothing is
+        # registered before it, and Off releases the chords immediately.
+        global_row = QWidget(menu)
+        global_layout = QHBoxLayout(global_row)
+        global_layout.setContentsMargins(px(10), 0, px(8), 0)
+        global_layout.setSpacing(px(8))
+        global_label = label("Global keys", size=13)
+        global_label.setToolTip(
+            f"{self._hotkey_toggle} starts or pauses Manual, even while "
+            "another app is focused. Ctrl+Alt+Left / Right adjust speed.")
+        global_layout.addWidget(global_label)
+        global_layout.addStretch(1)
+        global_seg = QWidget(menu)
+        global_seg.setStyleSheet(
+            f"{field_style} border-radius: {control_radius}px;")
+        global_seg_layout = QHBoxLayout(global_seg)
+        global_seg_layout.setContentsMargins(field_pad, field_pad,
+                                             field_pad, field_pad)
+        global_seg_layout.setSpacing(px(2))
+        global_group = QButtonGroup(menu)
+        global_group.setExclusive(True)
+        global_off = segment_button(global_group, "Off", 38)
+        global_on = segment_button(global_group, "On", 34)
+        global_off.setAccessibleName("Global keys off")
+        global_on.setAccessibleName("Global keys on")
+        global_off.setToolTip("Global keys off; Space works while Notch is focused")
+        global_on.setToolTip(
+            f"Global keys on: {self._hotkey_toggle} anywhere")
+        on_now = (self._hotkeys_enabled
+                  and self._hotkey_consent == "granted")
+        global_off.setChecked(not on_now)
+        global_on.setChecked(on_now)
+        menu._global_off_btn = global_off
+        menu._global_on_btn = global_on
+
+        def choose_global(enabled: bool):
+            current = (self._hotkeys_enabled
+                       and self._hotkey_consent == "granted")
+            if enabled == current:
+                return
+            self._hotkeys_enabled = enabled
+            if enabled:
+                # Switching the row on is the consent itself: nothing is
+                # registered before this click.
+                self._hotkey_consent = "granted"
+            listening = self._apply_global_hotkeys()
+            self._schedule_save()
+            self._refresh_menu_mode_display(menu)
+            if enabled and not listening and not self._voice_mode:
+                self._report_hotkey_failure()
+
+        global_off.clicked.connect(lambda: choose_global(False))
+        global_on.clicked.connect(lambda: choose_global(True))
+        global_seg_layout.addWidget(global_off)
+        global_seg_layout.addWidget(global_on)
+        global_layout.addWidget(global_seg)
+        global_action = add_widget(global_row, top=row_gap, bottom=row_gap)
+
         menu.addSeparator()
 
         menu.addAction("Load Script…", self._load_file)
@@ -2293,6 +2470,7 @@ class NotchOverlay(QWidget):
         rows.row(font_action, [family_btn])
         rows.row(theme_action, [dark_btn, light_btn])
         rows.row(head_action, [head_off, head_on])
+        rows.row(global_action, [global_off, global_on])
         rows.row(row_action, [menu._help_btn, menu._setup_btn, menu._quit_btn])
         menu._rows = rows
 
@@ -2331,6 +2509,26 @@ class NotchOverlay(QWidget):
             QTimer.singleShot(0, fade_in)
         menu.exec_(self._fit_menu_to_screen(menu, pos))
 
+    def _focus_reader(self):
+        """Give the keyboard back to the reader after one of its own surfaces.
+
+        Opening and closing Notch's menu, Help or Setup is an interaction with
+        this window, so the keyboard belongs to the reader again afterwards.
+        This never reaches for the foreground of another application; the
+        system-wide chords are what make Manual work while someone else has
+        focus. A note or a dialog of ours that is still active keeps it.
+        """
+        if (not self.isVisible() or self._edit_mode or self._edit_target
+                or self._peeked):
+            return
+        active = QApplication.activeWindow()
+        if active is not None and active is not self:
+            # A note or a dialog owns the keyboard; taking it would break
+            # typing into that surface.
+            return
+        self.activateWindow()
+        self._text_edit.setFocus(Qt.OtherFocusReason)
+
     def _show_menu(self, global_pos):
         if self._edit_mode:
             return
@@ -2342,6 +2540,10 @@ class NotchOverlay(QWidget):
             # Without this every right-click leaves a full menu widget tree
             # behind (about 60 objects each) for the life of the process.
             menu.deleteLater()
+            # A popup can hand the keyboard to whatever window was in front
+            # when it closed; Manual's Space would go there instead. Wait for
+            # the popup to tear down, then take the reader back.
+            QTimer.singleShot(0, self._focus_reader)
 
     def contextMenuEvent(self, event):
         self._show_menu(event.globalPos())
@@ -2487,6 +2689,83 @@ class NotchOverlay(QWidget):
             self._voice_scroll_accum = 0.0
             self._voice_target_scroll = None
             self._sync_scroll_spring()
+        # Release the chords in Voice and take them back in Manual. Doing it
+        # with the mode keeps a system-wide chord from being held while it
+        # cannot do anything.
+        self._apply_global_hotkeys()
+
+    # ── System-wide Manual controls ──────────────────────────────────
+
+    def _hotkey_chords(self) -> dict:
+        return {"toggle": self._hotkey_toggle, **hk.SPEED_CHORDS}
+
+    def _global_hotkeys_wanted(self) -> bool:
+        """Whether the chords should be listening right now."""
+        return (self._hotkeys_enabled
+                and self._hotkey_consent == "granted"
+                and not self._voice_mode
+                and not self._edit_target
+                and not self._peeked
+                and hk.available())
+
+    def _apply_global_hotkeys(self) -> bool:
+        """Register or release the chords for the current mode.
+
+        Returns True only when the play/pause chord is listening. The two
+        speed chords are conveniences, so one of them failing does not stop
+        the others. Window-scoped Space always remains the fallback.
+        """
+        if not self._global_hotkeys_wanted():
+            self._hotkeys.unregister_all()
+            self._hotkey_status = {}
+            return False
+        self._hotkey_status = self._hotkeys.register(
+            self._hotkey_chords(), int(self.winId()))
+        return bool(self._hotkey_status.get("toggle"))
+
+    def _on_global_hotkey(self, action: str):
+        """Act on a system-wide chord without touching anyone's focus.
+
+        Voice, the editor, the pill and any modal surface are left strictly
+        alone. A note that is being typed into is the user's current task, so
+        the reader stays quiet there too.
+        """
+        if (self._voice_mode or self._edit_mode or self._edit_target
+                or self._peeked):
+            return
+        if QApplication.activeModalWidget() is not None:
+            return
+        if any(note.isActiveWindow() for note in self._notes):
+            return
+        self._manual_trace(f"chord {action}")
+        if action == "toggle":
+            self._toggle_manual_playback()
+        elif action == "slower":
+            self._adjust_speed_dir(-1)
+        elif action == "faster":
+            self._adjust_speed_dir(1)
+
+    def _report_hotkey_failure(self):
+        """Tell the user when the play/pause chord could not be taken."""
+        if self._hotkey_status.get("toggle"):
+            return
+        error = self._hotkeys.errors.get("toggle")
+        detail = ("Another application is already using it."
+                  if error == hk.ERROR_HOTKEY_ALREADY_REGISTERED
+                  else "Windows would not register it.")
+        notice = NoticeDialog(
+            self, title="Global keys", dark=self._dark_theme,
+            body=(f"{self._hotkey_toggle} could not be registered.\n\n"
+                  f"{detail}\n\nManual mode still works while Notch has "
+                  "focus. Choose a different combination in Setup."))
+        # Shown, never exec_()ed: this can be raised from inside a menu
+        # teardown, and a nested event loop there is both unnecessary and
+        # unstable. Window-modal keeps the reader behind it inert.
+        notice.setWindowModality(Qt.WindowModal)
+        self._hotkey_notice = notice
+        notice.finished.connect(
+            lambda _result: setattr(self, "_hotkey_notice", None))
+        notice.show()
 
     def _mode_status_text(self) -> str:
         """One line of state, without repeating the number in the row below."""
@@ -2508,6 +2787,16 @@ class NotchOverlay(QWidget):
             (getattr(menu, "_manual_btn", None), not self._voice_mode),
         ):
             if btn is not None:
+                btn.blockSignals(True)
+                btn.setChecked(checked)
+                btn.blockSignals(False)
+        # Setup can change the global-keys state while the menu is still
+        # open; keep the row showing what is actually registered.
+        if hasattr(menu, "_global_off_btn"):
+            on_now = (self._hotkeys_enabled
+                      and self._hotkey_consent == "granted")
+            for btn, checked in ((menu._global_off_btn, not on_now),
+                                 (menu._global_on_btn, on_now)):
                 btn.blockSignals(True)
                 btn.setChecked(checked)
                 btn.blockSignals(False)
@@ -2930,6 +3219,7 @@ class NotchOverlay(QWidget):
             return
         if self._manual_running:
             self._manual_running = False
+            self._manual_trace("paused")
             return
         bar = self._text_edit.verticalScrollBar()
         if bar.value() >= bar.maximum():
@@ -2942,6 +3232,33 @@ class NotchOverlay(QWidget):
             self._apply_highlight(-1)
         self._manual_scroll_accum = 0.0
         self._manual_running = True
+        self._manual_trace("started")
+
+    def _manual_trace(self, event: str):
+        """One line about Manual playback, when NOTCH_MANUAL_TRACE is set.
+
+        The packaged build has no console and is invisible to screen capture,
+        so this is how a run of the installed app can be checked from outside:
+        start it, press the chord, and read the offset it actually reached.
+        """
+        if not _MANUAL_TRACE:
+            return
+        try:
+            bar = self._text_edit.verticalScrollBar()
+            line = (f"[Notch] manual {event} scroll={bar.value()}"
+                    f" of {bar.maximum()} wpm={self._manual_wpm}")
+            if getattr(sys, "frozen", False):
+                log_dir = os.path.dirname(sys.executable)
+            else:
+                log_dir = os.path.join(
+                    os.getenv("LOCALAPPDATA") or os.path.expanduser("~"),
+                    "Notch")
+            os.makedirs(log_dir, exist_ok=True)
+            with open(os.path.join(log_dir, "notch.log"), "a",
+                      encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        except OSError:
+            pass
 
     def _start_speed_feedback_fade_out(self):
         self._speed_feedback_fade_out.start()
@@ -3534,17 +3851,33 @@ class NotchOverlay(QWidget):
     def _show_help(self):
         """Open the How to use Notch guide (same as first-time popup)."""
         HelpDialog(self, dark=self._dark_theme).exec_()
+        QTimer.singleShot(0, self._focus_reader)
 
     def _open_settings(self):
         self._stop_listening()
         dlg = SettingsDialog(self._device_index, self._noise_gate, self._input_gain,
-                             self.MODEL_PATH, self, dark=self._dark_theme)
+                             self.MODEL_PATH, self, dark=self._dark_theme,
+                             hotkeys_enabled=self._hotkeys_enabled,
+                             hotkey_toggle=self._hotkey_toggle,
+                             hotkey_status=self._hotkey_status)
         if dlg.exec_():
             self._device_index = dlg.selected_device
             self._noise_gate = dlg.noise_gate
             self._input_gain = dlg.input_gain
+            if dlg.hotkeys_changed:
+                self._hotkeys_enabled = dlg.hotkeys_enabled
+                self._hotkey_toggle = dlg.hotkey_toggle
+                if self._hotkeys_enabled:
+                    # Enabling it in Setup is the same explicit consent as
+                    # the menu row.
+                    self._hotkey_consent = "granted"
+                listening = self._apply_global_hotkeys()
+                if (self._hotkeys_enabled and not listening
+                        and not self._voice_mode):
+                    self._report_hotkey_failure()
             self._schedule_save()
         if self._voice_mode: self._start_listening()
+        QTimer.singleShot(0, self._focus_reader)
 
     def keyPressEvent(self, event: QKeyEvent):
         key = event.key()
@@ -3698,6 +4031,8 @@ class NotchOverlay(QWidget):
         if self._prev_voice_mode and not self._edit_target:
             self._voice_mode = True
             self._start_listening()
+        # Back in the reader: Space and the arrows belong to the script again.
+        QTimer.singleShot(0, self._focus_reader)
 
     def _toggle_edit_mode(self):
         """Switch between the reader pill and the editor card.
@@ -3796,6 +4131,10 @@ class NotchOverlay(QWidget):
         # Without this the toolbar only recedes after the pointer has moved;
         # launching with the cursor elsewhere left it on screen for good.
         self._idle_timer.start()
+        # System-wide chords, if the user granted them on a previous run.
+        # Nothing is taken from another application here: the window is only
+        # shown, and Voice mode releases any registered chords itself.
+        self._apply_global_hotkeys()
 
     # ═══════════════════════════════════════════════════════════════════
     #  Session persistence (script + sticky notes)
@@ -3922,6 +4261,8 @@ class NotchOverlay(QWidget):
         # A closed note is a deliberate deletion, not a state the backup may
         # undo if the primary file is later unreadable.
         self._save_state(purge_backup=True)
+        # With the note gone the reader is the surface that owns the keys.
+        QTimer.singleShot(0, self._focus_reader)
 
     def _detach_notes(self, persist: bool = False) -> int:
         """Close every note, optionally removing its saved copy as well.
@@ -4021,6 +4362,11 @@ class NotchOverlay(QWidget):
             # Saved so a deliberate opt-in survives a relaunch. A fresh
             # install has nothing here and therefore stays off.
             "head_tracking": bool(self._head_wanted),
+            # System-wide Manual controls: consent is stored separately from
+            # the enabled flag so turning the keys off does not ask again.
+            "hotkey_consent": self._hotkey_consent,
+            "hotkeys_enabled": bool(self._hotkeys_enabled),
+            "hotkey_toggle": self._hotkey_toggle,
         }
 
     def _restore_settings(self):
@@ -4109,6 +4455,17 @@ class NotchOverlay(QWidget):
         # leaves it off (see _poll_head_tracking).
         if isinstance(data.get("head_tracking"), bool):
             self._head_wanted = data["head_tracking"]
+
+        # Global keys are restored only with the consent that was given for
+        # them. A hand-edited file cannot turn on a system-wide listener
+        # without "granted", and an unknown chord falls back to the default.
+        consent = data.get("hotkey_consent")
+        if consent in ("granted", "declined"):
+            self._hotkey_consent = consent
+        if data.get("hotkey_toggle") in hk.TOGGLE_CHOICES:
+            self._hotkey_toggle = data["hotkey_toggle"]
+        if isinstance(data.get("hotkeys_enabled"), bool):
+            self._hotkeys_enabled = data["hotkeys_enabled"]
 
         self._text_edit.setFont(self._text_font())
         self._apply_read_mode_style()
@@ -4283,6 +4640,9 @@ class NotchOverlay(QWidget):
         # Notes are about to be cleared. A later shutdown flush must not write
         # that empty list over the state just saved.
         self._save_enabled = False
+        # Windows keeps a registered chord until the process releases it, and
+        # the native filter must not outlive the window.
+        self._hotkeys.shutdown()
         self._close_all_notes()
         self._scroll_timer.stop()
         self._stop_listening()

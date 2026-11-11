@@ -415,8 +415,24 @@ def main():
               f"{win._chrome_opacity.opacity():.2f}")
 
 
+    # ── Manual mode playback ─────────────────────────────────────────
+    # Space is a window shortcut: a reader that lost activation dropped it
+    # without a word while the microphone kept working, so Manual looked
+    # dead next to Voice once the menu, Help or Setup had closed. The
+    # activation half of that is checked offscreen in check_behavior (a real
+    # desktop can move focus mid-run); what is measured here is the playback.
     win._wake_chrome()
     win._voice_mode = False
+    win._manual_running = False
+    QTest.qWait(120)
+    bar.setValue(0)
+    QTest.keyClick(win._text_edit.viewport(), Qt.Key_Space)
+    QTest.qWait(400)
+    check("Space starts Manual playback", win._manual_running)
+    check("Manual playback moves the script", bar.value() > 0,
+          f"scroll={bar.value()}")
+    win._manual_running = False
+
     win.close()
     print()
     if failures:

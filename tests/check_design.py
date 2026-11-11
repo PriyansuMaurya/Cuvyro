@@ -42,6 +42,9 @@ sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)
 
 FIXTURE = os.path.join(REPO_ROOT, "tests", "fixtures", "demo-script.txt")
+# The right-click panel is a panel, not a page: seven setting rows plus the
+# script and action rows have to fit a 768 px work area beside the reader.
+PANEL_HEIGHT_BUDGET = 400
 failures = []
 
 
@@ -470,11 +473,15 @@ def main():
           spots[0].x() == menu.width() - (spots[2].x() + widths[2]),
           f"left {spots[0].x()}, "
           f"right {menu.width() - (spots[2].x() + widths[2])}")
+    # The panel has to stay a panel, not become a page: one row per designed
+    # setting, and a ceiling that still fits a 768 px work area next to the
+    # reader with room to spare. The Global keys row is the seventh setting
+    # and is what moved the panel off its old 350 px ceiling.
     check("the three actions cost one row of panel height",
           plates[0].height() <= item_height + 1
-          and menu.sizeHint().height() < 351,
+          and menu.sizeHint().height() <= PANEL_HEIGHT_BUDGET,
           f"row {plates[0].height()} vs item {item_height}, "
-          f"panel {menu.sizeHint().height()} px")
+          f"panel {menu.sizeHint().height()} px of {PANEL_HEIGHT_BUDGET}")
 
     # ── The value rows share one right edge ───────────────────────
     # Speed, size and typeface all end their control on the panel's inner

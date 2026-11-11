@@ -33,7 +33,21 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_head_tracking.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/profile_reading.py
 .venv/Scripts/python.exe tests/check_design.py      # needs a real display
 .venv/Scripts/python.exe tests/check_quality.py     # needs a real display
+.venv/Scripts/python.exe tests/check_hotkeys.py     # needs Windows and a real display
 ```
+
+`tests/check_hotkeys.py` registers the real system-wide chords and presses them
+with OS-level keyboard events while another application owns the foreground, so
+it needs Windows: `RegisterHotKey` is an operating-system service. It checks
+delivery, focus preservation, conflict reporting (error 1409), the Voice-mode
+no-op, and release on close.
+
+`tests/verify_installed.py` does the same against the exe the installer
+produced (rebuild with `build-installer.bat`, install it, then run the check).
+It backs up and restores the reader's saved state around the run. Because the
+reader excludes itself from screen capture, the scroll offset comes from
+`NOTCH_MANUAL_TRACE=1`, which makes the app append one line per Manual start
+and pause to `notch.log` beside the executable; nothing is written without it.
 
 `tests/check_speech_engine.py` decodes real audio through the installed model
 and reports SKIP when `model/` has none. `tests/bench_speech_engines.py` is the

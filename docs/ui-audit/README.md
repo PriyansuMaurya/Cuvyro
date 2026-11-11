@@ -126,6 +126,8 @@ from the same machine, with the checks in `tests/check_robustness.py`:
 | Note saved on a removed monitor | invisible | **clamped, text kept** |
 | Windows-encoded `.txt` | silently ignored | **cp1252/BOM decode, errors shown** |
 | Space in the editor | consumed by the reader shortcut | **types a space; arrows move the caret** |
+| Manual mode while another app has focus | dead: Space and the arrows are window-scoped, so they went to the app in front, which is exactly when Manual is used | **system-wide chords, opt-in; the window keys still work when Notch has focus** |
+| Manual mode after the menu, Help or Setup closes | keyboard left with the window behind | **the reader asks for activation back, and never takes it from another application** |
 | Speech shading per advance (3,360 words) | 5.3 ms | **0.13 ms** |
 | Setup construction, input devices | 780 ms (10 devices) | **2.4 ms median (17 devices)**, no probe streams; meter starts after paint |
 | Help / Setup in the light theme | charcoal | **paper surface** |
@@ -165,6 +167,45 @@ clauses, stray-word rejection, 100 ms cadence, partial and final latency
 budgets, and speed adaptation in both directions, alongside the existing
 slow/normal/fast delivery, pauses, 17 font sizes × 6 families, and five
 viewport widths.
+
+## Focus and system-wide Manual keys (fourth pass)
+
+Manual mode was reported dead during presentations. It was: every Manual
+control is a window-scoped shortcut, so it only exists while Notch owns the
+keyboard, and presenting means another application does. Voice kept working
+because the microphone needs no focus.
+
+| Finding | Before | After |
+|---|---|---|
+| `Space` with Chrome focused | delivered to Chrome; `_manual_running` stayed False, scroll 0 | **`Ctrl+Shift+Space` starts Manual; scroll advanced 17–18 px on a real key press, foreground unchanged** |
+| Speed while another app is focused | window-scoped arrows only | **`Ctrl+Alt+Left / Right` change the pace from anywhere (150 → 160 wpm measured)** |
+| Registration failure | silent | **reported per chord; error 1409 means another application owns it** |
+| Voice mode | — | **releases every chord and ignores them (`voice_wpm` 60 → 60 across a chord press)** |
+| Closing the reader | — | **all three chords released; a fresh `RegisterHotKey` on the same window succeeds** |
+| Consent | — | **the right-click menu's Global keys Off/On row, plus Setup; nothing is registered until it is switched on** |
+
+Chord choice came out of measurement, not taste. Two combinations that look
+obvious do not work on Windows:
+
+- `Ctrl+Alt+Space` is read by the foreground application as `Alt+Space`, so
+  it flashes that window's menu / the task switcher. The toggle is
+  `Ctrl+Shift+Space` for that reason.
+- `Ctrl+Shift+Left/Right` registers successfully and then never delivers
+  `WM_HOTKEY`, so it would look live and do nothing. The speed chords are
+  `Ctrl+Alt+arrows`, which do deliver and never open a menu.
+
+The reader no longer reaches for the foreground at all: `_focus_reader()`
+only asks for activation after Notch's own menu, Help or Setup closes, and it
+declines while a note, dialog, the editor or the pill is active. Nothing is
+attached to another application's input queue.
+
+Sticky-note placement was also unstable at 800×600: random coordinates
+fragmented the space until the fourth note covered the first (3 failures in 8
+runs). Placement is now a bounded, anchored lattice — cells are at least one
+note plus 8 px apart, so two chosen notes cannot overlap — with a bounded fine
+sweep for small screens and a deterministic fallback when a screen is full.
+Measured: four notes fit 800×600 for every one of 50 seeds, and the whole
+placement check passed 20 runs in a row.
 
 Known limits of this pass:
 

@@ -28,7 +28,9 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)
 
-from note_placement import choose_position  # noqa: E402
+from note_placement import (  # noqa: E402
+    GRID_LIMIT, _candidate_points, choose_position,
+)
 
 failures = []
 NOTE_SIZE = QSize(260, 165)
@@ -119,6 +121,36 @@ def main():
     second = place([], seed=2)
     check("placement is random, not a fixed corner", first != second,
           f"{first} vs {second}")
+
+    # A small work area is the case that used to flake: random candidates
+    # fragmented the space and the fourth note covered the first. Anchored
+    # cells must fit four notes on 800x600 for every seed.
+    small = [QRect(0, 0, 800, 600)]
+    fits = True
+    for seed in range(50):
+        placed = []
+        for _ in range(4):
+            placed.append(QRect(place(placed, areas=small, seed=seed),
+                                NOTE_SIZE))
+        if any(overlapping(a, b) for i, a in enumerate(placed)
+               for b in placed[i + 1:]):
+            fits = False
+            break
+    check("four notes fit an 800x600 desktop without overlap, any seed", fits)
+
+    # When nothing is free the fallback must be stable: the same desktop
+    # cannot put the note somewhere new on every launch.
+    buried = [QRect(0, 0, 800, 600)]
+    full_first = place(buried, areas=small, seed=1)
+    full_second = place(buried, areas=small, seed=2)
+    check("a full desktop lands on the same corner",
+          full_first == full_second, f"{full_first} vs {full_second}")
+
+    # The anchored search must stay bounded even for an 8K work area and a
+    # small note, where the raw lattice is far larger than the cap.
+    wide = _candidate_points(QRect(0, 0, 7680, 4320), QSize(60, 40))
+    check("the placement search is bounded", len(wide) <= GRID_LIMIT,
+          f"{len(wide)} candidates, cap {GRID_LIMIT}")
 
     # ── Essential controls are hard obstacles ────────────────────────
     rail = [QRect(1540, 420, 44, 200), QRect(1540, 620, 44, 120)]

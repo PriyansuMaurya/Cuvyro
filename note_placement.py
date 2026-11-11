@@ -2,11 +2,14 @@
 
 A note used to open in a fixed cascade: beside the reader, then 24 DIP
 down-right of the previous one. Two notes filled that cascade with overlaps
-and a third could land over the reader's controls. Placement is now a small
-search over the desktop's work areas: random candidates, scored so the chosen
-spot never covers another note or an essential control, stays inside the work
-area, prefers the screen the reader is on, and keeps its distance from the
-notes already open so the desktop does not turn into one stack.
+and a third could land over the reader's controls. Placement is now a bounded search
+over the desktop's work areas: an anchored lattice of note-sized cells,
+scored so the chosen spot never covers another note or an essential control,
+stays inside the work area, prefers the screen the reader is on, and keeps
+its distance from the notes already open so the desktop does not turn into
+one stack. Because the cells are at least one note plus clearance apart, two
+notes picked from the lattice cannot overlap, and the remaining cells stay
+usable for the next note instead of being fragmented by random coordinates.
 
 The search is deliberately self-contained: it takes rectangles in, returns a
 point, and touches no widgets. That keeps it testable without a display and
@@ -24,13 +27,15 @@ EDGE_MARGIN = 10
 # essential control. Zero overlap is not enough: two windows touching read as
 # one slab.
 CLEARANCE = 8
-# Random candidates per work area. Enough that the landing spot moves between
-# launches, few enough that a crowded desktop still scores in microseconds.
-SAMPLES = 64
-# Lattice step used only when no random candidate was clear. A small display
+# Upper bound on candidates examined. The anchored lattice is already small
+# (one cell per note-sized slot); this keeps a pathological work area or a
+# tiny note from making the search unbounded.
+GRID_LIMIT = 4096
+# Lattice step used only when no anchored cell was clear. A small display
 # with several notes already open can lose every coarse slot; a 16 px sweep
-# finds the gap between them when one exists.
+# finds the gap between them when one exists, and is itself bounded.
 FINE_STEP = 16
+FINE_LIMIT = 10000
 
 
 def _inset(area: QRect) -> QRect:
@@ -65,13 +70,14 @@ def _separation(rect: QRect, others) -> int:
     return best
 
 
-def _candidate_points(area: QRect, size: QSize, rng: random.Random,
-                      samples: int) -> list:
-    """Places the top-left corner could go, random plus a coarse lattice.
+def _grid_points(area: QRect, size: QSize, step_x: int, step_y: int,
+                 limit: int) -> list:
+    """Every top-left corner on a bounded lattice inside ``area``.
 
-    The random samples are what make the placement feel alive. The lattice is
-    the safety net: on a desktop already crowded with notes the random samples
-    keep missing the one free slot, and the grid does not.
+    The far edge is only appended when it is at least one step away from the
+    previous row or column. Appending it otherwise would put two adjacent
+    candidates closer than the clearance, and the anchor's whole promise is
+    that two notes chosen from this set cannot overlap.
     """
     max_x = area.right() - size.width() + 1
     max_y = area.bottom() - size.height() + 1
@@ -80,50 +86,39 @@ def _candidate_points(area: QRect, size: QSize, rng: random.Random,
         # whole; the caller clamps it to the screen afterwards.
         return [(area.left(), area.top())]
 
-    span_x = max_x - area.left()
-    span_y = max_y - area.top()
-    points = [
-        (area.left(), area.top()),
-        (max_x, area.top()),
-        (area.left(), max_y),
-        (max_x, max_y),
-    ]
-    for _ in range(max(0, samples)):
-        points.append((area.left() + rng.randint(0, span_x),
-                       area.top() + rng.randint(0, span_y)))
+    step_x = max(1, step_x)
+    step_y = max(1, step_y)
+    xs = list(range(area.left(), max_x + 1, step_x))
+    if xs[-1] != max_x and max_x - xs[-1] >= step_x:
+        xs.append(max_x)
+    ys = list(range(area.top(), max_y + 1, step_y))
+    if ys[-1] != max_y and max_y - ys[-1] >= step_y:
+        ys.append(max_y)
 
-    step_x = max(1, size.width() // 2)
-    step_y = max(1, size.height() // 2)
-    x = area.left()
-    while x <= max_x:
-        y = area.top()
-        while y <= max_y:
-            points.append((x, y))
-            y += step_y
-        points.append((x, max_y))
-        x += step_x
-    for y in range(area.top(), max_y + 1, step_y):
-        points.append((max_x, y))
-
-    return list(dict.fromkeys(points))
-
-
-def _lattice(area: QRect, size: QSize, step: int) -> list:
-    """Every corner on a ``step`` lattice, clipped to the work area."""
-    max_x = area.right() - size.width() + 1
-    max_y = area.bottom() - size.height() + 1
-    if max_x < area.left() or max_y < area.top():
-        return [(area.left(), area.top())]
-    points = []
-    for x in range(area.left(), max_x + 1, max(1, step)):
-        for y in range(area.top(), max_y + 1, max(1, step)):
-            points.append((x, y))
+    points = [(x, y) for x in xs for y in ys]
+    if len(points) > limit:
+        # Thin evenly rather than truncate: the tail of the list is the
+        # bottom of the screen, and losing it would bias every placement up.
+        stride = (len(points) + limit - 1) // limit
+        points = points[::stride]
     return points
 
 
+def _candidate_points(area: QRect, size: QSize) -> list:
+    """The anchored note-sized cells across ``area``."""
+    return _grid_points(area, size, size.width() + CLEARANCE,
+                        size.height() + CLEARANCE, GRID_LIMIT)
+
+
 def _best_candidate(points, area: QRect, size: QSize, notes, hard, soft,
-                    preferred: QRect | None, rng: random.Random):
-    """Score ``points``; returns ``(key, rect)`` for the best one."""
+                    preferred: QRect | None, rng: random.Random,
+                    randomize: bool = True):
+    """Score ``points``; returns ``(key, rect)`` for the best one.
+
+    With ``randomize`` off the final tie-break is a constant, so equal
+    candidates resolve by list order. That is what makes the crowded-desktop
+    fallback reproducible instead of moving a little on every launch.
+    """
     elsewhere = 0 if preferred is not None and area == preferred else 1
     best_key = None
     best = None
@@ -139,7 +134,7 @@ def _best_candidate(points, area: QRect, size: QSize, notes, hard, soft,
             hard_hit,
             soft_hit,
             -_separation(candidate, notes),  # spread out
-            rng.random(),              # break ties unpredictably
+            rng.random() if randomize else 0.0,  # break ties unpredictably
         )
         if best_key is None or key < best_key:
             best_key = key
@@ -149,8 +144,7 @@ def _best_candidate(points, area: QRect, size: QSize, notes, hard, soft,
 
 def choose_position(size: QSize, areas, notes=(), controls=(), avoid=(),
                     preferred: QRect | None = None,
-                    rng: random.Random | None = None,
-                    samples: int = SAMPLES) -> QPoint:
+                    rng: random.Random | None = None) -> QPoint:
     """Pick a top-left corner for a ``size`` note.
 
     ``areas`` are the screens' available (work-area) rectangles, ``notes`` the
@@ -178,28 +172,36 @@ def choose_position(size: QSize, areas, notes=(), controls=(), avoid=(),
     preferred = QRect(preferred) if preferred is not None else None
 
     rooms = [QRect(area) for area in areas if not QRect(area).isEmpty()]
-    best_key = None
-    best = None
-    for area in rooms:
-        points = _candidate_points(_inset(area), size, rng, samples)
-        key, candidate = _best_candidate(points, area, size, notes, hard,
-                                         soft, preferred, rng)
-        if key is not None and (best_key is None or key < best_key):
-            best_key, best = key, candidate
 
-    # The coarse candidates are for feel; they are not exhaustive. When the
-    # best they found still covers something, sweep the work area finely
-    # before accepting an overlap: on a small display with a few notes open,
-    # the free gap is real but easy for random samples to step over.
-    if best is not None and best_key[0]:
+    def best_of(points_for, randomize):
         best_key = None
         best = None
         for area in rooms:
-            points = _lattice(_inset(area), size, FINE_STEP)
+            points = points_for(_inset(area))
             key, candidate = _best_candidate(points, area, size, notes, hard,
-                                             soft, preferred, rng)
+                                             soft, preferred, rng, randomize)
             if key is not None and (best_key is None or key < best_key):
                 best_key, best = key, candidate
+        return best_key, best
+
+    # 1. Anchored cells: clear ones cannot overlap each other, and choosing
+    #    among them keeps the rest of the screen usable. The randomness is
+    #    the choice of cell, not a random coordinate.
+    best_key, best = best_of(lambda area: _candidate_points(area, size), True)
+
+    # 2. No clear anchored cell: sweep finely for a gap the lattice stepped
+    #    over (a small display with several notes already open).
+    if best is not None and best_key[0]:
+        best_key, best = best_of(
+            lambda area: _grid_points(area, size, FINE_STEP, FINE_STEP,
+                                      FINE_LIMIT),
+            True)
+
+    # 3. Display genuinely full: the smallest overlap, resolved in a fixed
+    #    order, so the same desktop produces the same corner every launch.
+    if best is not None and best_key[0]:
+        best_key, best = best_of(
+            lambda area: _candidate_points(area, size), False)
 
     if best is None:
         # A platform that reports no screens at all. The caller still has to

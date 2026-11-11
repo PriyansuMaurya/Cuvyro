@@ -67,7 +67,7 @@ No cloud. No API keys. No uploading your script or voice.
 ### Modes
 
 - **Voice mode**: Voice Follow stays active while you speak, helping the script track your delivery.
-- **Manual mode**: Scroll at a controlled pace when you prefer a fixed rhythm instead of speech-driven movement.
+- **Manual mode**: Scroll at a controlled pace when you prefer a fixed rhythm instead of speech-driven movement. `Space` and the arrow keys work while Notch has the keyboard; switch **Global keys** on in the right-click menu (or Setup) and `Ctrl+Shift+Space` starts or pauses from any application, with `Ctrl+Alt+Left / Right` for the pace, without taking focus away from what you are presenting in.
 
 ---
 
@@ -76,6 +76,11 @@ No cloud. No API keys. No uploading your script or voice.
 Notch is built for local-first use. Audio processing happens on your machine, and the app is designed around offline teleprompting rather than cloud transcription workflows.
 
 Speech recognition runs from a model on disk (sherpa-onnx with a Silero voice-activity detector, or a local Vosk model as the fallback). There is no network path for microphone audio, transcripts or your script: `tests/check_speech_engine.py` fails if loading or decoding tries to open a socket.
+
+Global keys are **off by default** and opt-in. When switched on, Notch registers three 
+chords with Windows and does nothing else with the keyboard: no key is logged, 
+recorded or sent anywhere, and the chords are released when the mode changes to 
+Voice, when the setting is switched off, and when the app exits.
 
 Optional head tracking is **off by default** and experimental. When switched on it reads the webcam through MediaFoundation's shared mode where available, at 320×240 and 15 fps, so a video call can usually keep the camera. Frames are inspected in memory for a face position and then discarded: nothing is recorded, written or sent anywhere. Only two numbers leave that worker. Turning it off releases the camera immediately.
 
