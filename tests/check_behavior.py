@@ -131,6 +131,17 @@ def main():
     check("the controls recede after three seconds of stillness",
           win._chrome_opacity.opacity() < 0.01,
           f"opacity {win._chrome_opacity.opacity():.2f}")
+    # Moving onto the rail is movement too: a control that has faded out has
+    # to come back under the pointer before it can be clicked.
+    QTest.mouseMove(win._note_btn, QPoint(win._note_btn.width() // 2,
+                                          win._note_btn.height() // 2))
+    QTest.qWait(300)
+    check("moving onto a floating control restores the rail",
+          win._chrome_opacity.opacity() > 0.99,
+          f"opacity {win._chrome_opacity.opacity():.2f}")
+    win._recede_chrome()
+    QTest.qWait(300)
+
     # Moving over the script counts as movement: the type covers the window.
     QTest.mouseMove(win._text_edit.viewport(),
                     QPoint(win._text_edit.viewport().width() // 2, 40))

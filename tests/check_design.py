@@ -8,9 +8,9 @@ surface drifts back:
   * the script runs the full height of the card, fully opaque, with no fade
     or blur, and opens 30% down so its first line clears the floating
     controls; the opening lead then scrolls away with the type,
-  * the controls keep the exact position and size they had, only without a
-    header bar behind them, and each one carries a rounded opaque plate that
-    lifts its glyph off the script and hides the words passing under it,
+  * the four controls float in a transparent vertical rail outside the
+    card's right edge, centred with equal gaps, each a circular button with
+    its own shadow and no connecting panel;
   * the resting pill carries a visible level meter instead of being empty,
   * the narrow reader no longer sets type below 8 pt,
   * the editor reserves a strip so its last line never runs under Done,
@@ -112,7 +112,7 @@ def main():
         # Fully opaque in both themes: a surface, not a transparent pane. The
         # text behind it must not be readable, so transparency stays in the
         # floating chrome alone; the type itself is opaque.
-        centre_alpha = image.pixelColor(win.width() // 2, win.height() // 2).alpha()
+        centre_alpha = image.pixelColor(win._card_width() // 2, win.height() // 2).alpha()
         check(f"{name}: the reader sits on a solid card", centre_alpha == 255,
               f"centre alpha {centre_alpha}")
 
@@ -128,30 +128,36 @@ def main():
         check(f"{name}: voice level line is drawn", meter != fill,
               f"meter {meter} vs fill {fill}")
 
-    # The controls float where they always did, with no bar around them.
-    s = win._scale
-    expected = {
-        "minimize": (int(18 * s), int(4 * s)),
-        "note": None,  # right-aligned cluster, checked below
-    }
-    close_at = win._close_btn.mapTo(win, QPoint(0, 0))
-    check("the minimize control keeps its exact position",
-          (close_at.x(), close_at.y()) == expected["minimize"],
-          f"{close_at.x()},{close_at.y()} vs {expected['minimize']}")
-    right = win._compact_btn.mapTo(win, QPoint(0, 0)).x() + win._compact_btn.width()
-    check("the icon cluster keeps its right inset",
-          abs(right - (win.width() - int(18 * s))) <= 1,
-          f"right edge {right} vs {win.width() - int(18 * s)}")
-    tops = {btn.mapTo(win, QPoint(0, 0)).y() for btn in
-            (win._close_btn, win._note_btn, win._mic_btn,
-             win._compact_btn)}
-    check("every control keeps the same baseline", tops == {int(4 * s)},
-          f"y offsets {sorted(tops)}")
+    # The controls are a floating column outside the card, not a toolbar on
+    # it. Every button shares one x, the gaps are equal, and the whole group
+    # is centred on the card's height.
+    card = win._card_width()
+    plates = [win._close_btn, win._note_btn, win._mic_btn, win._compact_btn]
+    spots = [b.mapTo(win, QPoint(0, 0)) for b in plates]
+    widths = [b.width() for b in plates]
+    heights = [b.height() for b in plates]
+    gaps = [spots[i + 1].y() - (spots[i].y() + heights[i])
+            for i in range(len(plates) - 1)]
+    group_top, group_bottom = spots[0].y(), spots[-1].y() + heights[-1]
+    check("the four controls form one vertical rail",
+          len({p.x() for p in spots}) == 1
+          and all(a.y() < b.y() for a, b in zip(spots, spots[1:])),
+          f"x {[p.x() for p in spots]}, y {[p.y() for p in spots]}")
+    check("the rail is centred with equal gaps",
+          max(gaps) - min(gaps) <= 1
+          and abs((group_top + group_bottom) / 2.0 - win.height() / 2.0) <= 1.5,
+          f"gaps {gaps}, group {group_top}..{group_bottom} in {win.height()}")
+    check("the rail clears the reading surface",
+          min(p.x() for p in spots) >= card + int(4 * win._scale)
+          and max(p.x() + w for p, w in zip(spots, widths)) <= win.width(),
+          f"card {card}, buttons {[p.x() for p in spots]}")
+    view = win._text_edit.viewport().mapTo(win, QPoint(0, 0))
+    check("no word can run under a control",
+          view.x() + win._text_edit.viewport().width() <= card,
+          f"text ends {view.x() + win._text_edit.viewport().width()}, card {card}")
 
-    # Each control carries its own plate: a rounded solid with a hairline.
-    # Sampled inside the plate, below the glyph, in both themes: it has to be
-    # a visible step off the card, and (see below) it has to hide what passes
-    # behind it.
+    # Each button is a circle, not a square or a plate: the corners of the
+    # hit box stay transparent while the middle carries the fill.
     for dark in (True, False):
         win._dark_theme = dark
         win._apply_read_mode_style()
@@ -159,23 +165,40 @@ def main():
         win.update()
         QTest.qWait(80)
         image = win.grab().toImage()
-        fill = pixel(image, 12, 60)
         name = "dark" if dark else "light"
-        drifts = {}
+        round_ok = True
+        detail = []
         for label, btn in (("minimize", win._close_btn), ("note", win._note_btn),
                            ("mic", win._mic_btn), ("width", win._compact_btn)):
             at = btn.mapTo(win, QPoint(0, 0))
-            # The material, not the glyph: a filled glyph (the microphone)
-            # reaches into the sampled band, so the band's most common colour
-            # is the plate and whatever is left is ink.
-            band = [pixel(image, at.x() + btn.width() / 2 + dx,
-                          at.y() + btn.height() - 8 + dy)
-                    for dx in (-4, -2, 0, 2, 4) for dy in (0, 1, 2)]
-            sample = max(set(band), key=band.count)
-            drifts[label] = max(abs(a - b) for a, b in zip(sample, fill))
-        check(f"{name}: every control sits on its own plate",
-              all(6 <= value <= 40 for value in drifts.values()),
-              f"plate drift {drifts} levels from card {fill}")
+            corner = image.pixelColor(at.x() + 1, at.y() + 1).alpha()
+            fill = image.pixelColor(at.x() + btn.width() // 2,
+                                    at.y() + btn.height() - 6)
+            if corner > 60 or fill.alpha() < 200:
+                round_ok = False
+            detail.append(f"{label} corner {corner}, fill a{fill.alpha()}")
+        check(f"{name}: every control is a filled circle", round_ok,
+              "; ".join(detail))
+
+    # The circle floats on its own shadow; the shadow lives inside the hit
+    # box, so it cannot become a connecting bar between controls.
+    note_at = win._note_btn.mapTo(win, QPoint(0, 0))
+    shadow = image.pixelColor(note_at.x() + win._note_btn.width() // 2,
+                              note_at.y() + win._note_btn.height() - 1).alpha()
+    check("each circle carries a soft shadow",
+          8 <= shadow <= 120, f"shadow alpha {shadow}")
+
+    # Hover is a spring, not a switch: the button lifts, then settles back.
+    probe = win._close_btn
+    probe._set_hover(True)
+    QTest.qWait(180)
+    raised = probe._hover_spring.value
+    probe._set_hover(False)
+    QTest.qWait(300)
+    rested = probe._hover_spring.value
+    check("hover lifts the button on a soft spring",
+          raised > 0.6 and rested < 0.2,
+          f"raised {raised:.2f}, rested {rested:.2f}")
 
     # ── The plates are opaque ────────────────────────────────────
     # A control is opaque when the surface behind it cannot change its
@@ -198,7 +221,7 @@ def main():
                              7 + plate.height() - 5))
         host.close()
         host.deleteLater()
-    check("a control's plate hides whatever is behind it",
+    check("a control's circle holds its glyph over any backdrop",
           samples[0] == samples[1],
           f"{samples[0]} on black, {samples[1]} on white")
 
@@ -209,7 +232,7 @@ def main():
     QTest.qWait(50)
     image = win.grab().toImage()
     fill = pixel(image, 12, 60)
-    body_ink = ink_count(image, (20, 34, win.width() - 20, 110), fill)
+    body_ink = ink_count(image, (20, 34, win._card_width() - 20, 110), fill)
     check("script text is rendered in the window", body_ink > 80, f"{body_ink} ink px")
 
     # The reader is a plain, fully opaque text column: the viewport spans the
@@ -252,7 +275,7 @@ def main():
     QTest.qWait(60)
     reading = win._line_spans[reading_index]
     line_top = reading.top - bar.value()
-    check("the reading line sits below the controls and above the middle",
+    check("the reading line keeps clear air above it and sits above the middle",
           win._chrome_strip() - 1 <= line_top <= win.height() * 0.6,
           f"line top {line_top:.1f}, chrome {win._chrome_strip()}, "
           f"window {win.height()}")
@@ -262,9 +285,17 @@ def main():
     QTest.qWait(700)
     check("narrow reader sets type at 8 pt or larger",
           win._font_size >= 8, f"font size {win._font_size}")
+    narrow_buttons = [win._close_btn, win._note_btn, win._mic_btn,
+                      win._compact_btn]
+    narrow_spots = [b.mapTo(win, QPoint(0, 0)) for b in narrow_buttons]
+    check("the narrow reader keeps all four controls outside it",
+          all(b.isVisible() for b in narrow_buttons)
+          and min(p.x() for p in narrow_spots) >= win._card_width() + 4
+          and len({p.x() for p in narrow_spots}) == 1,
+          f"card {win._card_width()}, x {[p.x() for p in narrow_spots]}")
     narrow = win.grab().toImage()
     narrow_fill = pixel(narrow, 4, 60)
-    narrow_ink = ink_count(narrow, (8, 36, win.width() - 8, 108), narrow_fill)
+    narrow_ink = ink_count(narrow, (8, 36, win._card_width() - 8, 108), narrow_fill)
     check("narrow reader still shows a readable block", narrow_ink > 80,
           f"{narrow_ink} ink px")
     win._toggle_compact_mode()
@@ -276,8 +307,9 @@ def main():
     pill = win.grab().toImage()
     pill_fill = pixel(pill, 10, 6)
     center_top = win.height() // 2 - 8
-    pill_ink = ink_count(pill, (win.width() // 2 - 12, center_top,
-                                win.width() // 2 + 12, center_top + 16), pill_fill)
+    pill_center = win._card_width() // 2
+    pill_ink = ink_count(pill, (pill_center - 12, center_top,
+                                pill_center + 12, center_top + 16), pill_fill)
     check("resting pill shows a level meter", pill_ink > 12, f"{pill_ink} ink px")
     win._restore_from_peek()
     QTest.qWait(700)
@@ -304,14 +336,14 @@ def main():
     QTest.qWait(60)
     first_line_room = win._line_spans[0].top - bar.value()
     # The opening lead belongs to the document, so it scrolls away with the
-    # type instead of clipping the top: the first line clears the controls
-    # at rest, and the foot keeps its room so the last line can still reach
-    # the reading line.
-    check("the script opens 30% down the card, below the controls",
+    # type instead of clipping the top: the first line clears the top edge at
+    # rest, and the foot keeps its room so the last line can still reach the
+    # reading line.
+    check("the script opens 30% down the card, clear of the top edge",
           abs(first_line_room / win._text_edit.viewport().height() - 0.30) <= 0.01
           and first_line_room >= win._chrome_strip() - 1,
           f"first line at {first_line_room:.1f} px of "
-          f"{win._text_edit.viewport().height()}, chrome {win._chrome_strip()}, "
+          f"{win._text_edit.viewport().height()}, top air {win._chrome_strip()}, "
           f"top margin {frame.topMargin():.1f}")
     check("the last line can still reach the reading line",
           reader_margin >= win._text_edit.viewport().height()

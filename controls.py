@@ -4,10 +4,10 @@ The rules these implement:
 
 * Feedback lands on pointer-**down**, not on release. A control that only
   reacts after the click has already been decided feels dead.
-* The hit area is larger than the glyph. 24 px glyphs inside 30 px targets
-  keeps the toolbar quiet without making it fiddly.
+* The hit area is larger than the glyph. 18 px glyphs inside 28 px circles
+  keeps the rail quiet without making it fiddly.
 * Press and hover are separate states with different motion: press is fast
-  and slightly springy, hover is a plain brightness change.
+  and slightly springy, hover lifts and brightens on a softer spring.
 * A keyboard focus ring exists, because a control you can tab to but cannot
   see is not reachable.
 """
@@ -37,22 +37,17 @@ class GlyphButton(QAbstractButton):
                 "focus": "#007AFF"},
     }
 
-    # Plate under each glyph: a solid fill, a hairline, and one lit line along
-    # the top. The script runs under the chrome, so a bare glyph would sit
-    # directly on the words - and the plate used to be low-alpha glass, which
-    # let those words read through the controls. The fill is opaque now, mixed
-    # to the exact value the glass used to blend to over the card, so the
-    # toolbar looks unchanged while nothing shows through it. The hairline and
-    # the lit line stay translucent: they are light catching the material, not
-    # the material itself.
+    # The floating circle each glyph sits on. The rail is outside the card,
+    # so nothing passes behind a control; the fill only has to hold the glyph
+    # against whatever desktop is behind it. Hover and press are blended on
+    # the same fill rather than swapped, so the transition has no step.
     PLATE = {
-        True: {"fill": "#0F0F0F", "hover": "#1C1C1C", "press": "#262626",
-               "edge": (255, 255, 255, 0.10), "lit": (255, 255, 255, 0.17)},
-        False: {"fill": "#F4F4F4", "hover": "#ECECEC", "press": "#E6E6E6",
-                "edge": (0, 0, 0, 0.09), "lit": (255, 255, 255, 0.85)},
+        True: {"fill": "#171719", "hover": "#2A2A2E", "press": "#34343A",
+               "edge": (255, 255, 255, 0.14)},
+        False: {"fill": "#FFFFFF", "hover": "#F1F1F4", "press": "#E6E6EB",
+                "edge": (0, 0, 0, 0.10)},
     }
-    PLATE_INSET = 0.10      # of the hit box, so it tracks the target size
-    PLATE_RADIUS = 0.30     # of the plate: 9 px at a 30 px target
+    PLATE_INSET = 0.13      # of the hit box, leaving room for the shadow
 
     def __init__(self, parent=None, hit: int | None = None):
         super().__init__(parent)
@@ -69,9 +64,13 @@ class GlyphButton(QAbstractButton):
         # the control feels like a physical key. 0 = rest, 1 = fully pressed.
         self._press = Spring(0.0, damping=0.62, response=0.16,
                              rest_value=0.004, rest_velocity=0.35)
-        self._press_clock = QTimer(self)
-        self._press_clock.setInterval(16)
-        self._press_clock.timeout.connect(self._step_press)
+        # Hover lift: slower than press and softly damped, so the button
+        # rises into the pointer instead of popping under it.
+        self._hover_spring = Spring(0.0, damping=0.82, response=0.24,
+                                    rest_value=0.003, rest_velocity=0.03)
+        self._state_clock = QTimer(self)
+        self._state_clock.setInterval(16)
+        self._state_clock.timeout.connect(self._step_state)
         self.setFocusPolicy(Qt.TabFocus)
 
     # ── state plumbing ───────────────────────────────────────────────
@@ -94,33 +93,57 @@ class GlyphButton(QAbstractButton):
             self.update()
             return
         self._press.set_target(target)
-        self._press_clock.start()
+        self._state_clock.start()
 
-    def _step_press(self) -> None:
+    def _set_hover(self, hovering: bool) -> None:
+        self._hover = hovering
+        target = 1.0 if hovering else 0.0
+        if self._reduced:
+            self._hover_spring.jump_to(target)
+            self.update()
+            return
+        self._hover_spring.set_target(target)
+        self._state_clock.start()
+
+    def _step_state(self) -> None:
         self._press.step(1 / 60.0)
-        if self._press.settled:
+        self._hover_spring.step(1 / 60.0)
+        if self._press.settled and self._hover_spring.settled:
             self._press.land()
-            self._press_clock.stop()
+            self._hover_spring.land()
+            self._state_clock.stop()
         self.update()
+
+    @staticmethod
+    def _blend(a: QColor, b: QColor, t: float) -> QColor:
+        """Linear mix, used for every hover/press colour."""
+        t = max(0.0, min(1.0, t))
+        return QColor(
+            int(round(a.red() + (b.red() - a.red()) * t)),
+            int(round(a.green() + (b.green() - a.green()) * t)),
+            int(round(a.blue() + (b.blue() - a.blue()) * t)),
+            int(round(a.alpha() + (b.alpha() - a.alpha()) * t)),
+        )
 
     def _color(self, muted: bool = False) -> QColor:
         table = self.PALETTE[self._dark]
         if muted:
             return QColor(table["muted"])
-        if self._pressed or self._hover:
-            return QColor(table["hover"])
-        return QColor(table["idle"])
+        idle = QColor(table["idle"])
+        lit = QColor(table["hover"])
+        t = self._hover_spring.value
+        if self._pressed:
+            t = 1.0
+        return self._blend(idle, lit, t)
 
     # ── input ────────────────────────────────────────────────────────
     def enterEvent(self, event):
-        self._hover = True
-        self.update()
+        self._set_hover(True)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self._hover = False
+        self._set_hover(False)
         self._set_press(False)
-        self.update()
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
@@ -161,71 +184,74 @@ class GlyphButton(QAbstractButton):
 
     # ── painting ─────────────────────────────────────────────────────
     def plate_color(self) -> QColor:
-        """The plate's material for the state the control is in.
-
-        Opaque by construction. The script passes under the chrome, so a word
-        that happens to sit behind a control must not read through it.
-        """
+        """The circle's material, blended through the hover and press states."""
         table = self.PLATE[self._dark]
-        if self._press.value > 0.05:
-            return QColor(table["press"])
-        if self._hover:
-            return QColor(table["hover"])
-        return QColor(table["fill"])
+        fill = self._blend(QColor(table["fill"]), QColor(table["hover"]),
+                           self._hover_spring.value)
+        if self._press.value > 0.01:
+            fill = self._blend(fill, QColor(table["press"]), self._press.value)
+        return fill
 
-    def _paint_plate(self, painter: QPainter) -> None:
+    def _circle(self) -> QRectF:
+        """The visible circle, with room left around it for the shadow."""
         inset = self.width() * self.PLATE_INSET
-        plate = QRectF(self.rect()).adjusted(inset, inset, -inset, -inset)
-        radius = plate.width() * self.PLATE_RADIUS
+        return QRectF(self.rect()).adjusted(inset, inset, -inset, -inset)
+
+    def _paint_circle(self, painter: QPainter, hover: float) -> QRectF:
+        circle = self._circle()
+        circle.moveCenter(QPointF(0.0, 0.0))
         table = self.PLATE[self._dark]
 
+        # Three soft rings, not one hard drop shadow: the outer ring is wide
+        # and faint, the inner ring is tight and darker. That reads as light
+        # falling off a floating object rather than a border around a button.
         painter.setPen(Qt.NoPen)
-        painter.setBrush(self.plate_color())
-        painter.drawRoundedRect(plate, radius, radius)
+        for spread, alpha in ((3.4, 14), (2.3, 20), (1.2, 26)):
+            painter.setBrush(QColor(0, 0, 0, alpha + int(10 * hover)))
+            shadow = QRectF(circle).adjusted(-spread, -spread, spread, spread)
+            shadow.translate(0.0, 1.4 + hover)
+            painter.drawEllipse(shadow)
 
         edge = QColor(*table["edge"][:3])
         edge.setAlphaF(table["edge"][3])
         painter.setPen(QPen(edge, 1.0))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawRoundedRect(plate.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
-
-        # One bright line across the top: that highlight is what reads as a
-        # lit surface. Without it the plate is just a slightly tinted rectangle.
-        lit = QColor(*table["lit"][:3])
-        lit.setAlphaF(table["lit"][3])
-        painter.setPen(QPen(lit, 1.0))
-        painter.drawLine(QPointF(plate.left() + radius, plate.top() + 0.5),
-                         QPointF(plate.right() - radius, plate.top() + 0.5))
+        painter.setBrush(self.plate_color())
+        painter.drawEllipse(circle)
+        return circle
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        self._paint_plate(painter)
+        hover = self._hover_spring.value
+        lift = 1.2 * hover
+        cx, cy = self.width() / 2.0, self.height() / 2.0 - lift
+        scale = ((1.0 - 0.06 * self._press.value)
+                 * (1.0 + 0.035 * hover))
 
-        cx, cy = self.width() / 2.0, self.height() / 2.0
+        painter.save()
+        painter.translate(cx, cy)
+        painter.scale(scale, scale)
+        circle = self._paint_circle(painter, hover)
+        painter.restore()
+
         # Glyphs are authored in a 24 px box; the design scale decouples the
         # drawn size from the hit box, so padding costs no legibility.
         design = self._glyph_px / 24.0
-        scale = design * (1.0 - 0.10 * self._press.value)
-
+        painter.save()
         painter.translate(cx, cy)
-        painter.scale(scale, scale)
+        painter.scale(design * scale, design * scale)
         painter.translate(-12.0, -12.0)   # 24×24 design box
-
         self.paint_glyph(painter)
+        painter.restore()
 
-        painter.resetTransform()
         if self.hasFocus() and self._focus_ring:
             pen = QPen(QColor(self.PALETTE[self._dark]["focus"]))
             pen.setWidthF(1.5)
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
-            inset = self.width() * self.PLATE_INSET
-            plate = QRectF(self.rect()).adjusted(inset, inset, -inset, -inset)
-            radius = plate.width() * self.PLATE_RADIUS
-            painter.drawRoundedRect(plate.adjusted(-0.5, -0.5, 0.5, 0.5),
-                                    radius + 0.5, radius + 0.5)
+            ring = QRectF(circle).translated(cx, cy).adjusted(-1.0, -1.0, 1.0, 1.0)
+            painter.drawEllipse(ring)
 
     def paint_glyph(self, painter: QPainter) -> None:
         """Draw inside a 24×24 box whose origin is (0,0). Override."""
@@ -409,11 +435,12 @@ class ScriptTextEdit(QTextEdit):
     through QTextEdit itself: no offscreen image, no fade and no blur.
 
     The document keeps a lead above its first line so a script opens 30% down
-    the card, clear of the floating chrome. The lead is part of the document,
-    not a fixed viewport inset: it scrolls away with the type, so lines that
-    have already been read pass upward behind the controls while the line
-    being read keeps its usual place. Only the foot keeps its room, which lets
-    the last line be scrolled up onto the reading anchor. The anchor itself is
+    the card, clear of the top edge. The lead is part of the document, not a
+    fixed viewport inset: it scrolls away with the type, so lines that have
+    already been read pass upward while the line being read keeps its usual
+    place. The controls live outside the card, so no word ever runs under
+    them. Only the foot keeps its room, which lets the last line be scrolled
+    up onto the reading anchor. The anchor itself is
     snapped to the document's line grid so the top edge of the card always
     falls on a line boundary (see reading_inset).
     """
@@ -424,24 +451,23 @@ class ScriptTextEdit(QTextEdit):
     READING_TOP_MIN = 12.0
     READING_BOTTOM_MIN = 12.0
 
-    # How far down the card a script opens. 30% clears the control strip and
-    # keeps the first line whole instead of letting the toolbar sit on it.
+    # How far down the card a script opens. 30% keeps the first line whole
+    # instead of letting it start against the card's edge.
     OPENING_TOP = 0.30
 
     def __init__(self, parent=None):
         super().__init__(parent)
         # The viewport covers the card, but the reading rhythm is still
-        # measured against the reading area: the lead is the strip the top
-        # controls float over, the foot is the padding below the last line.
+        # measured against the reading area: the lead is the top breathing
+        # room, the foot is the padding below the last line.
         self._lead_top = 0.0
         self._lead_bottom = 0.0
 
     def set_reading_leads(self, top: float, bottom: float) -> None:
-        """Reserve the strips the floating chrome and the bottom padding use.
+        """Reserve the top breathing room and the bottom padding.
 
-        The viewport spans the card's full height so the script can run under
-        the controls, but the line being read must not move when it does: the
-        lead is where the top of the reading area used to be.
+        The viewport spans the card's full height; the lead keeps the reading
+        line from moving when the available height changes.
         """
         top, bottom = float(max(0.0, top)), float(max(0.0, bottom))
         if (abs(top - self._lead_top) > 0.01
@@ -505,8 +531,8 @@ class ScriptTextEdit(QTextEdit):
     def reading_inset(self) -> float:
         """Where the line being read begins, measured from the window top.
 
-        The line is anchored below the strip the controls float over, so the
-        chrome sits above the words rather than on them.
+        The line is anchored below the card's top breathing room, so the
+        words never start against the edge.
 
         The anchor is snapped to the document's line grid. Every line then
         lands on a whole multiple of the grid from the top of the card, so the

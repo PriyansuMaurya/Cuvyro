@@ -7,8 +7,8 @@ are 1:1 with the DIP values below.
 
 | Surface | Before | After | Reference target |
 |---|---|---|---|
-| Compact reader | 300×110 at (810, 8) | **340×122 at (790, 6)** | 340×122, 6 DIP inset |
-| Script editor | 860×320 at (530, 8) | **860×320 at (530, 6)** | 860×320, same top anchor |
+| Compact reader | 300×110 at (810, 8) | **340×122 card in a 384×122 window at (790, 6)** | 340×122 card, 6 DIP inset |
+| Script editor | 860×320 at (530, 8) | **860×320 card in a 904×320 window at (530, 6)** | 860×320 card, same top anchor |
 | Sticky note | did not exist | **260×165** | 260×165 |
 
 `note-after.png` has no "before" counterpart: the committed build had no note
@@ -35,17 +35,18 @@ Surface treatment, also measured from the captures:
   hairline. Transparency is spent only on the floating controls; the type
   itself is fully opaque, so the desktop can never ghost through the words.
   The full-height script is what changed, not the window it runs on.
-- **Floating layout**: the script's viewport spans the card's full height
-  (inside the 18 px side padding). The toolbar is a child placed at the exact
-  rectangle it always had (x 18, y 4, 304×32 at 100%) and floats over the
-  script's own column, so the type is not pushed into a smaller box below a
-  title bar.
+- **Floating rail, outside the card**: the reading surface stays 340 px
+  wide; the window carries a transparent **44 px** strip to its right and the
+  four controls sit in that gap, one vertical column, centred on the card's
+  height with equal 2 px gaps. Measured: card right edge **340**, controls at
+  **x 347**, card width **340**, text block ends at **322**. No glyph touches
+  the type, and the strip beside the card reads alpha **0**.
   **The script opens 30% down the card** (measured **36.2 px**), so the first
-  line is whole and clears the floating chrome. That lead belongs to the
-  document rather than to the viewport: once reading starts it scrolls away,
-  carrying the lines already read up behind the controls while the line being
-  read keeps its usual place. Only the foot keeps its room, so the last line
-  can still be scrolled up onto the reading line.
+  line is whole and clears the top edge. That lead belongs to the document
+  rather than to the viewport: once reading starts it scrolls away, carrying
+  the lines already read upward while the line being read keeps its usual
+  place. Only the foot keeps its room, so the last line can still be scrolled
+  up onto the reading line.
   The reading line sits at **62 px**, snapped to the document's **31 px** line
   grid. Every line therefore lands on a whole multiple of the grid from the top
   of the card: the topmost line is complete and the line above it has left the
@@ -60,30 +61,31 @@ Surface treatment, also measured from the captures:
   never half-faded. Measured: body contrast **20.1:1** / **18.9:1**, spoken
   contrast **6.1:1** / **4.5:1**.
 - **Controls on a three-second leash**: while the reader is reading, the
-  toolbar dissolves 3 s after the last movement and comes back the moment the
-  pointer moves — over the script as much as over the controls, since the type
-  column covers the card's full height. Measured: opacity 1.00 → 0.00 on the
-  idle timeout, back to 1.00 on a mouse move over the script viewport. The
-  editor and the resting pill keep their controls on screen, because there
-  they are the point.
-- **Editor and menu** use the same solid fill and hairline; the editor puts the
-  type back below the control strip while it is open, because it is a document
-  you type into rather than a script passing under a toolbar.
+  rail dissolves 3 s after the last movement and comes back the moment the
+  pointer moves — over the script or over a control. Measured: opacity
+  1.00 → 0.00 on the idle timeout, back to 1.00 on a mouse move over either.
+  The editor and the resting pill keep their controls on screen, because
+  there they are the point.
+- **Editor and menu** use the same solid fill and hairline; the editor keeps
+  its own top breathing room while it is open, because it is a document you
+  type into. The rail stays outside the editor's text column.
 - **Light theme**: white surface, `#111111` text, `#E2E2E2` hairline, and the
   voice glow scaled to 45% so it reads as a hint rather than a blue smudge.
-- **Controls**: four outline glyphs, each on its own rounded plate.
-  The plate is an opaque fill (`#0F0F0F` on the dark card, `#F4F4F4` on the
-  light one: the value the old 6%/4.5% glass blended to, kept so the bar looks
-  unchanged) with a hairline and one lit line across its top, at a 9 px radius
-  inside the 30 px target. Measured: the plate material sits **15** levels off
-  the card in dark and **11** in light, and a control's pixels are identical
-  whether it is drawn over black or over white, so a word in the script no
-  longer reads through it; hover raises the fill, press raises it again, and
-  the glyph brightens from 136 to 176 without changing size. The narrow/wide
-  toggle is two 1.4 px strokes rather than a filled square.
+- **Controls**: four outline glyphs, each on its own floating circle, with
+  no connecting panel. The dark circle is `#171719`, the light one `#FFFFFF`,
+  both inside a 28 px target with a 1 px edge. Three soft shadow rings sit
+  under each circle and are wider/fainter on the outside, so the button reads
+  as lifted off the desktop rather than as a card attached to the reader.
+  Measured: hit-box corner alpha **0**, fill alpha **255**, shadow alpha
+  **18–54** below the circle, and a control's pixels are identical whether it
+  is drawn over black or white. Hover runs on a **0.24 s** spring: the circle
+  lifts **1.2 px**, scales **1.035×**, brightens its fill, and the glyph
+  blends from grey to near-white. Press keeps the faster **0.16 s** spring
+  and adds a **0.94×** scale. The narrow/wide toggle is two 1.4 px strokes
+  rather than a filled square.
 - **No menu control**: the "more" glyph earned its place only while the menu
   had nowhere else to open. It is gone, and the menu opens on a right click
-  over the card or over the script, so the toolbar is four glyphs instead of
+  over the card or over the script, so the rail is four glyphs instead of
   five with one that only ever opened the menu.
 
 ## Fixes found while comparing themes

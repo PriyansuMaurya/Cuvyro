@@ -13,7 +13,7 @@ from PyQt5.QtGui import (
     QFont, QFontMetrics, QColor, QPainter, QPen, QTextCursor, QTextCharFormat,
     QTextBlockFormat, QKeySequence,
     QDragEnterEvent, QDropEvent, QMouseEvent, QPaintEvent, QKeyEvent,
-    QRadialGradient, QBrush, QPainterPath, QRegion, QBitmap, QWheelEvent
+    QRadialGradient, QBrush, QPainterPath, QWheelEvent
 )
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QFileDialog,
@@ -335,11 +335,16 @@ class NotchOverlay(QWidget):
         ("Helvetica", "Helvetica"),
     ]
 
-    # Dimensions — match the reference compact overlay (DIP)
-    DEFAULT_W, DEFAULT_H = 340, 122
-    MIN_W, MIN_H = 340, 122
+    # Dimensions — match the reference compact overlay (DIP). The window is
+    # wider than the card by a transparent rail: the four controls live there,
+    # outside the reading surface, so no glyph sits over a word.
+    CARD_W, CARD_H = 340, 122
+    RAIL_W = 44             # gap + button + right pad
+    DEFAULT_W, DEFAULT_H = CARD_W + RAIL_W, CARD_H
+    MIN_W, MIN_H = CARD_W + RAIL_W, CARD_H
     TOP_INSET = 6            # DIP between the work-area top and the card
-    COMPACT_W = 100   # ~2 word width with compact font
+    COMPACT_CARD_W = 100   # ~2 word width with compact font
+    COMPACT_W = COMPACT_CARD_W + RAIL_W
     COMPACT_FONT = 8  # smallest allowed text size; 6 pt was below reading size
     MODEL_PATH = "model"  # overridden in __init__ when running as frozen exe
 
@@ -415,11 +420,14 @@ class NotchOverlay(QWidget):
             else:
                 dpi = 96
         self._scale = max(0.75, min(2.0, dpi / 96.0))
-        self.DEFAULT_W = int(340 * self._scale)
-        self.DEFAULT_H = int(122 * self._scale)
-        self.MIN_W = int(340 * self._scale)
-        self.MIN_H = int(122 * self._scale)
-        self.COMPACT_W = int(100 * self._scale)
+        self.RAIL_W = int(self.RAIL_W * self._scale)
+        self.RAIL_GAP = int(7 * self._scale)
+        self.RAIL_SPACING = int(2 * self._scale)
+        self.DEFAULT_W = int(self.CARD_W * self._scale) + self.RAIL_W
+        self.DEFAULT_H = int(self.CARD_H * self._scale)
+        self.MIN_W = int(self.CARD_W * self._scale) + self.RAIL_W
+        self.MIN_H = int(self.CARD_H * self._scale)
+        self.COMPACT_W = int(self.COMPACT_CARD_W * self._scale) + self.RAIL_W
         self.CORNER_RADIUS = int(24 * self._scale)
         self.COMPACT_FONT = max(6, min(13, int(8 * self._scale)))
         self._font_size = max(6, min(24, int(12 * self._scale)))  # 12pt ≈ 16px at 96 DPI
@@ -692,58 +700,50 @@ class NotchOverlay(QWidget):
         # The type owns the full height of the window: no header strip, no
         # bottom strip, nothing between the script and the edges. The plain
         # text column paints opaquely to the edges; the controls float over it.
-        root.setContentsMargins(int(18 * s), 0, int(18 * s), 0)
+        root.setContentsMargins(int(18 * s), 0, int(18 * s) + self.RAIL_W, 0)
         root.setSpacing(0)
 
-        # ── Chrome (top bar) ───────────────────────────────────────
-        # One container so the entire bar can recede as a single object:
-        # five icons fading on five clocks reads as noise, one fade reads
-        # as the window getting out of the way.
+        # ── Chrome (vertical rail, outside the card) ─────────────────
+        # The controls are not over the script: the window carries a
+        # transparent strip to the right of the card and the rail floats in
+        # that gap. One container still means one fade, not four.
         self._chrome = QWidget(self)
-        top_bar = QHBoxLayout(self._chrome)
-        top_bar.setContentsMargins(0, 0, 0, 0)
-        top_bar.setSpacing(0)
+        self._chrome.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._chrome.setStyleSheet("background: transparent;")
+        rail = QVBoxLayout(self._chrome)
+        rail.setContentsMargins(0, 0, 0, 0)
+        rail.setSpacing(self.RAIL_SPACING)
 
-        self._close_btn = MinimizeButton(hit=int(30 * s))
+        self._muted = False
+        self._close_btn = MinimizeButton()
         self._close_btn.setToolTip("Minimize (or Esc)")
         self._close_btn.setAccessibleName("Minimize")
         self._close_btn.clicked.connect(self._minimize)
-        top_bar.addWidget(self._close_btn)
-        top_bar.addStretch()
+        rail.addWidget(self._close_btn)
 
-        self._icons_container = QWidget()
-        icons_layout = QHBoxLayout(self._icons_container)
-        icons_layout.setContentsMargins(0, 0, 0, 0)
-        icons_layout.setSpacing(int(1 * s))
-        self._muted = False
-        hit = int(30 * s)
-        self._note_btn = NoteButton(hit=hit)
+        self._note_btn = NoteButton()
         self._note_btn.setToolTip("New note (Ctrl+N)")
         self._note_btn.setAccessibleName("New note")
         self._note_btn.clicked.connect(self._open_note)
-        icons_layout.addWidget(self._note_btn)
-        self._mic_btn = MicButton(hit=hit)
+        rail.addWidget(self._note_btn)
+        self._mic_btn = MicButton()
         self._mic_btn.setToolTip("Mute mic (stop voice from advancing script)")
         self._mic_btn.setAccessibleName("Mute microphone")
         self._mic_btn.clicked.connect(self._toggle_mic_mute)
-        icons_layout.addWidget(self._mic_btn)
-        self._compact_btn = CompactButton(hit=hit)
+        rail.addWidget(self._mic_btn)
+        self._compact_btn = CompactButton()
         self._compact_btn.setToolTip("Narrow reader (about two words per line)")
         self._compact_btn.setAccessibleName("Switch to narrow reader")
         self._compact_btn.clicked.connect(self._toggle_compact_mode)
-        icons_layout.addWidget(self._compact_btn)
+        rail.addWidget(self._compact_btn)
+        for btn in (self._close_btn, self._note_btn, self._mic_btn,
+                    self._compact_btn):
+            btn.installEventFilter(self)
         # No menu button: a "more" glyph earned its place only while the menu
         # had nowhere else to open. The menu is still there on a right click,
-        # over the card or over the script, and the toolbar stays four quiet
+        # over the card or over the script, and the rail stays four quiet
         # glyphs instead of five with one that does nothing else.
-        top_bar.addWidget(self._icons_container)
-        self._set_top_bar_icon_size(int(24 * s))
-
-        # The bar is as tall as the hit box: a 24 px bar clipped the bottom
-        # of every 24 px glyph drawn inside a 32 px target. It is not in the
-        # layout: it floats over the script instead of taking a strip from it,
-        # so the type runs underneath the controls and out of the top edge.
-        self._chrome.setFixedHeight(int(32 * s))
+        self._set_top_bar_icon_size(int(18 * s))
 
         # Idle recede: the chrome dissolves after a pause and returns the
         # moment the pointer comes back, so the script is the only thing
@@ -899,7 +899,7 @@ class NotchOverlay(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        w = self.width()
+        w = self._card_width()
         h = self.height()
 
         # 1. Define Shape (Rounded Pill). The narrow card takes a smaller
@@ -1019,11 +1019,8 @@ class NotchOverlay(QWidget):
         if abs(self._glow.target - glow_target) > 0.5:
             self._glow.set_target(glow_target)
 
-        # During a collapse, clip the window to the pill so the toolbar
-        # cannot appear to float outside the card as it shrinks.
-        if (self._motion.running and not self._edit_target
-                and self._motion_intent == "collapse"):
-            self._update_collapse_mask()
+        # The rail is outside the card and follows the same geometry springs,
+        # so it needs no clip of its own while the card collapses.
 
         # 2. Handle Scrolling
         if self._edit_mode:
@@ -1212,6 +1209,7 @@ class NotchOverlay(QWidget):
             end_word,
             min_score=self.WORD_MATCH_SCORE,
             max_skip=self.WORD_SKIP_TOLERANCE,
+            resync_skip=resync_skip,
         )
         return aligned.last_word if aligned is not None else None
 
@@ -1242,10 +1240,25 @@ class NotchOverlay(QWidget):
         start = max(line.first_word, self._confirmed_word + 1)
         if start > line.last_word:
             return  # line already fully spoken; waiting for a final result
-        last = self._align_speech(text, start, line.last_word + 1)
+        last = self._align_speech(
+            text, start, line.last_word + 1,
+            resync_skip=self.RESYNC_SKIP_TOLERANCE)
         if last is None or last <= self._confirmed_word:
             return
         self._partial_word = last
+        if last >= line.last_word:
+            spoken = text.split()[-1] if text.split() else ""
+            if (self._matching.word_score(spoken, line.last_word)
+                    >= self.PARTIAL_FINISH_SCORE):
+                self._confirmed_word = line.last_word
+                self._partial_word = -1
+                self._matching.set_position(self._confirmed_word)
+                self._update_voice_speed(self._confirmed_word, False)
+                moved = self._step_reading_line(force=True)
+                self._apply_highlight(self._display_word())
+                if moved:
+                    self._speech_active_until = time.monotonic() + 1.0
+                return
         self._apply_highlight(min(last, line.last_word))
 
     def _apply_confirmed_speech(self, text: str):
@@ -1275,7 +1288,6 @@ class NotchOverlay(QWidget):
         self._confirmed_word = last
         self._partial_word = -1
         self._matching.set_position(last)
-        self._last_match_pos = last
         self._update_voice_speed(last, True)
 
         # Step immediately when the line just finished, then let _tick pace
@@ -2032,8 +2044,8 @@ class NotchOverlay(QWidget):
             menu._speed_value.setText(str(self._manual_wpm))
 
     def _set_top_bar_icon_size(self, glyph: int):
-        """Icon design size, and a hit box that stays comfortable."""
-        hit = max(int(glyph + int(8 * self._scale)), int(20 * self._scale))
+        """Icon design size, and a round hit box that still fits the rail."""
+        hit = max(int(glyph + int(10 * self._scale)), int(22 * self._scale))
         for btn in (self._close_btn, self._note_btn, self._mic_btn,
                     self._compact_btn):
             if btn is None:
@@ -2124,9 +2136,12 @@ class NotchOverlay(QWidget):
         # The reader's minimum size is its normal size; a resting pill is
         # smaller than that, so the floor has to come off first.
         self.setMinimumSize(1, 1)
-        w, h = int(132 * s), int(34 * s)
-        target = QRect(self.x() + self.width() // 2 - w // 2, self.y(), w, h)
-        self._animate_geometry_to(target, response=0.30)
+        card_w, h = int(132 * s), int(34 * s)
+        w = card_w + self.RAIL_W
+        # The rail is hidden while the card rests, but the window still owns
+        # its strip; centre the visible pill, not the transparent remainder.
+        x = self.x() + (self._card_width() - card_w) // 2
+        self._animate_geometry_to(QRect(x, self.y(), w, h), response=0.30)
 
     def _restore_from_peek(self):
         if not self._peeked:
@@ -2164,40 +2179,53 @@ class NotchOverlay(QWidget):
     # ═══════════════════════════════════════════════════════════════════
 
     def _chrome_strip(self) -> int:
-        """Height of the strip the top controls float over, in window pixels."""
+        """Top breathing room above the reading line, in window pixels.
+
+        The controls moved to the side, so this is no longer occupied by a
+        toolbar. It remains the reading anchor's inset from the top edge, and
+        keeping it stable is what stops the active line from moving when the
+        rail changed sides.
+        """
         return int((4 + 32) * self._scale)
 
     def _chrome_margin(self) -> int:
-        """Side inset the controls keep from the window edge."""
+        """Side inset the text keeps inside the card."""
         return int((12 if self._compact_mode else 18) * self._scale)
 
+    def _card_width(self) -> int:
+        """Width of the reading surface; the rail lives outside it."""
+        return max(1, self.width() - self.RAIL_W)
+
     def _layout_chrome(self):
-        """Place the toolbar over the script without reserving space for it."""
+        """Centre the vertical rail just outside the card's right edge."""
         chrome = getattr(self, "_chrome", None)
         if chrome is None:
             return
-        s = self._scale
-        side = self._chrome_margin()
-        chrome.setGeometry(side, int(4 * s),
-                           max(1, self.width() - 2 * side), int(32 * s))
+        buttons = (self._close_btn, self._note_btn, self._mic_btn,
+                   self._compact_btn)
+        width = max(btn.width() for btn in buttons)
+        height = sum(btn.height() for btn in buttons) + \
+            self.RAIL_SPACING * (len(buttons) - 1)
+        x = self._card_width() + self.RAIL_GAP
+        y = max(0, (self.height() - height) // 2)
+        chrome.setGeometry(x, y, width, height)
         chrome.raise_()
 
     def _apply_root_margins(self):
-        """Reader: type fills the window. Editor: type starts below the bar.
+        """Type owns the card; the control rail owns the strip beside it.
 
-        The editor is a document you type into, so it keeps the reading area
-        it always had. The reader gives the whole window to the script and
-        lets the chrome float over the top of it, which is what makes the
-        card read as one continuous piece of type rather than a panel with
-        furniture bolted to its ends.
+        The editor keeps its own top breathing room, but the right margin is
+        always the rail width: the script never runs under the controls and
+        the controls never sit on a word.
         """
         s = self._scale
         side = self._chrome_margin()
+        right = side + self.RAIL_W
         if self._edit_mode:
             self._root_layout.setContentsMargins(
-                side, self._chrome_strip(), side, int(10 * s))
+                side, self._chrome_strip(), right, int(10 * s))
         else:
-            self._root_layout.setContentsMargins(side, 0, side, 0)
+            self._root_layout.setContentsMargins(side, 0, right, 0)
         # The leads define the reading area, and the document margins are
         # derived from them, so the leads have to be current first.
         self._sync_reading_leads()
@@ -2244,6 +2272,8 @@ class NotchOverlay(QWidget):
         if self._edit_mode:
             self._text_edit.set_reading_leads(0.0, 0.0)
         else:
+            # The top inset is breathing room, not a toolbar strip: the
+            # controls are outside the card now.
             self._text_edit.set_reading_leads(self._chrome_strip(), 10 * self._scale)
 
     def _layout_done_button(self):
@@ -2254,7 +2284,8 @@ class NotchOverlay(QWidget):
         s = self._scale
         w, h = int(62 * s), int(26 * s)
         btn.setFixedSize(w, h)
-        btn.move(self.width() - w - int(16 * s), self.height() - h - int(14 * s))
+        btn.move(self._card_width() - w - int(16 * s),
+                 self.height() - h - int(14 * s))
         btn.raise_()
 
     def _on_compact_motion_finished(self, narrow: bool):
@@ -2284,9 +2315,7 @@ class NotchOverlay(QWidget):
         if self._compact_mode:
             self._compact_mode = False
             self._motion_intent = "wide"
-            self._set_top_bar_icon_size(int(24 * s))
-            self._note_btn.show()
-            self._mic_btn.show()
+            self._set_top_bar_icon_size(int(18 * s))
             self._compact_btn.set_compact(False)
             self._compact_btn.setToolTip("Narrow reader (about two words per line)")
             self._compact_btn.setAccessibleName("Switch to narrow reader")
@@ -2295,18 +2324,17 @@ class NotchOverlay(QWidget):
             self._apply_root_margins()
             target_w = self._size_before_compact.width()
             target_h = self._size_before_compact.height()
+            card_w = target_w - self.RAIL_W
             self._animate_geometry_to(
-                QRect(center_x - target_w // 2, y, target_w, target_h), response=0.32)
+                QRect(center_x - card_w // 2, y, target_w, target_h), response=0.32)
         else:
             self._compact_mode = True
             self._motion_intent = "narrow"
             # Font first, so the text has already reflowed when the width
             # arrives; animating width against old metrics makes the text jump.
-            self._set_top_bar_icon_size(int(18 * s))
-            # 100 px holds two 26 px targets; four would push the bar out of
-            # the card. The rest come back with the wide reader.
-            self._note_btn.hide()
-            self._mic_btn.hide()
+            # The rail is vertical, so all four controls still fit outside a
+            # 100 px card.
+            self._set_top_bar_icon_size(int(16 * s))
             self._compact_btn.set_compact(True)
             self._compact_btn.setToolTip("Wide reader")
             self._compact_btn.setAccessibleName("Switch to wide reader")
@@ -2317,8 +2345,9 @@ class NotchOverlay(QWidget):
             self.setMinimumSize(self.COMPACT_W, self.MIN_H)
             self._font_size = self.COMPACT_FONT
             self._apply_typography()
+            card_w = self.COMPACT_W - self.RAIL_W
             self._animate_geometry_to(
-                QRect(center_x - self.COMPACT_W // 2, y, self.COMPACT_W, self.height()),
+                QRect(center_x - card_w // 2, y, self.COMPACT_W, self.height()),
                 response=0.32)
 
     def _reset_position(self):
@@ -2424,7 +2453,7 @@ class NotchOverlay(QWidget):
         self._speed_feedback_lbl.setText(f"Speed {delta:+d}")
         self._speed_feedback_lbl.adjustSize()
         margin = 8
-        x = self.width() - self._speed_feedback_lbl.width() - margin
+        x = self._card_width() - self._speed_feedback_lbl.width() - margin
         y = self.height() - self._speed_feedback_lbl.height() - margin
         self._speed_feedback_lbl.move(x, y)
         self._speed_feedback_opacity.setOpacity(0.0)
@@ -2611,10 +2640,10 @@ class NotchOverlay(QWidget):
         being scrolled away, so the first line sits 30% down the card and the
         rest of the page is upcoming text. After that the lead scrolls off
         with the lines already read. Near the end the bar's own limit takes
-        over and the remaining text is shown as it is. The line being read is
-        also kept clear of the floating controls, because a 30% share of a
-        five-line card is one and a half lines and half of one would sit under
-        the toolbar.
+        over and the remaining text is shown as it is. The line being read
+        also keeps its breathing room at the top, because a 30% share of a
+        five-line card is one and a half lines and half of one would sit
+        against the edge.
         """
         lines = self._line_spans
         edit = self._text_edit
@@ -2655,8 +2684,8 @@ class NotchOverlay(QWidget):
                     visible += words[j]
             above = sum(words[first:index]) + spoken
             error = abs(above - self.READING_SHARE * visible)
-            # A share that puts the words being read behind the floating
-            # controls is only used when nothing else is available (opening).
+            # A share that pushes the reading line into the top edge is only
+            # used when nothing else is available (opening).
             if reading_top < self._chrome_strip():
                 error += 1000.0
             if best is None or error < best[0]:
@@ -2934,7 +2963,9 @@ class NotchOverlay(QWidget):
     def _center_top(self):
         screen = QApplication.primaryScreen()
         screen_geom = screen.availableGeometry()
-        x = screen_geom.x() + (screen_geom.width() - self.width()) // 2
+        # Centre the card, not the window: the rail is extra width on the
+        # right and would otherwise pull the reading surface left of centre.
+        x = screen_geom.x() + (screen_geom.width() - self._card_width()) // 2
         # Reference inset from the top work-area edge
         y = screen_geom.y() + int(self.TOP_INSET * self._scale)
         self.move(x, y)
@@ -3017,6 +3048,14 @@ class NotchOverlay(QWidget):
         self._apply_highlight(match)
 
     def eventFilter(self, obj, event):
+        if obj in (getattr(self, "_close_btn", None),
+                   getattr(self, "_note_btn", None),
+                   getattr(self, "_mic_btn", None),
+                   getattr(self, "_compact_btn", None)):
+            if event.type() in (QEvent.Enter, QEvent.MouseMove):
+                # A rail that has faded out must come back under the pointer,
+                # not stay invisible until the pointer re-enters the card.
+                self._wake_chrome()
         if hasattr(self, "_text_edit") and (
             obj == self._text_edit or obj == self._text_edit.viewport()
         ):
@@ -3084,7 +3123,7 @@ class NotchOverlay(QWidget):
         """The card has landed. Styling was swapped during the text fade."""
         if self._edit_target:
             return
-        self._icons_container.show()
+        self._chrome.show()
         self._wake_chrome()
         self.clearMask()
         self.resize(self._collapsed_size)
@@ -3095,20 +3134,6 @@ class NotchOverlay(QWidget):
         if self._prev_voice_mode and not self._edit_target:
             self._voice_mode = True
             self._start_listening()
-
-    def _update_collapse_mask(self):
-        """Clip window to current pill shape during collapse so the top bar doesn't appear to separate."""
-        w, h = self.width(), self.height()
-        if w < 2 or h < 2:
-            return
-        bm = QBitmap(w, h)
-        bm.fill(Qt.color0)
-        p = QPainter(bm)
-        path = QPainterPath()
-        path.addRoundedRect(0, 0, w, h, self.CORNER_RADIUS, self.CORNER_RADIUS)
-        p.fillPath(path, Qt.color1)
-        p.end()
-        self.setMask(QRegion(bm))
 
     def _toggle_edit_mode(self):
         """Switch between the reader pill and the editor card.
@@ -3150,8 +3175,9 @@ class NotchOverlay(QWidget):
             # after the swap does not flash the text back on.
             if self._text_opacity.opacity() > 0.01:
                 self._text_fade_out.start()
-            tw, th = int(860 * s), int(320 * s)
-            x = screen.x() + (screen.width() - tw) // 2
+            card_w, th = int(860 * s), int(320 * s)
+            tw = card_w + self.RAIL_W
+            x = screen.x() + (screen.width() - card_w) // 2
             y = screen.y() + int(self.TOP_INSET * s)
             self._animate_geometry_to(QRect(x, y, tw, th), response=0.42)
             self._glow.set_target(0.0, carry_velocity=False)
@@ -3165,7 +3191,7 @@ class NotchOverlay(QWidget):
         if w >= int(500 * s) or h >= int(280 * s):
             w, h = self.DEFAULT_W, self.DEFAULT_H
             self._collapsed_size = QSize(w, h)
-        x = screen.x() + (screen.width() - w) // 2
+        x = screen.x() + (screen.width() - (w - self.RAIL_W)) // 2
         y = screen.y() + int(self.TOP_INSET * s)
         if self._text_opacity.opacity() > 0.01:
             self._text_fade_out.start()
