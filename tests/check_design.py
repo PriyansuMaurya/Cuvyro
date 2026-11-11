@@ -260,7 +260,8 @@ def main():
     reader_margin = win._text_edit.document().rootFrame().frameFormat().bottomMargin()
     anchor_room = win._text_edit.anchor_padding()
     check("reader keeps the anchor room, not the Done strip",
-          abs(reader_margin - anchor_room) <= 0.5 and 0 < reader_margin < 36,
+          abs(reader_margin - anchor_room) <= 0.5
+          and 0 < reader_margin < editor_margin,
           f"reader {reader_margin:.1f} vs anchor {anchor_room:.1f}, "
           f"editor {editor_margin:.1f}")
     frame = win._text_edit.document().rootFrame().frameFormat()

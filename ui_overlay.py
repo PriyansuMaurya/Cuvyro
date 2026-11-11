@@ -768,7 +768,7 @@ class NotchOverlay(QWidget):
         self._text_edit = ScriptTextEdit(self)
         self._text_edit.setAcceptRichText(False)  # Paste as plain text only (no colors, bg, etc.)
         self._text_edit.setReadOnly(True)
-        self._text_edit.setFont(QFont(self._font_family, self._font_size))
+        self._text_edit.setFont(self._text_font())
         self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._text_edit.setLineWrapMode(QTextEdit.WidgetWidth)
@@ -2569,6 +2569,10 @@ class NotchOverlay(QWidget):
         a teleprompter look untypeset at one end of its size range.
         """
         font = QFont(self._font_family, self._font_size)
+        # Bold. At 8-12 pt on a dark card the regular face reads as hairlines,
+        # and the weight costs no line height: the family's ascent, descent and
+        # leading are the same at every weight, so only the stroke changes.
+        font.setWeight(QFont.Bold)
         tracking = (14.0 - float(self._font_size)) * 0.05 * self._scale
         font.setLetterSpacing(QFont.AbsoluteSpacing, tracking)
         return font
@@ -2581,9 +2585,14 @@ class NotchOverlay(QWidget):
         line was clipped. Deriving the pitch from the metrics keeps the
         reference rhythm at the default size and makes it impossible for
         two lines to collide at any size.
+
+        The multiplier is set so the default card holds four whole lines at
+        the default size: 21 px of type at 1.40 is a 29 px pitch, and four of
+        those fit the 122 px card. Tighter than that starts to close the gap
+        between ascenders and the descenders above them.
         """
         metrics = QFontMetrics(self._text_font())
-        return max(int(round(metrics.height() * 1.47)), metrics.height() + 4)
+        return max(int(round(metrics.height() * 1.40)), metrics.height() + 4)
 
     def _apply_typography(self):
         """Apply the current font and recompute line breaks for the new layout."""
@@ -3189,7 +3198,7 @@ class NotchOverlay(QWidget):
             self.move(card.topLeft())
             self._motion.jump(x=float(card.x()), y=float(card.y()))
 
-        self._text_edit.setFont(QFont(self._font_family, self._font_size))
+        self._text_edit.setFont(self._text_font())
         self._apply_read_mode_style()
         if self._script_text:
             self._refresh_lines()

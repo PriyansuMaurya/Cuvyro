@@ -33,7 +33,7 @@ import tempfile
 
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QTextCursor
+from PyQt5.QtGui import QFont, QTextCursor
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication
 
@@ -189,6 +189,12 @@ def main():
     check("leading stays compact enough to read as one block",
           pitch <= int(round(metrics.height() * 1.7)),
           f"pitch {pitch}, height {metrics.height()}")
+    check("the script is set above normal weight",
+          edit.font().weight() > QFont.Normal,
+          f"weight {edit.font().weight()} of {QFont.Normal} normal")
+    fits = int(edit.viewport().height() // pitch)
+    check("four whole lines fit the card at the default size", fits >= 4,
+          f"{fits} lines of {pitch} px in {edit.viewport().height()} px")
 
     for dark in (True, False):
         name = "dark" if dark else "light"
