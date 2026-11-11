@@ -462,6 +462,43 @@ class ScriptTextEdit(QTextEdit):
         # room, the foot is the padding below the last line.
         self._lead_top = 0.0
         self._lead_bottom = 0.0
+        # Head tracking slides the type inside the frame (see
+        # set_content_offset). Zero means the layout's own position.
+        self._content_offset = (0.0, 0.0)
+
+    def set_content_offset(self, dx: float, dy: float) -> None:
+        """Slide the type inside the frame without reflowing it.
+
+        The words follow the reader's head a little further than the card
+        does. Moving the viewport is the cheapest way to express that: the
+        document is not relaid out and the text is not rendered offscreen, so
+        highlighting a word costs exactly what it cost before. The band the
+        shift vacates is the card's own opaque colour, so no seam shows.
+
+        The offset stays small by construction — its caller clamps it — and a
+        glyph can only be clipped at the card's edge, which is where the
+        viewport already clips scrolled type.
+        """
+        offset = (float(dx), float(dy))
+        if offset == self._content_offset:
+            return
+        self._content_offset = offset
+        self._apply_content_offset()
+
+    def _apply_content_offset(self) -> None:
+        dx, dy = self._content_offset
+        # The scroll area parks the viewport at the frame's top-left corner
+        # (the card's own margins live in the document, not in viewport
+        # margins), so that corner is the base the offset rides on.
+        base = self.contentsRect().topLeft()
+        self.viewport().move(base.x() + int(round(dx)),
+                             base.y() + int(round(dy)))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # A resize lays the viewport out again, which drops the offset.
+        if self._content_offset != (0.0, 0.0):
+            self._apply_content_offset()
 
     def set_reading_leads(self, top: float, bottom: float) -> None:
         """Reserve the top breathing room and the bottom padding.

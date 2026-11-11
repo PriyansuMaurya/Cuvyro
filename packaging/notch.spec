@@ -18,7 +18,9 @@ from PyInstaller.utils.hooks import collect_all
 REPO_ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 
 datas, binaries, hiddenimports = [], [], []
-for pkg in ("sherpa_onnx", "vosk", "sounddevice", "thefuzz", "rapidfuzz"):
+# cv2 is collected whole so the frontal-face cascade XMLs under cv2/data
+# travel with the build; without them head tracking has no offline detector.
+for pkg in ("sherpa_onnx", "vosk", "sounddevice", "thefuzz", "rapidfuzz", "cv2"):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
     datas += pkg_datas
     binaries += pkg_binaries

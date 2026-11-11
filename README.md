@@ -77,6 +77,12 @@ Notch is built for local-first use. Audio processing happens on your machine, an
 
 Speech recognition runs from a model on disk (sherpa-onnx with a Silero voice-activity detector, or a local Vosk model as the fallback). There is no network path for microphone audio, transcripts or your script: `tests/check_speech_engine.py` fails if loading or decoding tries to open a socket.
 
+Optional head tracking is **off by default** and experimental. When switched on it reads the webcam through MediaFoundation's shared mode where available, at 320×240 and 15 fps, so a video call can usually keep the camera. Frames are inspected in memory for a face position and then discarded: nothing is recorded, written or sent anywhere. Only two numbers leave that worker. Turning it off releases the camera immediately.
+
+The card itself then travels with your head — up to 150 px sideways and 100 px vertically, and never past the edge of your screen — so the words stay put relative to your eyes instead of leaving them.
+
+Detection runs a frontal cascade and a profile cascade, the latter also on a mirrored copy of each frame, so a face turned either way is still found. A turned head holds your last position for a second rather than sending the card home mid-read; if you really have left, the words return to where they started.
+
 ---
 
 ## License

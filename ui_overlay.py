@@ -45,6 +45,13 @@ class _RenderedLine(NamedTuple):
 
 
 from spring import Spring, SpringGroup, system_allows_motion
+import head_tracking as ht
+
+# Measurement aid, not a feature: NOTCH_HEAD_TRACE=1 prints the tracker's raw
+# reading and the offsets it produced five times a second, so a head turn can be
+# watched as numbers instead of guessed at from a six-pixel card edge. Nothing
+# is printed unless the variable is set.
+_HEAD_TRACE = os.environ.get("NOTCH_HEAD_TRACE", "") not in ("", "0")
 from controls import (
     CompactButton, GlyphButton, MenuRowNav, MicButton, MinimizeButton,
     NoteButton, RoundedMenu, ScriptTextEdit, TextButton,
@@ -431,6 +438,16 @@ class NotchOverlay(QWidget):
         self._compact_mode = False
         self._peeked = False
         self._peek_restore: Optional[QRect] = None
+        # Head tracking is a prototype and starts off. tests/check_head_tracking.py
+        # measures whether moving the words with the reader's head is worth
+        # having; until that says yes, a fresh install must not turn it on.
+        self._head_track_enabled = False
+        self._head_motion = ht.HeadMotion()
+        self._head_source: Optional[ht.CameraHeadSource] = None
+        self._head_offsets = ht.ZERO
+        self._head_last_sample: Optional[float] = None
+        self._head_wanted = False
+        self._head_trace_at = 0.0
         self._size_before_compact: Optional[QSize] = None
         self._font_size_before_compact = 10
 
@@ -612,15 +629,177 @@ class NotchOverlay(QWidget):
 
     def _on_motion_tick(self):
         """Apply the springs to the window. One place, every frame."""
-        rect = QRect(int(round(self._sx.value)), int(round(self._sy.value)),
+        # The head offset rides on top of the springs rather than inside them:
+        # it changes at the camera's rate and must never become the position a
+        # launch restores. Keeping it out of the springs means every existing
+        # transition still lands exactly where it was going to.
+        shift_x, shift_y = self._head_card_shift()
+        rect = QRect(int(round(self._sx.value)) + shift_x,
+                     int(round(self._sy.value)) + shift_y,
                      max(1, int(round(self._sw.value))),
                      max(1, int(round(self._sh.value))))
         if rect != self.geometry():
             self.setGeometry(rect)
+        if self._head_tracking_paints():
+            self._text_edit.set_content_offset(
+                self._head_offsets.text_dx - shift_x,
+                self._head_offsets.text_dy - shift_y)
+        else:
+            # The editor and the resting pill must open centred, not frozen
+            # at wherever the head last left the words.
+            self._text_edit.set_content_offset(0.0, 0.0)
         glow = int(round(self._glow.value))
         if glow != self._current_glow_alpha:
             self._current_glow_alpha = glow
             self.update()
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  Head tracking (prototype, off by default)
+    # ═══════════════════════════════════════════════════════════════════
+
+    def _head_tracking_paints(self) -> bool:
+        """False while the reader is in a state the words must not move in."""
+        return (self._head_track_enabled and not self._edit_mode
+                and not self._peeked)
+
+    def _head_card_shift(self) -> tuple:
+        """How far the card itself is displaced by head tracking, in DIP.
+
+        Frozen while the reader is being dragged or is resting as a pill: a
+        card must not drift under the pointer that is positioning it, and a
+        pill has no reading line to keep in view.
+        """
+        if (not self._head_tracking_paints()
+                or self._drag_pos is not None):
+            return (0, 0)
+        # The limit is enforced here as well as inside the tracker: this is
+        # the value that reaches the window manager, so it is the last place
+        # a bad number could otherwise get through.
+        dx = max(-ht.MAX_TEXT_DX, min(ht.MAX_TEXT_DX, self._head_offsets.card_dx))
+        dy = max(-ht.MAX_TEXT_DY, min(ht.MAX_TEXT_DY, self._head_offsets.card_dy))
+        dx, dy = int(round(dx)), int(round(dy))
+        # The travel is long enough to leave the display now, so the screen
+        # wins over the tracker: a card pushed past the edge would be readable
+        # by nobody. The allowance shrinks to nothing at an edge, which is the
+        # honest behaviour — the words cannot follow further than the screen.
+        return self._shift_inside_screen(dx, dy)
+
+    def _shift_inside_screen(self, dx: int, dy: int) -> tuple:
+        """Trim a head shift so the card stays wholly on its display."""
+        if dx == 0 and dy == 0:
+            return (0, 0)
+        base = QRect(int(round(self._sx.value)), int(round(self._sy.value)),
+                     max(1, int(round(self._sw.value))),
+                     max(1, int(round(self._sh.value))))
+        screen = None
+        try:
+            screen = QApplication.screenAt(base.center())
+        except Exception:
+            screen = None
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is None:
+            return (dx, dy)
+        area = screen.availableGeometry()
+        dx = max(area.left() - base.left(),
+                 min(dx, area.right() - base.right()))
+        dy = max(area.top() - base.top(),
+                 min(dy, area.bottom() - base.bottom()))
+        return (int(dx), int(dy))
+
+    def _head_layout_origin(self) -> QPoint:
+        """Where the card would be standing if no head offset were applied.
+
+        Every path that remembers a position, restores one or animates from
+        the current one must start here, or a transient head offset would be
+        saved as the reader's real spot.
+        """
+        shift_x, shift_y = self._head_card_shift()
+        return QPoint(self.x() - shift_x, self.y() - shift_y)
+
+    def _set_head_tracking(self, enabled: bool) -> None:
+        """Turn the prototype on or off. Off takes effect immediately."""
+        self._head_wanted = bool(enabled)
+        if not enabled:
+            self._head_track_enabled = False
+            self._head_motion.disable()
+            source, self._head_source = self._head_source, None
+            self._head_last_sample = None
+            if source is not None:
+                source.stop()
+            self._head_offsets = ht.ZERO
+            if hasattr(self, "_text_edit"):
+                self._text_edit.set_content_offset(0.0, 0.0)
+            self._on_motion_tick()
+            self._schedule_save()
+            return
+        if self._head_track_enabled and self._head_source is not None:
+            return
+        source = ht.CameraHeadSource()
+        source.start()
+        self._head_source = source
+        self._head_last_sample = None
+        # Enabling is also the moment neutral is measured, so a posture
+        # change between sessions does not park the text off-centre.
+        self._head_motion.enable(time.monotonic())
+        self._head_track_enabled = True
+        self._schedule_save()
+        print("[Notch] Head tracking on (local camera, nothing leaves this machine)",
+              flush=True)
+
+    def _toggle_head_tracking(self) -> None:
+        self._set_head_tracking(not self._head_wanted)
+
+    def _poll_head_tracking(self) -> None:
+        """Take the newest reading and advance the offsets one frame."""
+        if not self._head_track_enabled:
+            return
+        source = self._head_source
+        if source is None:
+            return
+        error = source.error
+        if error:
+            # The camera was busy, unplugged or died. Say so and stand down
+            # rather than leaving a toggle on that tracks nothing.
+            print(f"[Notch] Head tracking off: {error}", flush=True)
+            self._set_head_tracking(False)
+            return
+        now = time.monotonic()
+        sample = source.read()
+        if sample is not None:
+            stamp = sample[2]
+            if self._head_last_sample is None or stamp > self._head_last_sample:
+                self._head_last_sample = stamp
+                self._head_motion.feed(sample[0], sample[1], now)
+        offsets = self._head_motion.poll(now)
+        if offsets != self._head_offsets:
+            self._head_offsets = offsets
+            # Geometry and type both follow from this one value.
+            self._on_motion_tick()
+        self._trace_head(sample, now)
+
+    def _trace_head(self, sample, now: float) -> None:
+        """Print what the tracker saw and what it did with it (NOTCH_HEAD_TRACE).
+
+        Read after the tick so the window position is the one that was just
+        applied, which is the number that proves the card actually moved.
+        """
+        if not _HEAD_TRACE:
+            return
+        if now - self._head_trace_at < 0.2:
+            return
+        self._head_trace_at = now
+        raw = "none" if sample is None else f"{sample[0]:+.3f},{sample[1]:+.3f}"
+        age = (now - self._head_last_sample
+               if self._head_last_sample is not None else -1.0)
+        off = self._head_offsets
+        shift_x, shift_y = self._head_card_shift()
+        print(f"[Notch head] t={now:9.2f} age={age:5.2f} raw={raw} "
+              f"src={self._head_source.last_source:7} "
+              f"cal={str(self._head_motion.calibrated):5} "
+              f"text={off.text_dx:+5.1f},{off.text_dy:+5.1f} "
+              f"card={shift_x:+3d},{shift_y:+3d} "
+              f"win={self.x()},{self.y()}", flush=True)
 
     def _animate_geometry_to(self, target: QRect, response: float = 0.34):
         """Retarget the window's edges. Reversible at any point."""
@@ -771,7 +950,12 @@ class NotchOverlay(QWidget):
         # that gap. One container still means one fade, not four.
         self._chrome = QWidget(self)
         self._chrome.setAttribute(Qt.WA_TranslucentBackground, True)
-        self._chrome.setStyleSheet("background: transparent;")
+        # No ``background: transparent`` here. The attribute above is what
+        # makes the rail invisible; the stylesheet was redundant, and it gave
+        # this container a palette with alpha 0 for every role. Qt builds a
+        # tooltip with a copy of the palette of the widget it belongs to, so
+        # the controls' tooltips painted an unpainted, dark slab over a white
+        # card. Measured: removing it changes no card pixel.
         rail = QVBoxLayout(self._chrome)
         rail.setContentsMargins(0, 0, 0, 0)
         rail.setSpacing(self.RAIL_SPACING)
@@ -931,6 +1115,9 @@ class NotchOverlay(QWidget):
         self._sc_go4 = _mk("Ctrl+Shift+4", lambda: self._go_to_checkpoint(4))
         self._sc_left = _mk("Left", lambda: self._adjust_speed_dir(-1))
         self._sc_right = _mk("Right", lambda: self._adjust_speed_dir(1))
+        # One key turns the prototype off. It is a Window shortcut like the
+        # rest, so typing in a note cannot toggle it.
+        self._sc_head = _mk("Ctrl+Shift+H", self._toggle_head_tracking)
         self._sc_esc = QShortcut(QKeySequence("Escape"), self)
         # Window context, not application: an application-wide Escape fired
         # from inside Settings and closed the reader behind the dialog.
@@ -1075,6 +1262,11 @@ class NotchOverlay(QWidget):
         Handles both text scrolling AND glow animation smoothing.
         Runs at ~30 FPS.
         """
+        # 0. Head tracking, if the prototype has been switched on. Polled from
+        #    this clock rather than the camera's so the type moves at the
+        #    reader's frame rate instead of stepping at the detector's.
+        self._poll_head_tracking()
+
         # 1. Move the card and the glow. The spring clock only runs while
         #    something is actually in flight, so an idle reader costs no
         #    frames and the card does not repaint against a static screen.
@@ -1644,13 +1836,10 @@ class NotchOverlay(QWidget):
                 background: {line};
                 margin: {px(4)}px {px(8)}px;
             }}
-            QToolTip {{
-                background: {panel};
-                color: {fg};
-                border: 1px solid {line};
-                padding: 4px 7px;
-            }}
         """)
+        # Tooltips are not styled here on purpose: they are separate
+        # top-level windows and do not inherit a widget's stylesheet. The one
+        # rule that reaches them lives in _apply_tooltip_theme.
 
         def label(text, size=13, color=fg, weight=400):
             w = QLabel(text)
@@ -1937,11 +2126,11 @@ class NotchOverlay(QWidget):
         theme_group = QButtonGroup(menu)
         theme_group.setExclusive(True)
 
-        def theme_button(text):
+        def segment_button(group, text, width=46):
             btn = QPushButton(text)
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setFixedSize(px(46), field_height - 2 * field_pad)
+            btn.setFixedSize(px(width), field_height - 2 * field_pad)
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent;
@@ -1958,12 +2147,13 @@ class NotchOverlay(QWidget):
                 }}
                 QPushButton:checked {{ background: {thumb}; color: {fg}; }}
             """)
-            theme_group.addButton(btn)
-            theme_seg_layout.addWidget(btn)
+            group.addButton(btn)
             return btn
 
-        dark_btn = theme_button("Dark")
-        light_btn = theme_button("Light")
+        dark_btn = segment_button(theme_group, "Dark")
+        light_btn = segment_button(theme_group, "Light")
+        theme_seg_layout.addWidget(dark_btn)
+        theme_seg_layout.addWidget(light_btn)
         dark_btn.setAccessibleName("Dark appearance")
         light_btn.setAccessibleName("Light appearance")
         dark_btn.setChecked(self._dark_theme)
@@ -1988,6 +2178,58 @@ class NotchOverlay(QWidget):
         light_btn.clicked.connect(lambda: choose_theme(False))
         theme_layout.addWidget(theme_seg)
         theme_action = add_widget(theme_row, top=row_gap, bottom=row_gap)
+
+        # ── Head tracking: a prototype, off unless asked for ─────────
+        # Off is the default because the measurement in
+        # tests/check_head_tracking.py has not shown a meaningful gain yet.
+        # The control exists so the feature can be tried and switched off
+        # again in one click (or Ctrl+Shift+H), which the brief requires.
+        head_row = QWidget(menu)
+        head_layout = QHBoxLayout(head_row)
+        head_layout.setContentsMargins(px(10), 0, px(8), 0)
+        head_layout.setSpacing(px(8))
+        head_label = label("Head tracking", size=13)
+        head_label.setToolTip(
+            "Moves the words with your head. Experimental; the camera is read "
+            "locally and never recorded.")
+        head_layout.addWidget(head_label)
+        head_layout.addStretch(1)
+        head_seg = QWidget(menu)
+        head_seg.setStyleSheet(
+            f"{field_style} border-radius: {control_radius}px;")
+        head_seg_layout = QHBoxLayout(head_seg)
+        head_seg_layout.setContentsMargins(field_pad, field_pad,
+                                           field_pad, field_pad)
+        head_seg_layout.setSpacing(px(2))
+        head_group = QButtonGroup(menu)
+        head_group.setExclusive(True)
+        head_off = segment_button(head_group, "Off", 38)
+        head_on = segment_button(head_group, "On", 34)
+        head_off.setAccessibleName("Head tracking off")
+        head_on.setAccessibleName("Head tracking on")
+        head_off.setToolTip("Head tracking off (Ctrl+Shift+H)")
+        head_on.setToolTip("Head tracking on (Ctrl+Shift+H)")
+        live = self._head_track_enabled
+        head_off.setChecked(not live)
+        head_on.setChecked(live)
+
+        def choose_head(enabled: bool):
+            # Re-applying the state the row is already showing must not
+            # dismiss the panel: a keyboard user reaches Return on the
+            # current pick, and a silent close would look like a lost press.
+            if enabled == self._head_track_enabled:
+                return
+            self._set_head_tracking(enabled)
+            # The card is about to move; the popup must not hang over the
+            # words it is moving.
+            menu.close()
+
+        head_off.clicked.connect(lambda: choose_head(False))
+        head_on.clicked.connect(lambda: choose_head(True))
+        head_seg_layout.addWidget(head_off)
+        head_seg_layout.addWidget(head_on)
+        head_layout.addWidget(head_seg)
+        head_action = add_widget(head_row, top=row_gap, bottom=row_gap)
 
         menu.addSeparator()
 
@@ -2050,6 +2292,7 @@ class NotchOverlay(QWidget):
         rows.row(size_action, [step_down, step_up])
         rows.row(font_action, [family_btn])
         rows.row(theme_action, [dark_btn, light_btn])
+        rows.row(head_action, [head_off, head_on])
         rows.row(row_action, [menu._help_btn, menu._setup_btn, menu._quit_btn])
         menu._rows = rows
 
@@ -2368,7 +2611,9 @@ class NotchOverlay(QWidget):
         if self._peeked:
             return
         s = self._scale
-        self._peek_restore = QRect(self.geometry())
+        # Restore to the card's real spot, not to wherever a head offset
+        # happens to have it at this instant.
+        self._peek_restore = QRect(self._head_layout_origin(), self.size())
         self._peeked = True
         self._reset_waveform()
         self._motion_intent = "peek"
@@ -2383,8 +2628,9 @@ class NotchOverlay(QWidget):
         w = card_w + self.RAIL_W
         # The rail is hidden while the card rests, but the window still owns
         # its strip; centre the visible pill, not the transparent remainder.
-        x = self.x() + (self._card_width() - card_w) // 2
-        self._animate_geometry_to(QRect(x, self.y(), w, h), response=0.30)
+        origin = self._head_layout_origin()
+        x = origin.x() + (self._card_width() - card_w) // 2
+        self._animate_geometry_to(QRect(x, origin.y(), w, h), response=0.30)
 
     def _restore_from_peek(self):
         if not self._peeked:
@@ -2397,7 +2643,9 @@ class NotchOverlay(QWidget):
         self._chrome.show()
         self._text_edit.show()
         self._glow.set_target(float(self._target_glow_alpha), carry_velocity=False)
-        target = self._peek_restore or QRect(self.x(), self.y(), self.DEFAULT_W, self.DEFAULT_H)
+        origin = self._head_layout_origin()
+        target = self._peek_restore or QRect(origin.x(), origin.y(),
+                                            self.DEFAULT_W, self.DEFAULT_H)
         self._peek_restore = None
         self.setMinimumSize(self.MIN_W, self.MIN_H)
         self._animate_geometry_to(QRect(target), response=0.30)
@@ -2538,7 +2786,8 @@ class NotchOverlay(QWidget):
         """Called when the narrow/wide spring lands."""
         if narrow:
             self._center_top()
-            self._motion.jump(x=float(self.x()), y=float(self.y()),
+            origin = self._head_layout_origin()
+            self._motion.jump(x=float(origin.x()), y=float(origin.y()),
                               w=float(self.width()), h=float(self.height()))
             self._reflow_timer.start()
         else:
@@ -2547,7 +2796,8 @@ class NotchOverlay(QWidget):
             self._apply_typography()
             self._size_before_compact = None
             self._center_top()
-            self._motion.jump(x=float(self.x()), y=float(self.y()),
+            origin = self._head_layout_origin()
+            self._motion.jump(x=float(origin.x()), y=float(origin.y()),
                               w=float(self.width()), h=float(self.height()))
             self._reflow_timer.start()
 
@@ -3086,8 +3336,38 @@ class NotchOverlay(QWidget):
             "  border: none;"
             "}"
         )
+        self._apply_tooltip_theme()
         if hasattr(self, "_close_btn"):
             self._apply_control_theme()
+
+    def _apply_tooltip_theme(self) -> None:
+        """Put the reader's theme on every tooltip, from one place.
+
+        A tooltip is a top-level window, so it inherits neither the card's
+        stylesheet nor the menu's: Qt builds it with a copy of the palette of
+        the widget it is shown for. The card's chrome is styled
+        ``background: transparent``, which makes that palette fully
+        transparent, so a tooltip hanging off a card control painted an
+        unpainted - dark - slab over the light card instead of a panel.
+
+        Only a rule on the application reaches all of them: the card's
+        controls, the menu's, the notes' and the settings dialog's.
+        """
+        app = QApplication.instance()
+        if app is None:
+            return
+        dark = self._dark_theme
+        panel = "#1E1E1E" if dark else "#F7F7F8"
+        fg = "#EDEDEF" if dark else "#151517"
+        line = "#343436" if dark else "#E4E4E6"
+        app.setStyleSheet(
+            "QToolTip {"
+            f" background: {panel};"
+            f" color: {fg};"
+            f" border: 1px solid {line};"
+            " padding: 4px 7px;"
+            " }"
+        )
 
     def _apply_highlight_end(self, position: int) -> int:
         """Character boundary of the spoken run for a word position."""
@@ -3411,7 +3691,8 @@ class NotchOverlay(QWidget):
         self.clearMask()
         self.resize(self._collapsed_size)
         self._center_top()
-        self._motion.jump(x=float(self.x()), y=float(self.y()),
+        origin = self._head_layout_origin()
+        self._motion.jump(x=float(origin.x()), y=float(origin.y()),
                           w=float(self.width()), h=float(self.height()))
         self._text_fade_in.start()
         if self._prev_voice_mode and not self._edit_target:
@@ -3696,8 +3977,9 @@ class NotchOverlay(QWidget):
         if self._compact_mode and self._size_before_compact is not None:
             width = self._size_before_compact.width()
             height = self._size_before_compact.height()
-            return QRect(self.x() + (self.width() - width) // 2,
-                         self.y(), width, height)
+            origin = self._head_layout_origin()
+            return QRect(origin.x() + (self.width() - width) // 2,
+                         origin.y(), width, height)
         collapsed = self._collapsed_size
         if self._edit_target and collapsed is not None:
             # Closing with the editor open would otherwise save the 860x320
@@ -3709,9 +3991,11 @@ class NotchOverlay(QWidget):
                 screen = (self._screen_for(QRect(self.geometry()))
                           or QApplication.primaryScreen()).availableGeometry()
                 card_w = width - self.RAIL_W
+                origin = self._head_layout_origin()
                 return QRect(screen.x() + (screen.width() - card_w) // 2,
-                             self.y(), width, height)
-        return QRect(self.geometry())
+                             origin.y(), width, height)
+        # Never persist a transient head offset as the reader's position.
+        return QRect(self._head_layout_origin(), self.geometry().size())
 
     def _settings_state(self) -> dict:
         """Reader and microphone preferences that survive a relaunch."""
@@ -3734,6 +4018,9 @@ class NotchOverlay(QWidget):
                              if self._device_index is not None else None),
             "noise_gate": float(self._noise_gate),
             "input_gain": float(self._input_gain),
+            # Saved so a deliberate opt-in survives a relaunch. A fresh
+            # install has nothing here and therefore stays off.
+            "head_tracking": bool(self._head_wanted),
         }
 
     def _restore_settings(self):
@@ -3817,12 +4104,20 @@ class NotchOverlay(QWidget):
             self._motion.jump(x=float(card.x()), y=float(card.y()),
                               w=float(card.width()), h=float(card.height()))
 
+        # Head tracking is a prototype: it is restored only when it was
+        # deliberately switched on, and a camera that is busy or absent simply
+        # leaves it off (see _poll_head_tracking).
+        if isinstance(data.get("head_tracking"), bool):
+            self._head_wanted = data["head_tracking"]
+
         self._text_edit.setFont(self._text_font())
         self._apply_read_mode_style()
         if self._script_text:
             self._refresh_lines()
             self._restore_reading_view(None)
         self.update()
+        if self._head_wanted:
+            self._set_head_tracking(True)
 
     def _connect_lifecycle(self) -> None:
         """Flush state on every exit path and react to display changes."""
@@ -3874,7 +4169,7 @@ class NotchOverlay(QWidget):
         """Pull windows back after a monitor is added, removed or resized."""
         if not self.isVisible():
             return
-        current = QRect(self.geometry())
+        current = QRect(self._head_layout_origin(), self.geometry().size())
         safe = self._clamp_to_available(current)
         if safe != current:
             self.setGeometry(safe)

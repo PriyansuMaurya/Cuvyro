@@ -33,7 +33,7 @@ import tempfile
 from PyQt5.QtCore import QPoint, QRect
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
-    QAbstractButton, QApplication, QLabel, QWidget, QWidgetAction,
+    QAbstractButton, QApplication, QLabel, QToolTip, QWidget, QWidgetAction,
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -84,6 +84,49 @@ def ink_count(image, box, background, tolerance=12):
             if sum(abs(a - b) for a, b in zip(sample, background)) > tolerance:
                 count += 1
     return count
+
+
+TOOLTIP_TEXT = "tooltip probe"
+# The panel colour each theme gives a tooltip, as the app applies it.
+TOOLTIP_BODY = {True: (30, 30, 30), False: (247, 247, 248)}
+
+
+def check_tooltips(win):
+    """A tooltip is its own window and has to carry the theme by itself.
+
+    Qt builds it with a copy of the palette of the widget it belongs to, so
+    the transparent control rail left it with an alpha-0 background: a dark,
+    unreadable slab over the light card, which is exactly what a light-mode
+    hover showed. Both the opacity and the colour are asserted, because a
+    tooltip can be opaque and still be the wrong theme.
+    """
+    for dark in (True, False):
+        name = "dark" if dark else "light"
+        win._dark_theme = dark
+        win._apply_read_mode_style()
+        QTest.qWait(140)
+        QToolTip.showText(win._mic_btn.mapToGlobal(win._mic_btn.rect().center()),
+                          TOOLTIP_TEXT, win._mic_btn)
+        QTest.qWait(340)
+        tips = [w for w in QApplication.allWidgets()
+                if isinstance(w, QLabel) and w.text() == TOOLTIP_TEXT
+                and w.isVisible()]
+        if not tips:
+            check(f"a control's tooltip opens in {name} mode", False,
+                  "no tooltip window")
+            continue
+        body = tips[-1].grab().toImage().pixelColor(3, 3)
+        check(f"a control's tooltip is opaque in {name} mode",
+              body.alpha() == 255, f"alpha {body.alpha()}")
+        want = TOOLTIP_BODY[dark]
+        check(f"a control's tooltip follows the {name} theme",
+              (body.red(), body.green(), body.blue()) == want,
+              f"{(body.red(), body.green(), body.blue())} vs {want}")
+        QToolTip.hideText()
+        QTest.qWait(180)
+    win._dark_theme = True
+    win._apply_read_mode_style()
+    QTest.qWait(100)
 
 
 def main():
@@ -329,6 +372,9 @@ def main():
     check("resting pill shows a level meter", pill_ink > 12, f"{pill_ink} ink px")
     win._restore_from_peek()
     QTest.qWait(700)
+
+    # Tooltips: separate windows, so they must be themed on their own.
+    check_tooltips(win)
 
     # Editor: it keeps a surface to type on, and the Done button gets a
     # reserved strip under the text.

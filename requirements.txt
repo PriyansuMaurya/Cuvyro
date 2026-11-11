@@ -5,3 +5,7 @@ sherpa-onnx>=2.0.0
 # Kept so an existing Vosk model folder still works as the fallback engine.
 vosk
 thefuzz
+# Head tracking (experimental, off by default). Pinned below 5.x on purpose:
+# OpenCV 5 ships no Haar cascade data, and the bundled frontal-face cascade is
+# what keeps the detector offline. Headless because no frame is ever shown.
+opencv-python-headless<5

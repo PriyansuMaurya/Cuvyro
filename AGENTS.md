@@ -29,6 +29,7 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_speech_engine.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_note_clearing.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_note_placement.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_head_tracking.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/profile_reading.py
 .venv/Scripts/python.exe tests/check_design.py      # needs a real display
 .venv/Scripts/python.exe tests/check_quality.py     # needs a real display
@@ -47,6 +48,22 @@ undo-stack fixes, so the two profiles can be compared directly.
 `tests/calibrate_voice.py` scores a speaker against the corpus and drives the
 overlay with the recordings (`--no-mic --reader` re-scores takes already in
 `%TEMP%\notch-voice`). Recordings stay local WAVs; nothing is uploaded.
+
+`tests/check_head_tracking.py` drives `HeadMotion` with explicit timestamps at
+the camera's cadence and measures latency, jitter, settling, the displacement
+limits and the modelled eye-rotation change, then exercises the reader itself
+(default off, card travel, on-screen clamping, immediate disable,
+camera-failure path).
+It prints a VERDICT line. It read NOT MEANINGFUL while the words were capped at
+14 DIP of travel; carrying the whole card instead (150 DIP) lifts the modelled
+removal of head-induced eye rotation to ~38%, past the 25% bar, so the verdict
+now reads MEANINGFUL. It still ships off by default: a profile cascade, run also
+on a mirrored frame, keeps a turned head alive for about a second, but a face
+that leaves the frame is still a lost face and the feature has not been watched
+on a second machine. Calibration starts its window at the first face sample and
+takes a median, because a camera can report a face only every second or so.
+`tests/measure_head_tracking.py` is the real-device half — sample rate, detector cost, stillness and drift — and SKIPs
+when there is no camera or no face.
 
 `tests/check_design.py` asserts surface invariants against rendered pixels and
 `tests/verify_ui.py` reports window geometry. All of them build their own
