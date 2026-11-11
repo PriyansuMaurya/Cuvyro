@@ -54,11 +54,14 @@ class HelpDialog(QDialog):
     """First-time guide / Help dialog — frameless, rounded, pill-style."""
     CORNER_RADIUS = 16
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, dark: bool = True):
         super().__init__(parent)
+        self.setWindowTitle("Notch Help")
+        self.setAccessibleName("Notch help")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setFixedSize(360, 310)
+        self._dark = dark
         self._drag_pos = None
         self._close_pending = None
         self._opacity_anim = QPropertyAnimation(self, b"windowOpacity")
@@ -73,49 +76,66 @@ class HelpDialog(QDialog):
         self._fade_out_anim.setEndValue(0.0)
         self._fade_out_anim.finished.connect(self._on_fade_out_finished)
 
-        self.setStyleSheet("""
-            QDialog { background: transparent; }
-            QLabel {
-                color: #c8c8c8;
+        # The guide is a surface of the app, not a system leftover: on paper
+        # it follows the same light palette as the reader and notes.
+        if self._dark:
+            surface, border = "#1e1e1e", "#333333"
+            text, strong, muted = "#c8c8c8", "#ffffff", "#888888"
+            button_bg, button_text, button_border = "#2a2a2a", "#b0b0b0", "#444444"
+            scroll_bg, scroll_handle, scroll_hover = "#2a2a2a", "#444444", "#555555"
+            hover_bg, press_bg = "#007AFF", "#005ECB"
+        else:
+            surface, border = "#F7F7F8", "#DCDCDE"
+            text, strong, muted = "#1C1C1E", "#111111", "#6E6E73"
+            button_bg, button_text, button_border = "#F2F2F3", "#1C1C1E", "#DCDCDE"
+            scroll_bg, scroll_handle, scroll_hover = "#EDEDEF", "#C7C7CC", "#AEAEB2"
+            # White on #007AFF is 4.4:1; the 10 px button label needs 4.5:1.
+            hover_bg, press_bg = "#0066CC", "#0059B3"
+        self._surface = surface
+        self._border = border
+        self.setStyleSheet(f"""
+            QDialog {{ background: transparent; }}
+            QLabel {{
+                color: {text};
                 font-family: "Poppins", "Segoe UI", sans-serif;
                 font-weight: 400;
                 font-size: 10px;
                 background: transparent;
-            }
-            QPushButton {
-                background: #2a2a2a;
-                color: #b0b0b0;
-                border: 1px solid #444;
+            }}
+            QPushButton {{
+                background: {button_bg};
+                color: {button_text};
+                border: 1px solid {button_border};
                 border-radius: 8px;
                 padding: 5px 16px;
                 font-family: "Poppins", "Segoe UI", sans-serif;
                 font-size: 10px;
-            }
-            QPushButton:hover { background: #007aff; color: #ffffff; border-color: #007aff; }
-            QPushButton:pressed { background: #005ecb; color: #ffffff; }
-            QScrollBar:vertical {
+            }}
+            QPushButton:hover {{ background: {hover_bg}; color: #ffffff; border-color: {hover_bg}; }}
+            QPushButton:pressed {{ background: {press_bg}; color: #ffffff; }}
+            QScrollBar:vertical {{
                 border: none;
-                background: #2a2a2a;
+                background: {scroll_bg};
                 width: 8px;
                 border-radius: 4px;
                 margin: 0px 0px 0px 0px;
-            }
-            QScrollBar::handle:vertical {
-                background: #444;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {scroll_handle};
                 min-height: 20px;
                 border-radius: 4px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #555;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {scroll_hover};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
                 border: none;
                 background: none;
                 height: 0px;
-            }
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
                 background: none;
-            }
+            }}
         """)
 
         layout = QVBoxLayout(self)
@@ -124,18 +144,19 @@ class HelpDialog(QDialog):
 
         # Header label (small, subtle)
         header = QLabel("Help")
-        header.setStyleSheet("font-size: 13px; font-weight: 600; color: #ffffff; background: transparent;")
+        header.setStyleSheet(
+            f"font-size: 13px; font-weight: 600; color: {strong}; background: transparent;")
         layout.addWidget(header)
 
-        label_style = """
-            QLabel {
-                color: #c8c8c8;
+        label_style = f"""
+            QLabel {{
+                color: {text};
                 font-family: "Poppins", "Segoe UI", sans-serif;
                 font-weight: 400;
                 font-size: 10px;
                 background: transparent;
                 padding-right: 12px;
-            }
+            }}
         """
         def _make_label(html):
             lbl = QLabel(html)
@@ -148,7 +169,7 @@ class HelpDialog(QDialog):
         def _make_line():
             line = QWidget()
             line.setFixedHeight(1)
-            line.setStyleSheet("background-color: #444;")
+            line.setStyleSheet(f"background-color: {border};")
             return line
 
         body_widget = QWidget()
@@ -162,7 +183,7 @@ class HelpDialog(QDialog):
             "<ul style='margin:0; padding-left:16px;'>"
             "<li><b>Invisible to screenshare</b> — Not shown in screen recordings or video calls</li>"
             "<li><b>Stays on top</b> — Always visible above other windows</li>"
-            "<li><b>Voice-follow</b> (Notch mode) or <b>manual scroll</b> (Keys & Scroll mode)</li>"
+            "<li><b>Voice-follow</b> or <b>Manual</b> timed scroll</li>"
             "<li><b>Local speech recognition</b> — Runs offline, no data sent to the cloud</li>"
             "</ul>"
         ))
@@ -170,10 +191,11 @@ class HelpDialog(QDialog):
         body_layout.addWidget(_make_label(
             "<p style='margin:6px 0 2px 0'><b>Get started:</b></p>"
             "<ul style='margin:0; padding-left:16px;'>"
-            "<li><b>Load a script</b> — Double-click Notch to edit, drag a .txt file, or use <i>Load Script</i> from the menu.</li>"
-            "<li><b>Notch mode</b> — Script follows your voice. Switch modes via the gear menu.</li>"
-            "<li><b>Keys & Scroll</b> — Hold <b>Space</b> to scroll. <b>Arrow keys</b> adjust speed.</li>"
-            "<li>Click the <b>gear</b> (or right-click) for mode, font, theme, and settings.</li>"
+            "<li><b>Load a script</b> — Double-click Notch to edit, drag a .txt file, or use <i>Load Script</i>.</li>"
+            "<li><b>Voice</b> — the script follows your speech. Switch modes in the right-click menu.</li>"
+            "<li><b>Manual</b> — press <b>Space</b> to start or pause timed scroll. <b>Arrow keys</b> adjust speed.</li>"
+            "<li><b>Right-click</b> the card for mode, font, theme, Help, Setup and Quit.</li>"
+            "<li><b>Minimize</b> (the − control) puts the card away as a small pill; click it to bring it back.</li>"
             "</ul>"
         ))
         body_layout.addWidget(_make_line())
@@ -191,14 +213,21 @@ class HelpDialog(QDialog):
             "<p style='margin:6px 0 2px 0'><b>Shortcuts:</b></p>"
             "<ul style='margin:0; padding-left:16px;'>"
             "<li><i>Ctrl+R</i> — Restart script</li>"
-            "<li><i>Esc</i> — Close Notch</li>"
+            "<li><i>Ctrl+N</i> — New note</li>"
+            "<li><i>Ctrl+=</i> / <i>Ctrl+-</i> — Larger / smaller script</li>"
+            "<li><i>Space</i> — Start or pause timed scroll (Manual)</li>"
+            "<li><i>Esc</i> — Leave the editor or pill; closes Notch when reading</li>"
             "</ul>"
         ))
         body_layout.addWidget(_make_line())
-        credit = QLabel('<a href="https://socia.ae/products/notch" style="color:#888; font-size:9px; text-decoration:none;">Notch by Socia</a>')
+        credit = QLabel(
+            f'<a href="https://socia.ae/products/notch" style="color:{muted}; '
+            'font-size:9px; text-decoration:none;">Notch by Socia</a>')
         credit.setOpenExternalLinks(True)
         credit.setTextFormat(Qt.RichText)
-        credit.setStyleSheet("QLabel { color: #888; font-size: 9px; background: transparent; padding-right: 12px; }")
+        credit.setStyleSheet(
+            f"QLabel {{ color: {muted}; font-size: 9px; background: transparent; "
+            "padding-right: 12px; }")
         credit.setCursor(Qt.PointingHandCursor)
         credit.setTextInteractionFlags(Qt.TextBrowserInteraction)
         body_layout.addWidget(credit)
@@ -257,8 +286,8 @@ class HelpDialog(QDialog):
         painter.setRenderHint(QPainter.Antialiasing)
         path = QPainterPath()
         path.addRoundedRect(QRectF(self.rect()), self.CORNER_RADIUS, self.CORNER_RADIUS)
-        painter.setPen(QPen(QColor("#333"), 1))
-        painter.setBrush(QColor("#1e1e1e"))
+        painter.setPen(QPen(QColor(self._border), 1))
+        painter.setBrush(QColor(self._surface))
         painter.drawPath(path)
 
     # ── Draggable ──────────────────────────────────────────────────
@@ -313,6 +342,11 @@ class NotchOverlay(QWidget):
     COMPACT_W = 100   # ~2 word width with compact font
     COMPACT_FONT = 8  # smallest allowed text size; 6 pt was below reading size
     MODEL_PATH = "model"  # overridden in __init__ when running as frozen exe
+
+    # Script formats the reader can actually open. The README used to promise
+    # PDF and DOCX as well, but no extractor was ever wired in, so the file
+    # picker and the drop target now agree with the app.
+    SCRIPT_SUFFIXES = (".txt",)
 
     # Aesthetic Constants
     CORNER_RADIUS = 24      # Pill shape (lower = less curved)
@@ -417,6 +451,11 @@ class NotchOverlay(QWidget):
         self._partial_word = -1    # furthest word seen in a tentative result
         self._reflow_pending_top: Optional[int] = None
         self._next_line_step_at = 0.0
+        # Shading is applied incrementally: only the run between the previous
+        # and the new boundary is re-formatted. A full document format is kept
+        # for a text, theme or typography change, where old ranges are stale.
+        self._highlight_end = None
+        self._highlight_key = None
 
         # ── Scroll motion ────────────────────────────────────────────
         # The script glides on a critically damped spring instead of an
@@ -441,6 +480,16 @@ class NotchOverlay(QWidget):
         self._reflow_timer.setInterval(120)
         self._reflow_timer.timeout.connect(self._on_reflow_timeout)
 
+        # Persistence is debounced. A note emits `changed` on every keystroke,
+        # and the whole state file (script plus every note) used to be written
+        # and fsynced each time: with a long script that is ~25 ms of disk work
+        # per character, which is felt as typing lag. Typing now schedules one
+        # write after the pause, and every close path still flushes it.
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(400)
+        self._save_timer.timeout.connect(self._save_state)
+
         # ── Window Setup ─────────────────────────────────────────────
         self.setWindowFlags(
             Qt.FramelessWindowHint
@@ -448,6 +497,8 @@ class NotchOverlay(QWidget):
             | Qt.Tool
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setWindowTitle("Notch")
+        self.setAccessibleName("Notch teleprompter")
         self.setAcceptDrops(True)
         self.setMinimumSize(self.MIN_W, self.MIN_H)
         self.resize(self.DEFAULT_W, self.DEFAULT_H)
@@ -609,6 +660,7 @@ class NotchOverlay(QWidget):
             self._text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             self._text_edit.setAlignment(Qt.AlignCenter)
             self._apply_read_mode_style()
+            self._highlight_key = None  # the editor rewrote the document
             self._apply_highlight(-1)
             self._refresh_lines()
             if script_changed:
@@ -643,6 +695,7 @@ class NotchOverlay(QWidget):
 
         self._close_btn = MinimizeButton(hit=int(30 * s))
         self._close_btn.setToolTip("Minimize (or Esc)")
+        self._close_btn.setAccessibleName("Minimize")
         self._close_btn.clicked.connect(self._minimize)
         top_bar.addWidget(self._close_btn)
         top_bar.addStretch()
@@ -655,14 +708,17 @@ class NotchOverlay(QWidget):
         hit = int(30 * s)
         self._note_btn = NoteButton(hit=hit)
         self._note_btn.setToolTip("New note (Ctrl+N)")
+        self._note_btn.setAccessibleName("New note")
         self._note_btn.clicked.connect(self._open_note)
         icons_layout.addWidget(self._note_btn)
         self._mic_btn = MicButton(hit=hit)
         self._mic_btn.setToolTip("Mute mic (stop voice from advancing script)")
+        self._mic_btn.setAccessibleName("Mute microphone")
         self._mic_btn.clicked.connect(self._toggle_mic_mute)
         icons_layout.addWidget(self._mic_btn)
         self._compact_btn = CompactButton(hit=hit)
         self._compact_btn.setToolTip("Narrow reader (about two words per line)")
+        self._compact_btn.setAccessibleName("Switch to narrow reader")
         self._compact_btn.clicked.connect(self._toggle_compact_mode)
         icons_layout.addWidget(self._compact_btn)
         # No menu button: a "more" glyph earned its place only while the menu
@@ -770,13 +826,21 @@ class NotchOverlay(QWidget):
 
     def _setup_shortcuts(self):
         def _mk(seq, handler):
+            # Window context, not application: an application-wide Space fired
+            # while a note or the settings dialog had focus, so typing a space
+            # in a note triggered the reader and the note's own keyboard
+            # controls never saw the key.
             sc = QShortcut(QKeySequence(seq), self)
-            sc.setContext(Qt.ApplicationShortcut)
+            sc.setContext(Qt.WindowShortcut)
             sc.activated.connect(handler)
             return sc
 
         self._sc_space = _mk("Space", self._toggle_manual_run)
         self._sc_reset = _mk("Ctrl+R", self._reset_position)
+        # The size keys have been in the entry-point docs since the beginning
+        # but were never registered; the only way to resize was the menu.
+        self._sc_bigger = _mk("Ctrl+=", self._font_increase)
+        self._sc_smaller = _mk("Ctrl+-", self._font_decrease)
         self._sc_cp1 = _mk("Ctrl+1", lambda: self._set_checkpoint(1))
         self._sc_cp2 = _mk("Ctrl+2", lambda: self._set_checkpoint(2))
         self._sc_cp3 = _mk("Ctrl+3", lambda: self._set_checkpoint(3))
@@ -1083,6 +1147,7 @@ class NotchOverlay(QWidget):
         if self._audio_worker:
             self._audio_worker.set_muted(self._muted)  # worker skips emitting when muted; resets recognizer on unmute
         self._mic_btn.setToolTip("Unmute mic" if self._muted else "Mute mic (stop voice from advancing script)")
+        self._mic_btn.setAccessibleName("Unmute microphone" if self._muted else "Mute microphone")
 
     # Filler words often recognised from ambient noise when nothing is said
     _SPEECH_IGNORE_WORDS = frozenset({"huh", "uh", "um", "hmm", "hm", "eh", "ah"})
@@ -1361,6 +1426,8 @@ class NotchOverlay(QWidget):
         manual_btn.setChecked(not self._voice_mode)
         voice_btn.setToolTip("Follow your speech")
         manual_btn.setToolTip("Scroll at a fixed pace")
+        voice_btn.setAccessibleName("Voice mode")
+        manual_btn.setAccessibleName("Manual mode")
         menu._voice_btn = voice_btn
         menu._manual_btn = manual_btn
 
@@ -1396,6 +1463,7 @@ class NotchOverlay(QWidget):
         slider = QSlider(Qt.Horizontal)
         slider.setRange(1, 400)
         slider.setValue(self._manual_wpm)
+        slider.setAccessibleName("Scroll speed")
         slider.setStyleSheet(f"""
             QSlider::groove:horizontal {{
                 height: {px(4)}px;
@@ -1455,6 +1523,7 @@ class NotchOverlay(QWidget):
             btn.setCursor(Qt.PointingHandCursor)
             btn.setFixedSize(px(26), px(26))
             btn.setToolTip(tip)
+            btn.setAccessibleName(tip)
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent;
@@ -1494,6 +1563,7 @@ class NotchOverlay(QWidget):
         family_btn.setFixedHeight(px(26))
         family_btn.setMinimumWidth(px(104))
         family_btn.setToolTip("Click to try the next typeface")
+        family_btn.setAccessibleName("Typeface")
 
         def style_family_btn():
             display, family = next(
@@ -1568,6 +1638,8 @@ class NotchOverlay(QWidget):
 
         dark_btn = theme_button("Dark")
         light_btn = theme_button("Light")
+        dark_btn.setAccessibleName("Dark appearance")
+        light_btn.setAccessibleName("Light appearance")
         dark_btn.setChecked(self._dark_theme)
         light_btn.setChecked(not self._dark_theme)
 
@@ -1581,6 +1653,7 @@ class NotchOverlay(QWidget):
                 note.apply_theme(self._dark_theme)
             self._apply_control_theme()
             self._apply_highlight(self._display_word())
+            self._schedule_save()
             # The popup is a material too: close it rather than leave a dark
             # panel floating over a card that just turned white.
             menu.close()
@@ -1622,7 +1695,14 @@ class NotchOverlay(QWidget):
     def _show_menu(self, global_pos):
         if self._edit_mode:
             return
-        self._present_menu(self._build_menu(), global_pos)
+        menu = self._build_menu()
+        try:
+            self._present_menu(menu, global_pos)
+        finally:
+            # The menu is parented to the overlay, so it outlives exec_().
+            # Without this every right-click leaves a full menu widget tree
+            # behind (about 60 objects each) for the life of the process.
+            menu.deleteLater()
 
     def contextMenuEvent(self, event):
         self._show_menu(event.globalPos())
@@ -1655,25 +1735,63 @@ class NotchOverlay(QWidget):
             event.accept()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
-        self._drag_pos = None
+        if self._drag_pos is not None:
+            self._drag_pos = None
+            # Persist the new spot once the drag settles.
+            self._schedule_save()
 
     def dragEnterEvent(self, event: QDragEnterEvent):
-        if event.mimeData().hasUrls(): event.acceptProposedAction()
+        urls = event.mimeData().urls()
+        if any(url.isLocalFile()
+               and url.toLocalFile().lower().endswith(self.SCRIPT_SUFFIXES)
+               for url in urls):
+            event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent):
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if path.lower().endswith(".txt"):
+            if path.lower().endswith(self.SCRIPT_SUFFIXES):
                 self._load_script_from_file(path)
                 break
 
     def _load_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open Script", "", "Text Files (*.txt)")
-        if path: self._load_script_from_file(path)
+        if path:
+            self._load_script_from_file(path)
+
+    @staticmethod
+    def _decode_script(raw: bytes) -> str:
+        """Decode a script without losing a Windows-native file.
+
+        Scripts written by Notepad on older Windows builds are cp1252, not
+        UTF-8, and a strict UTF-8 read failed for the whole file. BOM-aware
+        UTF-8/UTF-16 come first, then the two Windows encodings; latin-1 is
+        the final lossless fallback because it maps every byte.
+        """
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            return raw.decode("utf-16")
+        for encoding in ("utf-8-sig", "cp1252", "latin-1"):
+            try:
+                return raw.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return raw.decode("utf-8", errors="replace")
+
+    def _report_import_error(self, path: str, error: Exception):
+        """Tell the reader why a script did not open. Silence is a bug."""
+        name = os.path.basename(path) or path
+        print(f"[Notch] Could not open {path}: {error}", flush=True)
+        QMessageBox.warning(
+            self, "Notch – Open Script",
+            f"Could not open “{name}”.\n\n{error}\n\n"
+            "Notch reads plain text (.txt) scripts.",
+        )
 
     def _load_script_from_file(self, path):
+        """Load a script, reporting read failures instead of swallowing them."""
         try:
-            with open(path, "r", encoding="utf-8") as f: text = f.read()
+            with open(path, "rb") as handle:
+                text = self._decode_script(handle.read())
             print(f"[Notch] Script loaded: {path}", flush=True)
             self._text_edit.setPlainText(text)
             # Replacing the text resets every block's format; the spacing key
@@ -1682,6 +1800,7 @@ class NotchOverlay(QWidget):
             self._text_edit.setAlignment(Qt.AlignCenter) 
             self._script_text = text
             self._matching.load_script(text)
+            self._highlight_key = None  # a new document: old shading is stale
             self._last_match_time = None
             self._last_match_pos = -1
             self._voice_wpm = 60
@@ -1704,7 +1823,10 @@ class NotchOverlay(QWidget):
                 # Manual mode reads from the top of the column, not the
                 # voice-follow anchor, so the script starts at the first line.
                 self._scroll_word_to_top(0)
-        except: pass
+            return True
+        except (OSError, ValueError) as error:
+            self._report_import_error(path, error)
+            return False
 
     def _toggle_mode(self, checked):
         self._voice_mode = checked
@@ -2010,6 +2132,7 @@ class NotchOverlay(QWidget):
             self._mic_btn.show()
             self._compact_btn.set_compact(False)
             self._compact_btn.setToolTip("Narrow reader (about two words per line)")
+            self._compact_btn.setAccessibleName("Switch to narrow reader")
             if self._size_before_compact is None:
                 return
             self._apply_root_margins()
@@ -2029,6 +2152,7 @@ class NotchOverlay(QWidget):
             self._mic_btn.hide()
             self._compact_btn.set_compact(True)
             self._compact_btn.setToolTip("Wide reader")
+            self._compact_btn.setAccessibleName("Switch to wide reader")
             self._size_before_compact = self.size()
             self._font_size_before_compact = self._font_size
             # Two words per line need the width the 18 px margins were using.
@@ -2041,6 +2165,8 @@ class NotchOverlay(QWidget):
                 response=0.32)
 
     def _reset_position(self):
+        if self._edit_target:
+            return  # Ctrl+R is the reader's reset, not an editor command
         self._text_edit.moveCursor(QTextCursor.Start)
         self._matching.reset()
         self._last_match_time = None
@@ -2064,7 +2190,9 @@ class NotchOverlay(QWidget):
             self._scroll_word_to_top(0)
 
     def _font_increase(self):
-        self._font_size += max(1, int(2 * self._scale))
+        # 24 pt is the ceiling the saved preference and the reflow checks use;
+        # growing past it used to be silently clamped on the next launch.
+        self._font_size = min(24, self._font_size + max(1, int(2 * self._scale)))
         self._apply_typography()
 
     def _font_decrease(self):
@@ -2091,6 +2219,8 @@ class NotchOverlay(QWidget):
         return 20
 
     def _adjust_speed_dir(self, direction: int):
+        if self._edit_target:
+            return  # arrow keys belong to the caret while editing
         if self._voice_mode:
             step = self._speed_step_for(self._voice_wpm)
             self._voice_wpm = max(1, self._voice_wpm + (step * direction))
@@ -2109,7 +2239,7 @@ class NotchOverlay(QWidget):
         reader switches to Manual. At the end of the script the clock stops;
         pressing Space again replays from the top.
         """
-        if self._voice_mode or not self._script_text:
+        if self._edit_target or self._voice_mode or not self._script_text:
             return
         if self._manual_running:
             self._manual_running = False
@@ -2451,6 +2581,12 @@ class NotchOverlay(QWidget):
         if hasattr(self, "_close_btn"):
             self._apply_control_theme()
 
+    def _apply_highlight_end(self, position: int) -> int:
+        """Character boundary of the spoken run for a word position."""
+        if position < 0 or not self._matching.word_count:
+            return 0
+        return self._matching.word_span(position)[1]
+
     def _apply_highlight(self, position: int):
         if not self._script_text:
             return
@@ -2458,8 +2594,6 @@ class NotchOverlay(QWidget):
             # Line spacing is part of the layout: measure the lines again.
             self._refresh_lines()
         doc = self._text_edit.document()
-        cursor = QTextCursor(doc)
-        cursor.beginEditBlock()
 
         # Resting text is the reference's near-white. Text already spoken
         # recedes, so the words still to come stay the brightest thing.
@@ -2473,16 +2607,49 @@ class NotchOverlay(QWidget):
         spoken_format = QTextCharFormat()
         spoken_format.setForeground(QColor(spoken_hex))
 
-        cursor.select(QTextCursor.Document)
-        cursor.setCharFormat(base_format)
+        end = self._apply_highlight_end(position)
+        # Do not key on id(document()): PyQt hands back a fresh wrapper for
+        # the same QTextDocument on every call, so the id changes and every
+        # apply would look like a new document. Content changes invalidate
+        # this key explicitly (load, restore, editor collapse).
+        key = (len(self._script_text), self._font_family,
+               self._font_size, self._dark_theme, base_hex, spoken_hex)
+        previous = self._highlight_end
+        # A stale key means the document, theme or type changed under the
+        # shading; every range has to be repainted from the base.
+        full = key != self._highlight_key or previous is None
+        self._highlight_key = key
+        self._highlight_end = end
+        if not full and end == previous:
+            return
 
-        if position >= 0:
-            _, end = self._matching.word_span(position)
-            cursor.setPosition(0)
+        cursor = QTextCursor(doc)
+        if full:
+            # Rare (load, theme, type change): repaint both tiers in one undo
+            # step. The reader is read-only, so this grouping is only about
+            # making the document settle once.
+            cursor.beginEditBlock()
+            cursor.select(QTextCursor.Document)
+            cursor.setCharFormat(base_format)
+            if end > 0:
+                cursor.setPosition(0)
+                cursor.setPosition(end, QTextCursor.KeepAnchor)
+                cursor.setCharFormat(spoken_format)
+            cursor.endEditBlock()
+        elif end > previous:
+            # The reader moved forward: the run before `previous` is already
+            # shaded, so only the new words need the spoken colour. No edit
+            # block here: grouping a single commit cost more than the commit
+            # itself, and there is no undo history to protect in a reader.
+            cursor.setPosition(previous)
             cursor.setPosition(end, QTextCursor.KeepAnchor)
             cursor.setCharFormat(spoken_format)
-
-        cursor.endEditBlock()
+        else:
+            # It moved back (wheel, checkpoint, reset): un-shade the run the
+            # reader has returned to.
+            cursor.setPosition(end)
+            cursor.setPosition(previous, QTextCursor.KeepAnchor)
+            cursor.setCharFormat(base_format)
 
     def _apply_line_spacing(self) -> bool:
         """Reference rhythm, at whatever size the reader is set to.
@@ -2520,11 +2687,12 @@ class NotchOverlay(QWidget):
 
     def _show_help(self):
         """Open the How to use Notch guide (same as first-time popup)."""
-        HelpDialog(self).exec_()
+        HelpDialog(self, dark=self._dark_theme).exec_()
 
     def _open_settings(self):
         self._stop_listening()
-        dlg = SettingsDialog(self._device_index, self._noise_gate, self._input_gain, self.MODEL_PATH, self)
+        dlg = SettingsDialog(self._device_index, self._noise_gate, self._input_gain,
+                             self.MODEL_PATH, self, dark=self._dark_theme)
         if dlg.exec_():
             self._device_index = dlg.selected_device
             self._noise_gate = dlg.noise_gate
@@ -2558,6 +2726,8 @@ class NotchOverlay(QWidget):
         super().keyPressEvent(event)
 
     def _set_checkpoint(self, idx: int):
+        if self._edit_target:
+            return
         bar = self._text_edit.verticalScrollBar()
         self._checkpoints[idx] = {
             "scroll": bar.value(),
@@ -2565,10 +2735,14 @@ class NotchOverlay(QWidget):
         }
 
     def _toggle_manual_run(self):
+        if self._edit_target:
+            return  # Space is a space while typing
         if not self._voice_mode:
             self._manual_running = not self._manual_running
 
     def _go_to_checkpoint(self, idx: int):
+        if self._edit_target:
+            return
         cp = self._checkpoints.get(idx)
         if not cp:
             return
@@ -2697,6 +2871,15 @@ class NotchOverlay(QWidget):
             self._chrome.show()
             self._text_edit.show()
         self._edit_target = not self._edit_target
+        # Space and the arrow keys are playback controls in the reader and
+        # text input in the editor: the shortcuts have to stand down while
+        # the editor holds the keyboard, or Qt consumes the keystroke before
+        # the text field can insert it.
+        for shortcut in (getattr(self, "_sc_space", None),
+                         getattr(self, "_sc_left", None),
+                         getattr(self, "_sc_right", None)):
+            if shortcut is not None:
+                shortcut.setEnabled(not self._edit_target)
         screen = QApplication.primaryScreen().availableGeometry()
         s = self._scale
 
@@ -2779,16 +2962,47 @@ class NotchOverlay(QWidget):
         note = NoteWindow(scale=self._scale, dark=self._dark_theme)
         if self._notes:
             last = self._notes[-1]
-            note.move(last.x() + int(24 * self._scale), last.y() + int(24 * self._scale))
+            wanted = QRect(last.x() + int(24 * self._scale),
+                           last.y() + int(24 * self._scale),
+                           note.width(), note.height())
         else:
-            note.move(self.x() + self.width() + int(12 * self._scale), self.y())
-        note.changed.connect(self._save_state)
+            wanted = QRect(self.x() + self.width() + int(12 * self._scale),
+                           self.y(), note.width(), note.height())
+        note.move(self._clamp_to_available(wanted).topLeft())
+        note.changed.connect(self._schedule_save)
         note.closed.connect(self._on_note_closed)
         self._notes.append(note)
         note.show()
         note.raise_()
         note.activateWindow()
         return note
+
+    @staticmethod
+    def _clamp_to_available(rect: QRect) -> QRect:
+        """Keep a window fully inside one screen after a layout change.
+
+        Monitors get unplugged, resolutions change, and a note saved on the
+        second display would otherwise restore into coordinates that no
+        longer exist: still running, but impossible to see or click.
+        """
+        screens = QApplication.screens()
+        if not screens:
+            return rect
+        target = None
+        best = -1
+        for screen in screens:
+            available = screen.availableGeometry()
+            overlap = available.intersected(rect)
+            area = overlap.width() * overlap.height()
+            if area > best:
+                best, target = area, available
+        if target is None:
+            target = QApplication.primaryScreen().availableGeometry()
+        width = min(rect.width(), target.width())
+        height = min(rect.height(), target.height())
+        x = max(target.x(), min(rect.x(), target.x() + target.width() - width))
+        y = max(target.y(), min(rect.y(), target.y() + target.height() - height))
+        return QRect(x, y, rect.width(), rect.height())
 
     def _on_note_closed(self, note_id: str):
         for note in list(self._notes):
@@ -2820,8 +3034,25 @@ class NotchOverlay(QWidget):
                 state.append(note.to_state())
         return state
 
+    def _persisted_card_rect(self) -> QRect:
+        """The reader's normal-card rectangle, whatever state it is in now.
+
+        A position saved while peeked or narrow would restore the wrong card
+        shape on the next launch, so those states map back to the wide card
+        first. This is also the rectangle the reader comes back to.
+        """
+        if self._peeked and self._peek_restore is not None:
+            return QRect(self._peek_restore)
+        if self._compact_mode and self._size_before_compact is not None:
+            width = self._size_before_compact.width()
+            height = self._size_before_compact.height()
+            return QRect(self.x() + (self.width() - width) // 2,
+                         self.y(), width, height)
+        return QRect(self.geometry())
+
     def _settings_state(self) -> dict:
         """Reader preferences that survive a relaunch."""
+        card = self._persisted_card_rect()
         return {
             "font_family": self._font_family,
             "font_size": self._font_size,
@@ -2829,6 +3060,8 @@ class NotchOverlay(QWidget):
             "voice_mode": self._voice_mode,
             "manual_wpm": self._manual_wpm,
             "voice_wpm": self._voice_wpm,
+            "window_x": int(card.x()),
+            "window_y": int(card.y()),
         }
 
     def _restore_settings(self):
@@ -2853,6 +3086,17 @@ class NotchOverlay(QWidget):
         if isinstance(data.get("voice_mode"), bool):
             self._voice_mode = data["voice_mode"]
 
+        # Put the card back where the user left it, if that spot still
+        # exists. The springs start at the restored rectangle too, or the
+        # next animation would snap the window back to its launch position.
+        x, y = data.get("window_x"), data.get("window_y")
+        if (isinstance(x, int) and not isinstance(x, bool)
+                and isinstance(y, int) and not isinstance(y, bool)):
+            card = self._clamp_to_available(
+                QRect(x, y, self.width(), self.height()))
+            self.move(card.topLeft())
+            self._motion.jump(x=float(card.x()), y=float(card.y()))
+
         self._text_edit.setFont(QFont(self._font_family, self._font_size))
         self._apply_read_mode_style()
         if self._script_text:
@@ -2860,7 +3104,13 @@ class NotchOverlay(QWidget):
             self._restore_reading_view(None)
         self.update()
 
+    def _schedule_save(self):
+        """Write the state once the user pauses, not on every keystroke."""
+        self._save_timer.start()
+
     def _save_state(self):
+        """Flush the current state to disk. Safe to call at any time."""
+        self._save_timer.stop()
         try:
             self._store.save(self._script_text, self._note_state(), self._settings_state())
         except OSError as exc:
@@ -2879,6 +3129,7 @@ class NotchOverlay(QWidget):
             self._text_edit.setAlignment(Qt.AlignCenter)
             self._script_text = script
             self._matching.load_script(script)
+            self._highlight_key = None
             self._line_spans = []
             self._current_line = 0
             self._confirmed_word = -1
@@ -2898,10 +3149,13 @@ class NotchOverlay(QWidget):
             note = NoteWindow(text=text, note_id=str(entry.get("id") or ""),
                               scale=self._scale, dark=self._dark_theme)
             try:
-                note.move(int(entry["x"]), int(entry["y"]))
+                saved = QRect(int(entry["x"]), int(entry["y"]),
+                              note.width(), note.height())
             except (KeyError, TypeError, ValueError):
-                note.move(self.x() + self.width() + int(12 * self._scale), self.y())
-            note.changed.connect(self._save_state)
+                saved = QRect(self.x() + self.width() + int(12 * self._scale),
+                              self.y(), note.width(), note.height())
+            note.move(self._clamp_to_available(saved).topLeft())
+            note.changed.connect(self._schedule_save)
             note.closed.connect(self._on_note_closed)
             self._notes.append(note)
             note.show()

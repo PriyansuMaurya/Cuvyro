@@ -9,12 +9,14 @@ main.py — Entry point for the Notch teleprompter.
 Usage:
     python main.py
 
-Keyboard shortcuts (while the overlay is focused):
-    Space   — Toggle Voice / Manual mode
-    +  / =  — Increase font size
-    -       — Decrease font size
-    R       — Reset scroll to beginning
-    Esc     — Close
+Keyboard shortcuts (while the reader is focused):
+    Space      — Start / pause timed scroll (Manual mode)
+    Ctrl+= / - — Increase / decrease font size
+    Ctrl+R     — Reset scroll to beginning
+    Ctrl+N     — New note
+    Esc        — Back out of the editor or pill, or close the reader
+
+Right-click the card for mode, typeface, theme, Help, Setup and Quit.
 """
 
 import sys

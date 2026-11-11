@@ -43,7 +43,7 @@ No cloud. No API keys. No uploading your script or voice.
 | **Offline speech processing** | Runs locally without sending your script or voice to the cloud. |
 | **Manual mode** | Lets you run the teleprompter at a fixed pace when you want full control. |
 | **Always on top** | Stays near your webcam so your eyeline remains more natural on camera. |
-| **Document import** | Load `.txt`, `.pdf`, or `.docx` files from the menu or drag them directly onto Notch. |
+| **Document import** | Load `.txt` scripts from the menu or drag them directly onto Notch. |
 
 ---
 
@@ -59,10 +59,10 @@ No cloud. No API keys. No uploading your script or voice.
 
 ## How it works
 
-1. Double-click Notch to open the editor, paste your script, or load a `.txt`, `.pdf`, or `.docx` document from the menu.
+1. Double-click Notch to open the editor, paste your script, or load a `.txt` document from the menu.
 2. Minimize back into the pill and position Notch near your webcam.
-3. Choose between Voice mode and Manual mode from the settings menu.
-4. Use the settings menu any time to adjust font, theme, opacity, microphone, notes, and other presentation settings.
+3. Choose between Voice mode and Manual mode from the right-click menu.
+4. Use the right-click menu any time to adjust font, theme, speed, microphone, and presentation settings.
 
 ### Modes
 

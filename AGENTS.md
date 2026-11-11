@@ -18,6 +18,7 @@ diff.
 ```
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_behavior.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_voice_follow.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_robustness.py
 .venv/Scripts/python.exe packaging/check_design.py      # needs a real display
 .venv/Scripts/python.exe packaging/check_quality.py     # needs a real display
 ```

@@ -38,12 +38,15 @@ class SettingsDialog(QDialog):
                  current_noise_gate: float = 0.01,
                  current_input_gain: float = 2.0,
                  model_path: str = "model",
-                 parent=None):
+                 parent=None, dark: bool = True):
         super().__init__(parent)
+        self.setWindowTitle("Notch Settings")
+        self.setAccessibleName("Notch settings")
+        self._dark = dark
         self.setMinimumSize(320, 200)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setStyleSheet(self._stylesheet())
+        self.setStyleSheet(self._stylesheet(dark))
 
         self._selected_device: Optional[int] = current_device
         self._noise_gate = current_noise_gate
@@ -72,7 +75,13 @@ class SettingsDialog(QDialog):
         self._fade_out_anim.finished.connect(self._on_fade_out_finished)
         self._build_ui()
         self._populate_devices()
-        self._start_vu_stream()
+        # Opening a microphone stream can take a few hundred milliseconds.
+        # Let the dialog paint first, then start the meter, so Setup appears
+        # immediately instead of arriving after the audio stack hesitates.
+        self._vu_start_timer = QTimer(self)
+        self._vu_start_timer.setSingleShot(True)
+        self._vu_start_timer.timeout.connect(self._start_vu_stream)
+        self._vu_start_timer.start(0)
         self.adjustSize()
         if parent and parent.isVisible() and parent.width() > 0:
             self.setFixedWidth(parent.width() + 48)
@@ -86,7 +95,9 @@ class SettingsDialog(QDialog):
 
         # Header
         header = QLabel("Settings")
-        header.setStyleSheet("font-size: 13px; font-weight: 600; color: #ffffff; background: transparent;")
+        header.setStyleSheet(
+            "font-size: 13px; font-weight: 600; "
+            f"color: {'#ffffff' if self._dark else '#111111'}; background: transparent;")
         layout.addWidget(header)
 
         # ── Microphone group ─────────────────────────────────────────
@@ -98,8 +109,22 @@ class SettingsDialog(QDialog):
         mic_layout.addWidget(lbl)
 
         self._device_combo = QComboBox()
+        self._device_combo.setAccessibleName("Input device")
+        lbl.setBuddy(self._device_combo)
         self._device_combo.currentIndexChanged.connect(self._on_device_changed)
         mic_layout.addWidget(self._device_combo)
+
+        # Device availability is answered when the stream actually opens. The
+        # old probe opened and closed a stream on every input device while the
+        # dialog was being constructed, which froze Setup for most of a second
+        # on a machine with a handful of microphones. Failures now show here
+        # instead of disappearing.
+        self._device_status = QLabel("")
+        self._device_status.setWordWrap(True)
+        self._device_status.setStyleSheet(
+            f"color: {'#FF6B6B' if self._dark else '#C0392B'}; font-size: 9px;")
+        self._device_status.hide()
+        mic_layout.addWidget(self._device_status)
 
         # VU meter
         vu_lbl = QLabel("Level:")
@@ -107,6 +132,8 @@ class SettingsDialog(QDialog):
         mic_layout.addWidget(vu_lbl)
 
         self._vu_bar = QProgressBar()
+        self._vu_bar.setAccessibleName("Microphone level")
+        vu_lbl.setBuddy(self._vu_bar)
         self._vu_bar.setRange(0, 100)
         self._vu_bar.setTextVisible(False)
         self._vu_bar.setFixedHeight(18)
@@ -121,6 +148,8 @@ class SettingsDialog(QDialog):
         self._gate_slider = QSlider(Qt.Horizontal)
         self._gate_slider.setRange(0, 100)
         self._gate_slider.setValue(int(self._noise_gate * 100))
+        self._gate_slider.setAccessibleName("Noise gate")
+        gate_lbl.setBuddy(self._gate_slider)
         self._gate_slider.valueChanged.connect(self._on_gate_changed)
         self._gate_slider.setToolTip("Recommended: 0.01–0.02 (reduces background noise)")
         gate_row.addWidget(self._gate_slider)
@@ -139,6 +168,8 @@ class SettingsDialog(QDialog):
         self._gain_slider = QSlider(Qt.Horizontal)
         self._gain_slider.setRange(50, 500)  # 0.50x - 5.00x
         self._gain_slider.setValue(int(self._input_gain * 100))
+        self._gain_slider.setAccessibleName("Input gain")
+        gain_lbl.setBuddy(self._gain_slider)
         self._gain_slider.valueChanged.connect(self._on_gain_changed)
         self._gain_slider.setToolTip("Recommended: 2.0x (good for most mics)")
         gain_row.addWidget(self._gain_slider)
@@ -152,16 +183,18 @@ class SettingsDialog(QDialog):
         rec_row = QHBoxLayout()
         rec_row.addStretch()
         rec_btn = QPushButton("Use recommended")
-        rec_btn.setStyleSheet("""
-            QPushButton {
+        rec = "#64B5F6" if self._dark else "#0066CC"
+        rec_wash = "rgba(100, 181, 246, 0.15)" if self._dark else "rgba(0, 122, 255, 0.10)"
+        rec_btn.setStyleSheet(f"""
+            QPushButton {{
                 background: transparent;
-                color: #64b5f6;
-                border: 1px solid #64b5f6;
+                color: {rec};
+                border: 1px solid {rec};
                 border-radius: 6px;
                 padding: 4px 10px;
                 font-size: 10px;
-            }
-            QPushButton:hover { background: rgba(100, 181, 246, 0.15); }
+            }}
+            QPushButton:hover {{ background: {rec_wash}; }}
         """)
         rec_btn.setCursor(Qt.PointingHandCursor)
         rec_btn.clicked.connect(self._apply_recommended)
@@ -200,6 +233,11 @@ class SettingsDialog(QDialog):
         btn_row.addStretch()
 
         ok_btn = QPushButton("OK")
+        # The dialog has one action that moves the session forward, so it is
+        # the accent action, the same blue as the reader's Done. Enter also
+        # accepts, which the neutral pair of buttons never made obvious.
+        ok_btn.setObjectName("primary")
+        ok_btn.setDefault(True)
         ok_btn.setFixedWidth(90)
         ok_btn.clicked.connect(self.accept)
         btn_row.addWidget(ok_btn)
@@ -222,30 +260,6 @@ class SettingsDialog(QDialog):
             return False
         return True
 
-    @staticmethod
-    def _device_is_connected(device_id: int) -> bool:
-        """Try to open and start the device; only connected/active devices succeed."""
-        stream = None
-        try:
-            stream = sd.InputStream(
-                device=device_id,
-                channels=1,
-                dtype="int16",
-                samplerate=16000,
-                blocksize=256,
-            )
-            stream.start()
-            stream.stop()
-            return True
-        except Exception:
-            return False
-        finally:
-            if stream is not None:
-                try:
-                    stream.close()
-                except Exception:
-                    pass
-
     def _populate_devices(self):
         self._device_combo.blockSignals(True)
         self._device_combo.clear()
@@ -258,9 +272,9 @@ class SettingsDialog(QDialog):
             name = dev.get("name", "")
             if not self._is_likely_mic(dev, name):
                 continue
-            # Only list devices that are actually connected and can be opened
-            if not self._device_is_connected(i):
-                continue
+            # A dedicated input device reads better than a duplex one, but
+            # both are listed: whether the device can open is reported by the
+            # VU stream, where the user is already looking.
             if dev["max_output_channels"] == 0:
                 candidates.append((i, dev, True))
             else:
@@ -311,10 +325,16 @@ class SettingsDialog(QDialog):
             )
             self._vu_stream.start()
             self._vu_timer.start()
+            self._device_status.hide()
         except Exception:
             self._vu_bar.setValue(0)
+            self._device_status.setText(
+                "Could not open this microphone. Choose another device.")
+            self._device_status.show()
 
     def _stop_vu_stream(self):
+        if hasattr(self, "_vu_start_timer"):
+            self._vu_start_timer.stop()
         self._vu_timer.stop()
         if self._vu_stream is not None:
             try:
@@ -410,13 +430,14 @@ class SettingsDialog(QDialog):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        
-        # Draw rounded background
+
+        # Draw rounded background. Settings is a surface of the reader, so it
+        # follows the same paper/charcoal material in both themes.
         path = QPainterPath()
         path.addRoundedRect(QRectF(self.rect()), self.CORNER_RADIUS, self.CORNER_RADIUS)
-        
-        painter.setPen(QPen(QColor("#333"), 1))
-        painter.setBrush(QColor("#1e1e1e"))
+
+        painter.setPen(QPen(QColor("#333333" if self._dark else "#DCDCDE"), 1))
+        painter.setBrush(QColor("#1e1e1e" if self._dark else "#F7F7F8"))
         painter.drawPath(path)
 
     def mousePressEvent(self, event):
@@ -436,8 +457,8 @@ class SettingsDialog(QDialog):
     # ── Stylesheet ───────────────────────────────────────────────────
 
     @staticmethod
-    def _stylesheet() -> str:
-        return """
+    def _stylesheet(dark: bool = True) -> str:
+        base = """
         QDialog {
             background: transparent;
             color: #b0b0b0;
@@ -520,5 +541,55 @@ class SettingsDialog(QDialog):
             background: #007aff;
             color: #ffffff;
             border-color: #007aff;
+        }
+        QPushButton#primary {
+            background: #0066CC;
+            color: #ffffff;
+            border: 1px solid #0066CC;
+        }
+        QPushButton#primary:hover {
+            background: #0059B3;
+            border-color: #0059B3;
+        }
+        """
+        if dark:
+            return base
+        # Light theme overrides the charcoal base with the same paper palette
+        # as the reader, notes and Help. Later rules win in Qt style sheets.
+        return base + """
+        QDialog { color: #3A3A3C; }
+        QGroupBox { border: 1px solid #DCDCDE; color: #6E6E73; }
+        QLabel { color: #3A3A3C; }
+        QComboBox {
+            background: #F2F2F3;
+            color: #1C1C1E;
+            border: 1px solid #DCDCDE;
+        }
+        QComboBox QAbstractItemView {
+            background: #FFFFFF;
+            color: #1C1C1E;
+            selection-background-color: #0066CC;
+            selection-color: #FFFFFF;
+        }
+        QSlider::groove:horizontal { background: #D1D1D6; }
+        QSlider::handle:horizontal {
+            background: qradialgradient(cx:0.5, cy:0.5, radius:0.5,
+                fx:0.3, fy:0.3, stop:0 #FFFFFF, stop:1 #C7C7CC);
+            border: 1px solid #B0B0B5;
+        }
+        QSlider::handle:horizontal:hover {
+            background: qradialgradient(cx:0.5, cy:0.5, radius:0.5,
+                fx:0.3, fy:0.3, stop:0 #FFFFFF, stop:1 #007AFF);
+        }
+        QProgressBar { background: #E5E5EA; border: 1px solid #DCDCDE; }
+        QPushButton {
+            background: #F2F2F3;
+            color: #1C1C1E;
+            border: 1px solid #DCDCDE;
+        }
+        QPushButton:hover {
+            background: #0066CC;
+            color: #FFFFFF;
+            border-color: #0066CC;
         }
         """

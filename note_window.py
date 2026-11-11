@@ -12,8 +12,8 @@ import uuid
 
 from PyQt5 import sip
 from PyQt5.QtCore import QPoint, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen
-from PyQt5.QtWidgets import QHBoxLayout, QTextEdit, QVBoxLayout, QWidget
+from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPainterPath, QPen
+from PyQt5.QtWidgets import QHBoxLayout, QShortcut, QTextEdit, QVBoxLayout, QWidget
 
 NOTE_W, NOTE_H = 260, 165
 CORNER_RADIUS = 12
@@ -38,6 +38,10 @@ class _CloseGlyph(QWidget):
         self.setFixedSize(18, 18)
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip("Close note")
+        # A glyph with no text still needs a name for a screen reader, and a
+        # keyboard path if it is drawn rather than derived from QPushButton.
+        self.setAccessibleName("Close note")
+        self.setFocusPolicy(Qt.TabFocus)
         self._hover = False
         self._dark = dark
 
@@ -63,6 +67,12 @@ class _CloseGlyph(QWidget):
             return
         self.clicked.emit()
 
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.clicked.emit()
+            return
+        super().keyPressEvent(event)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -77,6 +87,11 @@ class _CloseGlyph(QWidget):
                          QPoint(int(centre + arm), int(centre + arm)))
         painter.drawLine(QPoint(int(centre + arm), int(centre - arm)),
                          QPoint(int(centre - arm), int(centre + arm)))
+
+        if self.hasFocus():
+            painter.setPen(QPen(QColor("#0A84FF" if self._dark else "#007AFF"), 1.5))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 4, 4)
 
 
 class NoteWindow(QWidget):
@@ -97,10 +112,17 @@ class NoteWindow(QWidget):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setWindowTitle("Notch Note")
+        self.setAccessibleName("Notch note")
         self.setMinimumSize(self._dim(NOTE_W), self._dim(NOTE_H))
         self.resize(self._dim(NOTE_W), self._dim(NOTE_H))
 
         self._build()
+        # A note could only be closed with a mouse before: its × is a custom
+        # glyph and the note had no keyboard handler. Escape gives every note
+        # a way out from the keyboard.
+        self._escape = QShortcut(QKeySequence("Escape"), self)
+        self._escape.setContext(Qt.WindowShortcut)
+        self._escape.activated.connect(self.close)
 
         if text:
             self._suppress_change_signal = True
@@ -133,6 +155,7 @@ class NoteWindow(QWidget):
         self._edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._edit.setLineWrapMode(QTextEdit.WidgetWidth)
         self._edit.setPlaceholderText("Talking points")
+        self._edit.setAccessibleName("Note text")
         self._style_editor()
         self._edit.textChanged.connect(self._on_text_changed)
         root.addWidget(self._edit)

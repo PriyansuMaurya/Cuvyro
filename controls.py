@@ -306,6 +306,12 @@ class CompactButton(GlyphButton):
 class TextButton(QAbstractButton):
     """A small labelled button (the editor's Done)."""
 
+    # White text on Apple blue (#007AFF) is 4.4:1, and on the dark-mode
+    # #0A84FF it is 3.6:1: both below the 4.5:1 a 9 pt label needs. The same
+    # blue a step deeper keeps the accent and clears the bar (5.6:1).
+    PRIMARY = "#0066CC"
+    PRIMARY_HOVER = "#0059B3"
+
     def __init__(self, text: str, parent=None, primary: bool = False):
         super().__init__(parent)
         self.setText(text)
@@ -360,12 +366,12 @@ class TextButton(QAbstractButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         if self._dark:
-            base = QColor("#2C2C2E") if not self._primary else QColor("#0A84FF")
-            hover = QColor("#3A3A3C") if not self._primary else QColor("#3A9BFF")
+            base = QColor("#2C2C2E") if not self._primary else QColor(self.PRIMARY)
+            hover = QColor("#3A3A3C") if not self._primary else QColor(self.PRIMARY_HOVER)
             text = QColor("#F2F2F7")
         else:
-            base = QColor("#E8E8EA") if not self._primary else QColor("#007AFF")
-            hover = QColor("#DCDCDE") if not self._primary else QColor("#2F8DFF")
+            base = QColor("#E8E8EA") if not self._primary else QColor(self.PRIMARY)
+            hover = QColor("#DCDCDE") if not self._primary else QColor(self.PRIMARY_HOVER)
             text = QColor("#1C1C1E") if not self._primary else QColor("#FFFFFF")
         fill = hover if (self._hover or self._pressed) else base
         if self._pressed:

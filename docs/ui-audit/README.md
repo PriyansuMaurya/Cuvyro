@@ -107,6 +107,48 @@ Surface treatment, also measured from the captures:
 - The light theme applied the full-strength coloured glow over white, which
   read as a smudge rather than a status hint.
 
+## Robustness, latency and access (second pass)
+
+A later pass audited what the visual checks do not cover. These numbers are
+from the same machine, with the checks in `packaging/check_robustness.py`:
+
+| Finding | Before | After |
+|---|---|---|
+| 20 keystrokes in a note (state file write) | 498 ms | **0.6 ms**, one deferred write; close flushes |
+| QObjects left by opening the menu 6 times | 54 → 420 | **54 → 54** |
+| Reader saved at (99999, 99999) | restored off-screen | **clamped to a real screen** |
+| Note saved on a removed monitor | invisible | **clamped, text kept** |
+| Windows-encoded `.txt` | silently ignored | **cp1252/BOM decode, errors shown** |
+| Space in the editor | consumed by the reader shortcut | **types a space; arrows move the caret** |
+| Speech shading per advance (3,360 words) | 5.3 ms | **0.13 ms** |
+| Setup construction, input devices | 780 ms (10 devices) | **2.4 ms median (17 devices)**, no probe streams; meter starts after paint |
+| Help / Setup in the light theme | charcoal | **paper surface** |
+| 9 pt Done label | 3.6:1 white on `#0A84FF` | **5.6:1 on `#0066CC`** |
+| Note keyboard close | mouse only | **Esc, or Space on the focused ×** |
+
+Custom-drawn controls now expose accessible names, menu sliders and inputs
+have names and label buddies, and the reader's window has a title for the
+task switcher. Setup's OK action is now the same blue primary as the reader's
+Done and is the default action for Enter, instead of matching Cancel.
+
+The reader also remembers its position across relaunches, and a saved
+position is clamped to the screens that currently exist.
+
+Known limits of this pass:
+
+- Scripts are `.txt` only. The README advertised PDF and DOCX import, but no
+extractor was ever wired in; the picker, drop target and README now agree.
+- Dialog surfaces and control names were verified from rendered pixels and
+accessible-name properties, not with a screen reader application.- Multi-monitor behaviour was verified by synthetic geometry (an off-screen
+  save point), not by physically unplugging a display.
+- The floating toolbar deliberately sits over the first line of type until it
+  recedes after three seconds of stillness. The captures show that overlap;
+  reserving a header strip would cost a line of script in the compact reader,
+  so it stays a deliberate trade-off rather than a measured defect.
+- Speech recognition itself was exercised with synthetic word timings in
+  `check_voice_follow.py`; live microphone recognition accuracy was not
+  measured on this machine.
+
 ## Reproducing
 
 ```bash
@@ -124,6 +166,9 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_behavior.py
 
 # line-gated voice follow: pauses, speeds, multi-line finals, reflow
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_voice_follow.py
+
+# debounced saves, menu lifecycle, screen clamping, import, shortcuts, access
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_robustness.py
 
 # design invariants, asserted against rendered pixels (needs a real display)
 .venv/Scripts/python.exe packaging/check_design.py
