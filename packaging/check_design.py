@@ -9,7 +9,8 @@ surface drifts back:
     behind the floating controls, fully opaque, with no fade or blur and no
     reserved header band,
   * the controls keep the exact position and size they had, only without a
-    header bar behind them,
+    header bar behind them, and each one carries a subtle rounded glass
+    plate that lifts its glyph off the script,
   * the resting pill carries a visible level meter instead of being empty,
   * the narrow reader no longer sets type below 8 pt,
   * the editor reserves a strip so its last line never runs under Done,
@@ -84,7 +85,6 @@ def ink_count(image, box, background, tolerance=12):
 def main():
     app = QApplication(sys.argv)
     import ui_overlay
-    from controls import MoreButton
     from store import Store
 
     win = ui_overlay.NotchOverlay()
@@ -134,15 +134,39 @@ def main():
     check("the minimize control keeps its exact position",
           (close_at.x(), close_at.y()) == expected["minimize"],
           f"{close_at.x()},{close_at.y()} vs {expected['minimize']}")
-    right = win._settings_btn.mapTo(win, QPoint(0, 0)).x() + win._settings_btn.width()
+    right = win._compact_btn.mapTo(win, QPoint(0, 0)).x() + win._compact_btn.width()
     check("the icon cluster keeps its right inset",
           abs(right - (win.width() - int(18 * s))) <= 1,
           f"right edge {right} vs {win.width() - int(18 * s)}")
     tops = {btn.mapTo(win, QPoint(0, 0)).y() for btn in
             (win._close_btn, win._note_btn, win._mic_btn,
-             win._compact_btn, win._settings_btn)}
+             win._compact_btn)}
     check("every control keeps the same baseline", tops == {int(4 * s)},
           f"y offsets {sorted(tops)}")
+
+    # Each control carries a subtle glass plate: a rounded, low-alpha surface
+    # with a hairline, not a solid chip. Sampled inside the plate, below the
+    # glyph, in both themes: a few levels off the card and never more, so the
+    # words behind the chrome still read through it.
+    for dark in (True, False):
+        win._dark_theme = dark
+        win._apply_read_mode_style()
+        win._apply_control_theme()
+        win.update()
+        QTest.qWait(80)
+        image = win.grab().toImage()
+        fill = pixel(image, 12, 60)
+        name = "dark" if dark else "light"
+        drifts = {}
+        for label, btn in (("minimize", win._close_btn), ("note", win._note_btn),
+                           ("mic", win._mic_btn), ("width", win._compact_btn)):
+            at = btn.mapTo(win, QPoint(0, 0))
+            sample = pixel(image, at.x() + btn.width() / 2,
+                           at.y() + btn.height() - 5)
+            drifts[label] = max(abs(a - b) for a, b in zip(sample, fill))
+        check(f"{name}: every control sits on a glass plate",
+              all(3 <= value <= 40 for value in drifts.values()),
+              f"plate drift {drifts} levels from card {fill}")
 
     # The text actually occupies the window at the reference size.
     win._dark_theme = False
@@ -287,10 +311,12 @@ def main():
         check(f"{name} menu: secondary text contrast >= 4.5:1",
               contrast(secondary, panel) >= 4.5, f"{contrast(secondary, panel):.1f}:1")
 
-    # The menu entry point no longer hides a filled glyph in the toolbar.
-    check("toolbar entry point is a quiet 'more' control",
-          isinstance(win._settings_btn, MoreButton),
-          type(win._settings_btn).__name__)
+    # The toolbar is four glyphs and no menu button: the menu opens on a
+    # right click, so the "more" control had nothing left to do.
+    check("the toolbar carries no menu control",
+          not hasattr(win, "_settings_btn")
+          and not hasattr(win, "_open_menu_from_button"),
+          f"settings button {getattr(win, '_settings_btn', None)!r}")
 
     win.close()
     print()

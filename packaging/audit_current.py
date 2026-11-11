@@ -84,7 +84,6 @@ def main():
         "note": win._note_btn,
         "mic": win._mic_btn,
         "compact": win._compact_btn,
-        "menu": win._settings_btn,
     }
     for name, btn in buttons.items():
         report(f"hit target {name}", f"{btn.width()}x{btn.height()} px")

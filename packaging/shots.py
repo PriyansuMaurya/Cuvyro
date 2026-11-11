@@ -120,7 +120,6 @@ def main():
         win._note_btn.show()
         win._mic_btn.show()
         win._compact_btn.show()
-        win._settings_btn.show()
         win._set_top_bar_icon_size(int(24 * win._scale))
         win._text_edit.show()
         win._chrome.show()
@@ -136,9 +135,12 @@ def main():
     def open_menu(key="menu", name="menu"):
         menu = win._build_menu()
         menu_holder[key] = menu
-        pos = win._settings_btn.mapToGlobal(QPoint(0, win._settings_btn.height()))
-        menu.popup(QPoint(pos.x() - menu.sizeHint().width() + win._settings_btn.width(),
-                          pos.y() + 8))
+        # The menu opens on a right click now, so the capture pops it under
+        # the rightmost control, where a right click on the card would.
+        anchor = win._compact_btn
+        pos = anchor.mapToGlobal(QPoint(0, anchor.height()))
+        menu.popup(QPoint(
+            pos.x() - menu.sizeHint().width() + anchor.width(), pos.y() + 8))
         # Let the popup lay out and polish before it is grabbed, otherwise
         # the capture catches the pre-layout 100 px stub.
         menu.adjustSize()

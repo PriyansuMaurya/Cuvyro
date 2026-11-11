@@ -44,8 +44,8 @@ class _RenderedLine(NamedTuple):
 
 from spring import Spring, SpringGroup, system_allows_motion
 from controls import (
-    CompactButton, GlyphButton, MicButton, MoreButton, MinimizeButton,
-    NoteButton, RoundedMenu, ScriptTextEdit, TextButton,
+    CompactButton, GlyphButton, MicButton, MinimizeButton, NoteButton,
+    RoundedMenu, ScriptTextEdit, TextButton,
 )
 from win_capture import exclude_from_capture
 
@@ -665,10 +665,10 @@ class NotchOverlay(QWidget):
         self._compact_btn.setToolTip("Narrow reader (about two words per line)")
         self._compact_btn.clicked.connect(self._toggle_compact_mode)
         icons_layout.addWidget(self._compact_btn)
-        self._settings_btn = MoreButton(hit=hit)
-        self._settings_btn.setToolTip("Menu")
-        self._settings_btn.clicked.connect(self._open_menu_from_button)
-        icons_layout.addWidget(self._settings_btn)
+        # No menu button: a "more" glyph earned its place only while the menu
+        # had nowhere else to open. The menu is still there on a right click,
+        # over the card or over the script, and the toolbar stays four quiet
+        # glyphs instead of five with one that does nothing else.
         top_bar.addWidget(self._icons_container)
         self._set_top_bar_icon_size(int(24 * s))
 
@@ -1619,19 +1619,6 @@ class NotchOverlay(QWidget):
             QTimer.singleShot(0, fade_in)
         menu.exec_(QPoint(pos))
 
-    def _open_menu_from_button(self):
-        if self._edit_mode:
-            return
-        menu = self._build_menu()
-        btn_pos = self._settings_btn.mapToGlobal(QPoint(0, 0))
-        btn_w = self._settings_btn.width()
-        btn_h = self._settings_btn.height()
-        hint = menu.sizeHint()
-        x = btn_pos.x() + btn_w - hint.width()
-        y = btn_pos.y() + btn_h + int(6 * self._scale)
-        self._present_menu(menu, QPoint(x, y))
-
-
     def _show_menu(self, global_pos):
         if self._edit_mode:
             return
@@ -1771,7 +1758,7 @@ class NotchOverlay(QWidget):
         """Icon design size, and a hit box that stays comfortable."""
         hit = max(int(glyph + int(8 * self._scale)), int(20 * self._scale))
         for btn in (self._close_btn, self._note_btn, self._mic_btn,
-                    self._compact_btn, self._settings_btn):
+                    self._compact_btn):
             if btn is None:
                 continue
             if hasattr(btn, "set_glyph_size"):
@@ -1786,8 +1773,7 @@ class NotchOverlay(QWidget):
         """Keep every custom-painted control on the card's theme."""
         dark = self._dark_theme
         for btn in (self._close_btn, self._note_btn, self._mic_btn,
-                    self._compact_btn, self._settings_btn,
-                    getattr(self, "_done_btn", None)):
+                    self._compact_btn, getattr(self, "_done_btn", None)):
             if btn is not None and hasattr(btn, "set_dark"):
                 btn.set_dark(dark)
 
@@ -1809,7 +1795,7 @@ class NotchOverlay(QWidget):
         hovering = self._chrome.underMouse() or any(
             getattr(btn, "_hover", False) for btn in
             (self._close_btn, self._note_btn, self._mic_btn,
-             self._compact_btn, self._settings_btn)
+             self._compact_btn)
         )
         if hovering:
             # Pointer is resting on the controls: do not pull them away.
@@ -2022,7 +2008,6 @@ class NotchOverlay(QWidget):
             self._set_top_bar_icon_size(int(24 * s))
             self._note_btn.show()
             self._mic_btn.show()
-            self._settings_btn.show()
             self._compact_btn.set_compact(False)
             self._compact_btn.setToolTip("Narrow reader (about two words per line)")
             if self._size_before_compact is None:
@@ -2038,11 +2023,10 @@ class NotchOverlay(QWidget):
             # Font first, so the text has already reflowed when the width
             # arrives; animating width against old metrics makes the text jump.
             self._set_top_bar_icon_size(int(18 * s))
-            # 100 px holds two 26 px targets; five would push the bar out of
+            # 100 px holds two 26 px targets; four would push the bar out of
             # the card. The rest come back with the wide reader.
             self._note_btn.hide()
             self._mic_btn.hide()
-            self._settings_btn.hide()
             self._compact_btn.set_compact(True)
             self._compact_btn.setToolTip("Wide reader")
             self._size_before_compact = self.size()
@@ -2672,10 +2656,6 @@ class NotchOverlay(QWidget):
         """The card has landed. Styling was swapped during the text fade."""
         if self._edit_target:
             return
-        if not self._compact_mode:
-            self._settings_btn.show()
-        else:
-            self._settings_btn.hide()
         self._icons_container.show()
         self._wake_chrome()
         self.clearMask()

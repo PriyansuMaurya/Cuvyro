@@ -74,7 +74,7 @@ def main():
     check("long script overflows the viewport", bar.maximum() > 0, f"max={bar.maximum()}")
 
     toolbar_before = win._close_btn.mapTo(win, QPoint(0, 0))
-    settings_before = win._settings_btn.mapTo(win, QPoint(0, 0))
+    compact_before = win._compact_btn.mapTo(win, QPoint(0, 0))
 
     wheel(win._text_edit.viewport(), -5)
     QTest.qWait(60)
@@ -88,7 +88,7 @@ def main():
     check(
         "toolbar stays fixed while the script moves",
         win._close_btn.mapTo(win, QPoint(0, 0)) == toolbar_before
-        and win._settings_btn.mapTo(win, QPoint(0, 0)) == settings_before,
+        and win._compact_btn.mapTo(win, QPoint(0, 0)) == compact_before,
     )
 
     # Timed playback (Manual mode).

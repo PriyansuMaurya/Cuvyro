@@ -35,6 +35,22 @@ class GlyphButton(QAbstractButton):
                 "focus": "#007AFF"},
     }
 
+    # Glass plate under each glyph: a low-alpha fill, a hairline, and one lit
+    # line along the top. The script runs under the chrome now, so a bare
+    # glyph would sit directly on the words; the plate lifts it off the type
+    # without turning the toolbar into a row of solid boxes. Alphas are per
+    # theme and stay low enough that the words behind them still read.
+    GLASS = {
+        True: {"fill": (255, 255, 255, 0.06), "hover": (255, 255, 255, 0.11),
+               "press": (255, 255, 255, 0.15), "edge": (255, 255, 255, 0.10),
+               "lit": (255, 255, 255, 0.17)},
+        False: {"fill": (0, 0, 0, 0.045), "hover": (0, 0, 0, 0.075),
+                "press": (0, 0, 0, 0.10), "edge": (0, 0, 0, 0.09),
+                "lit": (255, 255, 255, 0.85)},
+    }
+    PLATE_INSET = 0.10      # of the hit box, so it tracks the target size
+    PLATE_RADIUS = 0.30     # of the plate: 9 px at a 30 px target
+
     def __init__(self, parent=None, hit: int | None = None):
         super().__init__(parent)
         self.setFixedSize(hit or self.HIT, hit or self.HIT)
@@ -141,9 +157,45 @@ class GlyphButton(QAbstractButton):
         super().keyReleaseEvent(event)
 
     # ── painting ─────────────────────────────────────────────────────
+    def _glass_alpha(self) -> float:
+        table = self.GLASS[self._dark]
+        if self._press.value > 0.05:
+            return table["press"][3]
+        if self._hover:
+            return table["hover"][3]
+        return table["fill"][3]
+
+    def _paint_plate(self, painter: QPainter) -> None:
+        inset = self.width() * self.PLATE_INSET
+        plate = QRectF(self.rect()).adjusted(inset, inset, -inset, -inset)
+        radius = plate.width() * self.PLATE_RADIUS
+        table = self.GLASS[self._dark]
+
+        fill = QColor(*table["fill"][:3])
+        fill.setAlphaF(self._glass_alpha())
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(plate, radius, radius)
+
+        edge = QColor(*table["edge"][:3])
+        edge.setAlphaF(table["edge"][3])
+        painter.setPen(QPen(edge, 1.0))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(plate.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+
+        # One bright line across the top: that highlight is what reads as
+        # glass. Without it the plate is just a slightly tinted rectangle.
+        lit = QColor(*table["lit"][:3])
+        lit.setAlphaF(table["lit"][3])
+        painter.setPen(QPen(lit, 1.0))
+        painter.drawLine(QPointF(plate.left() + radius, plate.top() + 0.5),
+                         QPointF(plate.right() - radius, plate.top() + 0.5))
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+
+        self._paint_plate(painter)
 
         cx, cy = self.width() / 2.0, self.height() / 2.0
         # Glyphs are authored in a 24 px box; the design scale decouples the
@@ -163,8 +215,11 @@ class GlyphButton(QAbstractButton):
             pen.setWidthF(1.5)
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
-            painter.drawRoundedRect(QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5),
-                                    6, 6)
+            inset = self.width() * self.PLATE_INSET
+            plate = QRectF(self.rect()).adjusted(inset, inset, -inset, -inset)
+            radius = plate.width() * self.PLATE_RADIUS
+            painter.drawRoundedRect(plate.adjusted(-0.5, -0.5, 0.5, 0.5),
+                                    radius + 0.5, radius + 0.5)
 
     def paint_glyph(self, painter: QPainter) -> None:
         """Draw inside a 24×24 box whose origin is (0,0). Override."""
@@ -246,23 +301,6 @@ class CompactButton(GlyphButton):
         for tip, back in ((5.0, 8.4), (19.0, 15.6)):
             painter.drawLine(QPointF(tip, 12.0), QPointF(back, 9.4))
             painter.drawLine(QPointF(tip, 12.0), QPointF(back, 14.6))
-
-
-class MoreButton(GlyphButton):
-    """Three dots, not a gear.
-
-    The control opens a menu, and the menu is where settings live. A filled
-    cog was the darkest, heaviest object in a card whose whole job is to
-    stay out of the way; it also promised a settings panel and delivered a
-    menu. Three dots at the same stroke weight as the other glyphs say
-    "more" without competing with the script.
-    """
-
-    def paint_glyph(self, painter):
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(self._color())
-        for dx in (-5.0, 0.0, 5.0):
-            painter.drawEllipse(QPointF(12.0 + dx, 12.0), 1.4, 1.4)
 
 
 class TextButton(QAbstractButton):
