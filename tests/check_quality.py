@@ -20,7 +20,7 @@ fails loudly if any of them drift back:
 Run it on a real display, not offscreen: the contrast checks need the
 platform's font database.
 
-    .venv/Scripts/python.exe packaging/check_quality.py
+    .venv/Scripts/python.exe tests/check_quality.py
 """
 
 import contextlib
@@ -38,7 +38,7 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)
 
-FIXTURE = os.path.join(REPO_ROOT, "fixtures", "demo-script.txt")
+FIXTURE = os.path.join(REPO_ROOT, "tests", "fixtures", "demo-script.txt")
 failures = []
 
 

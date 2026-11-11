@@ -20,7 +20,7 @@ surface drifts back:
 Run it on a real display, not offscreen: the text-ink checks need the
 platform's font database, which the offscreen plugin does not provide.
 
-    .venv/Scripts/python.exe packaging/check_design.py
+    .venv/Scripts/python.exe tests/check_design.py
 """
 
 import os
@@ -37,7 +37,7 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)
 
-FIXTURE = os.path.join(REPO_ROOT, "fixtures", "demo-script.txt")
+FIXTURE = os.path.join(REPO_ROOT, "tests", "fixtures", "demo-script.txt")
 failures = []
 
 

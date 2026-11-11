@@ -12,7 +12,7 @@ microphone) and asserts the behaviour the teleprompter promises:
 
 Run headless:
 
-    QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_voice_follow.py
+    QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_voice_follow.py
 """
 
 import contextlib
@@ -30,7 +30,7 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)
 
-FIXTURE = os.path.join(REPO_ROOT, "fixtures", "demo-script.txt")
+FIXTURE = os.path.join(REPO_ROOT, "tests", "fixtures", "demo-script.txt")
 failures = []
 
 

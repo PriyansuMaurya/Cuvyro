@@ -13,16 +13,22 @@ Subjects follow conventional commits (`fix(notes): ...`, `build(release): ...`)
 with a body that explains why the change was needed rather than restating the
 diff.
 
+## Layout
+
+App modules stay at the repository root. `tests/` holds the standalone checks,
+the screenshot harnesses and their fixture; `packaging/` holds only build
+configuration and the icon sources.
+
 ## Checks
 
 ```
-QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_behavior.py
-QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_voice_follow.py
-QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_robustness.py
-.venv/Scripts/python.exe packaging/check_design.py      # needs a real display
-.venv/Scripts/python.exe packaging/check_quality.py     # needs a real display
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_behavior.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_voice_follow.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py
+.venv/Scripts/python.exe tests/check_design.py      # needs a real display
+.venv/Scripts/python.exe tests/check_quality.py     # needs a real display
 ```
 
-`packaging/check_design.py` asserts surface invariants against rendered pixels
-and `packaging/verify_ui.py` reports window geometry. All of them build their
-own temporary store, so they never touch the saved script or notes.
+`tests/check_design.py` asserts surface invariants against rendered pixels and
+`tests/verify_ui.py` reports window geometry. All of them build their own
+temporary store, so they never touch the saved script or notes.

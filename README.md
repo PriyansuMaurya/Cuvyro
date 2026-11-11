@@ -21,7 +21,7 @@
 
 
 <p align="center">
-  <img src="./Notch.gif" alt="Notch demo GIF" width="900" />
+  <img src="./assets/Notch.gif" alt="Notch demo GIF" width="900" />
 </p>
 
 How to Use Notch: https://www.youtube.com/watch?v=8LaDcjB6gCM

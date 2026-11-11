@@ -1,8 +1,8 @@
 """Capture every surface of the overlay, including the ones the geometry
 script does not reach: both themes, the menu, and the narrow reader.
 
-    .venv/Scripts/python.exe packaging/shots.py --prefix before
-    .venv/Scripts/python.exe packaging/shots.py --prefix after --theme light
+    .venv/Scripts/python.exe tests/shots.py --prefix before
+    .venv/Scripts/python.exe tests/shots.py --prefix after --theme light
 
 Capture exclusion is lifted for each grab and restored immediately, because
 with WDA_EXCLUDEFROMCAPTURE set every screenshot of these windows is blank.
@@ -24,7 +24,7 @@ sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)
 
 SHOTS = os.path.join(os.environ.get("TEMP", "."), "shots")
-FIXTURE = os.path.join(REPO_ROOT, "fixtures", "demo-script.txt")
+FIXTURE = os.path.join(REPO_ROOT, "tests", "fixtures", "demo-script.txt")
 os.makedirs(SHOTS, exist_ok=True)
 
 WDA_NONE = 0x0

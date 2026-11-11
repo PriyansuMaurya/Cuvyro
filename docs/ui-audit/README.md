@@ -1,9 +1,9 @@
 # UI audit captures
 
-Before/after evidence for the Windows overlay work, matching the reference
-geometry recorded in `Notch_Windows_Replica_Spec.md` section 2. All captures are
-from one 1920×1080 display at 100% scaling, grabbed at the window's own rect, so
-the pixel sizes are 1:1 with the DIP values below.
+Before/after evidence for the Windows overlay work, captured against the
+reference geometry used for the redesign. All captures are from one 1920×1080
+display at 100% scaling, grabbed at the window's own rect, so the pixel sizes
+are 1:1 with the DIP values below.
 
 | Surface | Before | After | Reference target |
 |---|---|---|---|
@@ -110,7 +110,7 @@ Surface treatment, also measured from the captures:
 ## Robustness, latency and access (second pass)
 
 A later pass audited what the visual checks do not cover. These numbers are
-from the same machine, with the checks in `packaging/check_robustness.py`:
+from the same machine, with the checks in `tests/check_robustness.py`:
 
 | Finding | Before | After |
 |---|---|---|
@@ -139,7 +139,8 @@ Known limits of this pass:
 - Scripts are `.txt` only. The README advertised PDF and DOCX import, but no
 extractor was ever wired in; the picker, drop target and README now agree.
 - Dialog surfaces and control names were verified from rendered pixels and
-accessible-name properties, not with a screen reader application.- Multi-monitor behaviour was verified by synthetic geometry (an off-screen
+  accessible-name properties, not with a screen reader application.
+- Multi-monitor behaviour was verified by synthetic geometry (an off-screen
   save point), not by physically unplugging a display.
 - The floating toolbar deliberately sits over the first line of type until it
   recedes after three seconds of stillness. The captures show that overlap;
@@ -153,25 +154,25 @@ accessible-name properties, not with a screen reader application.- Multi-monitor
 
 ```bash
 # geometry + screenshots of all three surfaces
-.venv/Scripts/python.exe packaging/verify_ui.py
+.venv/Scripts/python.exe tests/verify_ui.py
 
 # typography, speech-follow accuracy, scroll glide, anchor and transparency
-.venv/Scripts/python.exe packaging/check_quality.py
+.venv/Scripts/python.exe tests/check_quality.py
 
 # capture-protection assertion (expects 0x11 on overlay and note)
-.venv/Scripts/python.exe packaging/verify_ui.py --check-protection
+.venv/Scripts/python.exe tests/verify_ui.py --check-protection
 
 # wheel scroll, timed playback, persistence, note lifecycle
-QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_behavior.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_behavior.py
 
 # line-gated voice follow: pauses, speeds, multi-line finals, reflow
-QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_voice_follow.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_voice_follow.py
 
 # debounced saves, menu lifecycle, screen clamping, import, shortcuts, access
-QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe packaging/check_robustness.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py
 
 # design invariants, asserted against rendered pixels (needs a real display)
-.venv/Scripts/python.exe packaging/check_design.py
+.venv/Scripts/python.exe tests/check_design.py
 ```
 
 Screenshots are written to `%TEMP%\shots`. `verify_ui.py` lifts

@@ -36,10 +36,5 @@ skills-lock.json
 # One-shot patch scripts and scratch captures
 packaging/patch_*.py
 
-
-# Large Models (Optional: Uncomment below if the 'model' folder contains files >100MB)
+# Local speech model (downloaded by the installer build)
 model/
-
-notch_logo.ico
-notch_logo.PNG
-notch_small_256.ico
