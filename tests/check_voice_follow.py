@@ -23,6 +23,7 @@ import io
 import os
 import sys
 import tempfile
+import time
 
 from PyQt5.QtGui import QFont
 from PyQt5.QtTest import QTest
@@ -164,6 +165,8 @@ def share_ok(win, above, visible, slack):
 def main():
     app = QApplication(sys.argv)
     import ui_overlay
+    from audio_worker import AudioWorker
+    from matching_engine import MatchingEngine
     from store import Store
 
     tmp = tempfile.mkdtemp(prefix="notch-voice-check-")
@@ -187,6 +190,18 @@ def main():
           win._current_line == 0 and win._confirmed_word == -1,
           f"line={win._current_line} confirmed={win._confirmed_word}")
 
+    # ── Recogniser cadence ───────────────────────────────────────────
+    # The dominant fixed delay is how long audio is batched before the
+    # recogniser is asked for a result. 100 ms keeps the live highlight
+    # within a syllable of the speaker without loading the model.
+    block_ms = AudioWorker.BLOCK_SAMPLES / AudioWorker.SAMPLE_RATE * 1000.0
+    silence_ms = AudioWorker()._silence_threshold * block_ms
+    check("audio reaches the recogniser in 100 ms blocks",
+          block_ms <= 100.0, f"{block_ms:.0f} ms")
+    check("the VAD still waits about 0.75 s of silence",
+          abs(silence_ms - 750.0) <= block_ms,
+          f"{silence_ms:.0f} ms")
+
     # Silence alone must never move the reader.
     settle(win, 60)
     QTest.qWait(400)
@@ -194,21 +209,21 @@ def main():
           win._current_line == 0 and win._confirmed_word == -1,
           f"line={win._current_line} confirmed={win._confirmed_word}")
 
-    # ── Partials hold the line, even when they contain all of it ─────
+    # ── Partials hold the line until its last word ───────────────────
     settle(win)
     before_bar = win._text_edit.verticalScrollBar().value()
     before_target = win._voice_target_scroll
     words = line_words(win, 0)
-    for count in range(1, len(words) + 1):
+    for count in range(1, len(words)):
         quiet_speech(win, " ".join(words[:count]), False)
         check_inside = win._current_line == 0 and win._confirmed_word == -1
         if not check_inside:
             break
-    check("partial results never advance the reader",
+    check("a partial mid-line does not advance the reader",
           win._current_line == 0 and win._confirmed_word == -1,
           f"line={win._current_line} confirmed={win._confirmed_word}")
     settle(win)
-    check("partial results never scroll the view",
+    check("a partial mid-line does not scroll the view",
           win._text_edit.verticalScrollBar().value() == before_bar
           and win._voice_target_scroll == before_target,
           f"bar={win._text_edit.verticalScrollBar().value()} target={win._voice_target_scroll}")
@@ -238,6 +253,25 @@ def main():
     check("the view re-anchors to the new line", target_matches_line(win),
           f"target={win._voice_target_scroll}")
 
+    # The step must not wait for the final: a partial that reaches the last
+    # word already proves it was spoken, so the scroll starts at the boundary
+    # instead of after the recogniser's end-of-sentence pause.
+    load(win, script)
+    words = line_words(win, 0)
+    first_line = win._line_spans[0]
+    win._voice_wpm = 60
+    win._last_match_pos = 0
+    win._last_match_time = time.monotonic() - 0.5
+    quiet_speech(win, " ".join(words), False)
+    check("a completed line feeds the speed estimate",
+          win._voice_wpm > 60, f"60 -> {win._voice_wpm} wpm")
+    check("a partial that reaches the last word steps at once",
+          win._current_line == 1
+          and win._confirmed_word == first_line.last_word,
+          f"line={win._current_line} confirmed={win._confirmed_word}")
+    check("that step already targets the new line before any final",
+          target_matches_line(win), f"target={win._voice_target_scroll}")
+
     # A wrong last word must not be treated as confirmation.
     load(win, script)
     words = line_words(win, 0)
@@ -245,6 +279,69 @@ def main():
     check("a mismatched last word does not finish the line",
           win._current_line == 0 and win._confirmed_word < win._line_spans[0].last_word,
           f"line={win._current_line} confirmed={win._confirmed_word}")
+
+    # ── Approximate recognition ─────────────────────────────────────
+    # Spelling drift and pronunciation variants are normal Vosk output; the
+    # fuzzy score has to absorb them without loosening short words into noise.
+    engine = MatchingEngine()
+    engine.load_script("we need to recognise the harbour plan")
+    aligned = engine.align_forward(
+        "we need to recognize the harbor plan", 0, engine.word_count)
+    check("spelling and pronunciation variants still align",
+          aligned is not None and aligned.last_word == engine.word_count - 1,
+          f"{aligned} of {engine.word_count}")
+
+    # A skipped clause should resync on a clear phrase, never on one lonely
+    # word. The wider search is only allowed with the next-word agreement.
+    engine.load_script("one two three four five six seven eight nine ten")
+    skipped = engine.align_forward(
+        "one seven eight nine ten", 0, engine.word_count, resync_skip=9)
+    stray = engine.align_forward(
+        "seven", 0, engine.word_count, resync_skip=9)
+    check("a skipped clause resyncs on a clear phrase",
+          skipped is not None and skipped.last_word == engine.word_count - 1,
+          f"{skipped} of {engine.word_count}")
+    check("one stray word cannot jump across a skipped clause",
+          stray is None, f"{stray}")
+
+    # ── Latency budget ───────────────────────────────────────────────
+    # Recognition itself is the microphone thread's job; this budget covers
+    # the UI half of the loop: a result must shade the words and retarget
+    # the scroll immediately, not after a timer tick.
+    load(win, script)
+    sample = line_words(win, 0)
+    chunk = " ".join(sample[:max(1, len(sample) // 2)])
+    t0 = time.perf_counter()
+    for _ in range(100):
+        quiet_speech(win, chunk, False)
+    partial_ms = (time.perf_counter() - t0) * 1000.0 / 100
+    t0 = time.perf_counter()
+    for _ in range(100):
+        quiet_speech(win, chunk, True)
+    final_ms = (time.perf_counter() - t0) * 1000.0 / 100
+    check("a partial result updates the reader in under 2 ms",
+          partial_ms < 2.0, f"{partial_ms:.3f} ms")
+    check("a final result updates the reader in under 2 ms",
+          final_ms < 2.0, f"{final_ms:.3f} ms")
+
+    # The speed estimate follows the speaker in both directions, so a slow
+    # passage cannot inherit the number from a fast one.
+    saved_wpm = win._voice_wpm
+    win._voice_wpm = 300
+    win._last_match_pos = 0
+    win._last_match_time = time.monotonic() - 2.0
+    win._update_voice_speed(1, True)
+    slowed = win._voice_wpm
+    win._voice_wpm = 60
+    win._last_match_pos = 0
+    win._last_match_time = time.monotonic() - 0.5
+    win._update_voice_speed(10, True)
+    raised = win._voice_wpm
+    win._voice_wpm = saved_wpm
+    check("the speed estimate follows slower speech", slowed < 300,
+          f"300 -> {slowed} wpm")
+    check("the speed estimate follows faster speech", raised > 60,
+          f"60 -> {raised} wpm")
 
     # ── Slow speech, word by word ────────────────────────────────────
     load(win, script)
@@ -368,7 +465,8 @@ def main():
     widths = [120, 180, 240, 340, 480]
     counts = []
     for width in widths:
-        win.resize(width, 122)
+        # Widths are card widths; the transparent rail adds to the window.
+        win.resize(width + win.RAIL_W, 122)
         QTest.qWait(220)  # let the resize debounce rebuild the lines
         counts.append(len(win._line_spans))
         if not position_kept(win, word) or not target_matches_line(win):
@@ -399,7 +497,7 @@ def main():
     balance_detail = ""
     for size in (8, 10, 12, 16, 24):
         for width, height in ((340, 122), (480, 200), (260, 150)):
-            win.resize(width, height)
+            win.resize(width + win.RAIL_W, height)
             QTest.qWait(220)  # let the resize debounce rebuild the lines
             win._font_size = size
             win._apply_typography()
@@ -428,7 +526,7 @@ def main():
 
     # A different speaking rhythm must not move the balance: the anchor only
     # depends on the words, never on how fast they arrive.
-    win.resize(340, 122)
+    win.resize(340 + win.RAIL_W, 122)
     QTest.qWait(220)
     win._font_size = 12
     win._apply_typography()

@@ -96,6 +96,13 @@ class MatchingEngine:
         idx = max(0, min(word_index, len(self._word_char_offsets) - 1))
         return self._word_char_offsets[idx]
 
+    def word_score(self, spoken: str, word_index: int) -> int:
+        """Fuzzy score for one recognised word against a script word."""
+        if not self._words:
+            return 0
+        idx = max(0, min(word_index, len(self._words) - 1))
+        return fuzz.ratio(self._normalise(spoken), self._words[idx])
+
     def word_span(self, word_index: int) -> tuple[int, int]:
         """Return (start, end) char offsets for a word, inclusive of trailing space."""
         if not self._word_char_offsets:
@@ -125,6 +132,7 @@ class MatchingEngine:
         *,
         min_score: Optional[int] = None,
         max_skip: Optional[int] = None,
+        resync_skip: Optional[int] = None,
     ) -> Optional[Alignment]:
         """Align recognised words to the script, forward only.
 
@@ -132,6 +140,13 @@ class MatchingEngine:
         words, so a stumble or a dropped filler word does not desynchronise
         the reader. Words that do not match anything are treated as
         recogniser noise and leave the pointer where it is.
+
+        ``resync_skip`` lets a longer pause or a skipped clause recover: when
+        a word finds nothing in the normal window, a wider search is allowed
+        only if the following recognised word also matches right after the
+        candidate. That two-word agreement is what stops a stray sound from
+        throwing the reader across the script. The caller's word range still
+        bounds the search, so a line-gated partial cannot leave its line.
 
         The search is bounded by ``[start_word, end_word)``; callers use this
         to keep matching inside the line that is currently on screen.
@@ -148,23 +163,29 @@ class MatchingEngine:
 
         threshold = self.match_threshold if min_score is None else min_score
         skip = self.max_skip if max_skip is None else max(0, max_skip)
+        resync = skip if resync_skip is None else max(skip, resync_skip)
 
         cursor = max(0, min(start_word, len(self._words) - 1))
         end = max(cursor + 1, min(end_word, len(self._words)))
         last_word: Optional[int] = None
         matched = 0
 
-        for spoken in spoken_words:
+        for position, spoken in enumerate(spoken_words):
             if cursor >= end:
                 break
             limit = min(end, cursor + skip + 1)
-            best_index = None
-            best_score = 0
-            for index in range(cursor, limit):
-                score = fuzz.ratio(spoken, self._words[index])
-                if score > best_score:
-                    best_score = score
-                    best_index = index
+            best_index, best_score = self._best_word(spoken, cursor, limit)
+            if (best_index is None or best_score < threshold) and resync > skip:
+                # Nothing in the line/phrase window. Look further only when
+                # the next recognised word agrees with the candidate after
+                # it; shared function words alone must not cause a jump.
+                wide_index, wide_score = self._best_word(
+                    spoken, cursor + skip, min(end, cursor + resync + 1))
+                if (wide_index is not None and wide_score >= threshold
+                        and self._next_word_agrees(
+                            spoken_words, position, wide_index, threshold,
+                            skip, end)):
+                    best_index, best_score = wide_index, wide_score
             if best_index is None or best_score < threshold:
                 continue
             cursor = best_index + 1
@@ -174,6 +195,27 @@ class MatchingEngine:
         if last_word is None:
             return None
         return Alignment(last_word=last_word, matched_words=matched)
+
+    def _best_word(self, spoken: str, cursor: int, limit: int):
+        """Best fuzzy match for one recognised word inside a script window."""
+        best_index = None
+        best_score = 0
+        for index in range(cursor, limit):
+            score = fuzz.ratio(spoken, self._words[index])
+            if score > best_score:
+                best_score = score
+                best_index = index
+        return best_index, best_score
+
+    def _next_word_agrees(self, spoken_words, position: int, candidate: int,
+                          threshold: int, skip: int, end: int) -> bool:
+        """True when the next recognised word lands just after the candidate."""
+        if position + 1 >= len(spoken_words):
+            return False
+        limit = min(end, candidate + skip + 2)
+        index, score = self._best_word(
+            spoken_words[position + 1], candidate + 1, limit)
+        return index is not None and score >= threshold
 
     # ── Internals ────────────────────────────────────────────────────
 

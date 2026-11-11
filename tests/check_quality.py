@@ -243,7 +243,7 @@ def main():
     before_target = win._voice_target_scroll
     highlight_ok = True
     highlight_detail = ""
-    for count in range(1, len(words) + 1):
+    for count in range(1, len(words)):
         speech(win, " ".join(words[:count]), False)
         expected = line.first_word + count - 1
         actual = log[-1] if log else None
@@ -252,13 +252,20 @@ def main():
             highlight_detail = f"word {count}: shaded {actual}, expected {expected}"
             break
     check("a partial result shades exactly the word just heard",
-          highlight_ok, highlight_detail or f"{len(words)} words")
-    check("partial results never move the view",
+          highlight_ok, highlight_detail or f"{len(words) - 1} words")
+    check("a partial mid-line does not move the view",
           bar.value() == before_bar and win._voice_target_scroll == before_target,
           f"bar={bar.value()} target={win._voice_target_scroll}")
     check("the tentative word survives a format re-apply",
-          win._display_word() == line.last_word,
+          win._display_word() == line.last_word - 1,
           f"display word {win._display_word()} of {line.last_word}")
+
+    # Reaching the last word is proof it was spoken; the step must not wait
+    # for the recogniser's end-of-sentence final, which arrives after a pause.
+    speech(win, " ".join(words), False)
+    check("the last word steps the line before the final",
+          win._current_line == 1 and win._confirmed_word == line.last_word,
+          f"line={win._current_line} confirmed={win._confirmed_word}")
 
     speech(win, " ".join(words), True)
     check("finishing the line advances exactly one line",
@@ -356,19 +363,19 @@ def main():
     check("about 30% of the visible words sit behind the reading line",
           errors["middle"] <= slacks["middle"],
           f"shares {shares}, one line is {slacks['middle']} words")
-    check("the line being read stays below the floating controls",
+    check("the line being read keeps clear air above it",
           all(value >= win._chrome_strip() - 1 for value in readings.values()),
-          f"line tops {readings}, chrome {win._chrome_strip()}")
+          f"line tops {readings}, top air {win._chrome_strip()}")
 
     win._scroll_to_reading_line(0)
     settle(win)
     first_top = win._line_spans[0].top - bar.value()
     start_share = first_top / float(edit.viewport().height())
-    check("a script opens 30% below the top edge, clear of the controls",
+    check("a script opens 30% below the top edge, clear of the top edge",
           bar.value() <= 1 and abs(start_share - 0.30) <= 0.01
           and first_top >= win._chrome_strip() - 1,
           f"scroll {bar.value()}, first line top {first_top:.1f} "
-          f"({start_share:.1%}), chrome {win._chrome_strip()}")
+          f"({start_share:.1%}), top air {win._chrome_strip()}")
 
     # Every resting view must start on a whole line: the topmost line is
     # complete and the line above it has left the view. A row of cut
@@ -401,7 +408,7 @@ def main():
         win.update()
         QTest.qWait(80)
         image = win.grab().toImage()
-        centre = image.pixelColor(win.width() // 2, win.height() // 2)
+        centre = image.pixelColor(win._card_width() // 2, win.height() // 2)
         check(f"{name}: the card stays fully opaque while chrome is hidden",
               centre.alpha() == 255,
               f"centre alpha {centre.alpha()}, chrome "

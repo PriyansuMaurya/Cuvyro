@@ -140,6 +140,32 @@ Done and is the default action for Enter, instead of matching Cancel.
 The reader also remembers its position across relaunches, and a saved
 position is clamped to the screens that currently exist.
 
+## Speech following (third pass)
+
+The follow loop was measured end to end rather than only checked for correct
+word indices. Three fixed delays dominated the feel:
+
+| Finding | Before | After |
+|---|---|---|
+| Audio handed to the recogniser | 250 ms blocks | **100 ms blocks**, 14.6× realtime (69 ms CPU per second of audio; the old 250 ms block was 13.9×) |
+| Scroll at the end of a sentence | waited for Vosk's final, which only arrives after the recogniser's end-of-sentence pause | **steps on the partial that reaches the line's last word**, before the pause |
+| Reading-speed estimate | rose with faster speech, never fell | **tracks both directions** (test: 300 → 252 wpm when slowing, 60 → 108 when speeding up) |
+| A skipped clause | stalled at the first unheard word | **resyncs on two consecutive recognised words**; a single stray word cannot jump (old `last_word=0`, new `9` on the test phrase) |
+| UI handling per result | 0.13 ms shading, latency unmeasured | **0.106 ms partial, 0.165 ms final** on this machine |
+| Matcher work per 20-word final | 0.077 ms | **0.057 ms** |
+
+The matcher and the UI were never the bottleneck: together they are well under
+a millisecond. The delay was all in batching and in treating a partial as
+untrustworthy until a final arrived. Partials still cannot leave the line on
+screen; only a close match (88) for that line's last word promotes the
+position, so the scroll cannot run ahead of what was said.
+
+The follow checks now cover spelling and pronunciation variants, skipped
+clauses, stray-word rejection, 100 ms cadence, partial and final latency
+budgets, and speed adaptation in both directions, alongside the existing
+slow/normal/fast delivery, pauses, 17 font sizes × 6 families, and five
+viewport widths.
+
 Known limits of this pass:
 
 - Scripts are `.txt` only. The README advertised PDF and DOCX import, but no
@@ -148,13 +174,13 @@ extractor was ever wired in; the picker, drop target and README now agree.
   accessible-name properties, not with a screen reader application.
 - Multi-monitor behaviour was verified by synthetic geometry (an off-screen
   save point), not by physically unplugging a display.
-- The floating toolbar still sits over the type once reading starts: the
-  opening lead keeps the first line clear of it, and lines already read pass
-  underneath it as they scroll away, which is the intended behaviour rather
-  than a measured defect.
 - Speech recognition itself was exercised with synthetic word timings in
-  `check_voice_follow.py`; live microphone recognition accuracy was not
-  measured on this machine.
+  `check_voice_follow.py`; live microphone recognition accuracy, and therefore
+  real accents through the acoustic model, was not measured on this machine.
+  Pronunciation variants are covered at the text-alignment level.
+- The 100 ms cadence and the partial line step were verified with the model
+  decoding silence for throughput and with synthetic results for behaviour;
+  a live multi-sentence read was not recorded.
 
 ## Reproducing
 

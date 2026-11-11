@@ -363,6 +363,15 @@ class NotchOverlay(QWidget):
     # speaker stumbles or the recogniser drops a word.
     WORD_MATCH_SCORE = 80
     WORD_SKIP_TOLERANCE = 3
+    # A result may recover from a longer skipped clause or aside, but only on
+    # two consecutive recognised words (see MatchingEngine.align_forward).
+    # The caller's word range still bounds the search, so a partial can never
+    # leave the line on screen.
+    RESYNC_SKIP_TOLERANCE = 9
+    # A partial can step the line before Vosk finalises, but only when its own
+    # last word is a close match for the line's last word. That is what keeps
+    # the scroll at the sentence boundary instead of after the pause.
+    PARTIAL_FINISH_SCORE = 88
     # When one final result confirms several lines at once (a long utterance
     # with no pause), the reader catches up one line at a time instead of
     # jumping, so the eye is never asked to skip a line.
@@ -1201,7 +1210,8 @@ class NotchOverlay(QWidget):
     #  Voice follow (line based)
     # ═══════════════════════════════════════════════════════════════════
 
-    def _align_speech(self, text: str, start_word: int, end_word: int) -> Optional[int]:
+    def _align_speech(self, text: str, start_word: int, end_word: int,
+                      resync_skip: Optional[int] = None) -> Optional[int]:
         """Furthest script word reached by a recognised phrase, or None."""
         aligned = self._matching.align_forward(
             text,
@@ -1227,12 +1237,14 @@ class NotchOverlay(QWidget):
         return min(position, line.last_word)
 
     def _apply_partial_speech(self, text: str):
-        """Shade words as they are heard, but never leave the current line.
+        """Shade words as they are heard, and step at the line's last word.
 
-        Partials are rewritten by the recogniser and are not confirmation, so
-        they may only move the highlight inside the line on screen. They
-        never scroll the view or advance the reader: a pause mid-line leaves
-        the line exactly where it is.
+        A partial is not confirmation, so it may only move the highlight
+        inside the line on screen. The exception is the line's last word: once
+        a close match for it arrives, that word has been said and waiting for
+        Vosk's final would leave the scroll sitting through the pause at the
+        end of the sentence. Confirming just that word keeps the step at the
+        boundary and never moves past anything not yet spoken.
         """
         if not self._line_spans:
             return
@@ -1278,7 +1290,9 @@ class NotchOverlay(QWidget):
         # the start of a final that were already confirmed are treated as
         # noise, which keeps repeated words from matching behind the cursor.
         start = max(0, self._confirmed_word + 1)
-        last = self._align_speech(text, start, self._matching.word_count)
+        last = self._align_speech(
+            text, start, self._matching.word_count,
+            resync_skip=self.RESYNC_SKIP_TOLERANCE)
         if last is None or last <= self._confirmed_word:
             # The final still replaces any tentative shading from partials.
             self._partial_word = -1
@@ -2470,9 +2484,11 @@ class NotchOverlay(QWidget):
             if delta_time > 0.2 and delta_words > 0:
                 wpm = (delta_words / delta_time) * 60.0
                 wpm = max(60.0, min(wpm, 300.0))
-                if wpm > self._voice_wpm:
-                    weight = 0.2 if is_final else 0.1
-                    self._voice_wpm = int(round(self._voice_wpm + (wpm - self._voice_wpm) * weight))
+                # Track both directions: a reader who slows down should not
+                # keep an old fast estimate from a previous sentence.
+                weight = 0.2 if is_final else 0.1
+                self._voice_wpm = int(round(
+                    self._voice_wpm + (wpm - self._voice_wpm) * weight))
         self._last_match_time = now
         self._last_match_pos = position
 

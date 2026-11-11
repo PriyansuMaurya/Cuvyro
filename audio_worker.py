@@ -30,6 +30,15 @@ class AudioWorker(QThread):
     status_signal       = pyqtSignal(str)    # status messages
 
     SAMPLE_RATE = 16_000  # 16 kHz mono
+    # 100 ms of audio per recogniser step. The old 250 ms block put up to a
+    # quarter second between the speaker and the live highlight; 100 ms is
+    # still comfortable for the recogniser and keeps each step well inside
+    # real time on the test machine.
+    BLOCK_SAMPLES = 1_600
+    # How long a pause must last before the level meter and VAD call it
+    # silence. Expressed in time, not frames, so changing the block size
+    # cannot silently change the feel of the reader.
+    SILENCE_SECONDS = 0.75
 
     @staticmethod
     def _resolve_vosk_model_dir(model_path: str) -> str:
@@ -99,9 +108,11 @@ class AudioWorker(QThread):
         # Speech state tracking
         self._is_speaking = False
         self._silence_frames = 0
-        # How many consecutive silent frames before we declare "not speaking"
-        # Each frame is ~250ms, so 3 frames ≈ 750ms of silence to stop
-        self._silence_threshold = 3
+        self._block_seconds = self.BLOCK_SAMPLES / float(self.SAMPLE_RATE)
+        # Consecutive silent blocks before we declare "not speaking". Derived
+        # from the duration so the 100 ms cadence keeps the same 0.75 s feel.
+        self._silence_threshold = max(
+            1, int(round(self.SILENCE_SECONDS / self._block_seconds)))
         # Mute: do not emit speech (overlay toggles); reset recognizer on unmute to clear backlog
         self._muted = False
         self._reset_recognizer_requested = False
@@ -148,7 +159,7 @@ class AudioWorker(QThread):
             print(f"[Notch] Opening microphone ({dev})...", flush=True)
             stream = sd.RawInputStream(
                 samplerate=self.SAMPLE_RATE,
-                blocksize=4000,          # ~250 ms chunks
+                blocksize=self.BLOCK_SAMPLES,  # 100 ms chunks
                 dtype="int16",
                 channels=1,
                 device=self.device_index,
@@ -212,7 +223,8 @@ class AudioWorker(QThread):
                     self._recognizer = KaldiRecognizer(self._vosk_model, self.SAMPLE_RATE)
                     last_partial = ""
                     # Drain queued audio from during mute so we don't feed stale audio
-                    for _ in range(12):  # ~3 s at 0.25 s per chunk
+                    drain = max(1, int(round(3.0 / self._block_seconds)))
+                    for _ in range(drain):  # ~3 s, whatever the block size
                         try:
                             self._audio_queue.get_nowait()
                         except queue.Empty:
