@@ -3,8 +3,8 @@
 These are the claims the redesign makes, in a form that fails loudly if the
 surface drifts back:
 
-  * the reader keeps its solid card: fill, wash, level line and hairline are
-    all still there, and the window is never a hole in the desktop,
+  * the reader keeps its solid card: fill, wash, foot waveform and hairline
+    are all still there, and the window is never a hole in the desktop,
   * the script runs the full height of the card, fully opaque, with no fade
     or blur, and opens 30% down so its first line clears the floating
     controls; the opening lead then scrolls away with the type,
@@ -123,10 +123,26 @@ def main():
         check(f"{name}: no colour wash behind the last line", drift <= 4,
               f"bottom-centre {wash} vs fill {fill}, drift {drift}")
 
-        # The voice level line exists, and it is the mode's colour.
-        meter = pixel(image, win.width() / 2, win.height() - 6)
-        check(f"{name}: voice level line is drawn", meter != fill,
-              f"meter {meter} vs fill {fill}")
+        # The microphone's ribbon owns the foot strip: one bar of mode
+        # coloured ink at every bar's centre, and the strip stays below the
+        # line being read. The tint test separates the ribbon from the white
+        # type, which would otherwise ink the same pixels.
+        x0, pitch, count, bar_w = win.waveform_layout()
+        band = win.waveform_band()
+        centre_y = win.height() - win.WAVE_TOP_MARGIN * win._scale
+        channel = 2 if win._voice_mode else 1  # blue = Notch, green = Keys
+        bars = 0
+        for index in range(count):
+            sx = x0 + index * pitch + bar_w / 2.0
+            rgb = pixel(image, sx, centre_y)
+            if rgb[channel] - rgb[0] > 8:
+                bars += 1
+        check(f"{name}: the microphone ribbon is drawn at the foot",
+              bars >= count - 1, f"{bars}/{count} bars tinted")
+        check(f"{name}: the ribbon stays clear of the reading line",
+              band.top() > win._text_edit.reading_inset(),
+              f"band top {band.top():.1f}, reading inset "
+              f"{win._text_edit.reading_inset():.1f}")
 
     # The controls are a floating column outside the card, not a toolbar on
     # it. Every button shares one x, the gaps are equal, and the whole group

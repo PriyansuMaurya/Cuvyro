@@ -24,6 +24,7 @@ configuration and the icon sources.
 ```
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_behavior.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_voice_follow.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_waveform.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_speech_engine.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_note_clearing.py

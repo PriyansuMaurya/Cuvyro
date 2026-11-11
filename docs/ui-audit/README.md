@@ -31,7 +31,7 @@ Surface treatment, also measured from the captures:
 - **Rounded corners**: 24 px compact/editor, 12 px note.
 - **Card material: solid.** The reader is a surface, not a hole: the fill is
   fully opaque in both themes (measured centre alpha **255** / **255**), with
-  the same quiet wash, the same level line at the bottom and the same
+  the same quiet wash, the same microphone waveform at the bottom and the same
   hairline. Transparency is spent only on the floating controls; the type
   itself is fully opaque, so the desktop can never ghost through the words.
   The full-height script is what changed, not the window it runs on.

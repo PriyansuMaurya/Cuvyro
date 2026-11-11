@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import ctypes
+from collections import deque
 from typing import List, NamedTuple, Optional
 
 from PyQt5.QtCore import (
@@ -358,6 +359,20 @@ class NotchOverlay(QWidget):
     GLOW_COLOR = QColor(41, 98, 255)       # Blue = Notch (follows voice)
     MANUAL_GLOW_COLOR = QColor(46, 204, 113)  # Green = Keys & Scroll
 
+    # ── Foot waveform ────────────────────────────────────────────────
+    # The microphone's shape at the foot of the card. It reuses the strip
+    # the old level line owned, so the voice has one indicator and the
+    # reading line above it keeps its air.
+    WAVE_BARS = 27           # bars across the ribbon
+    WAVE_BAR_W = 2.0         # bar width, DIP before DPI scale
+    WAVE_GAP = 2.0           # space between bars, DIP
+    WAVE_REST_H = 1.6        # resting dash height, DIP
+    WAVE_MAX_H = 7.0         # tallest bar at full voice, DIP
+    WAVE_TOP_MARGIN = 5.0    # baseline height above the card's foot, DIP
+    WAVE_EASE = 0.34         # share of the gap closed per waveform frame
+    WAVE_FRAME_SECONDS = 0.030   # 30 fps ceiling, below the 60 fps tick
+    WAVE_HOLD_SECONDS = 0.45     # silence after which a dead mic drains
+
     # Voice follow is line based. A recognised word must be this close to a
     # script word to count, and it may match a few words ahead when the
     # speaker stumbles or the recogniser drops a word.
@@ -446,6 +461,13 @@ class NotchOverlay(QWidget):
         self._current_glow_alpha = 28  # Base glow (0-255); lower = more transparent
         self._target_glow_alpha = 28
         self._smoothed_volume_level = 0.0  # EMA of raw mic level for smooth bar
+        # Foot waveform. One amplitude per 100 ms block, eased per frame into
+        # fixed-size float lists: the tick reads and writes these in place so
+        # the 60 fps loop allocates nothing for the ribbon.
+        self._wave_levels = deque(maxlen=self.WAVE_BARS)
+        self._wave_heights = [0.0] * self.WAVE_BARS
+        self._wave_last_sample = 0.0
+        self._wave_last_frame = 0.0
 
         # ── Workers ──────────────────────────────────────────────────
         self._audio_worker: Optional[AudioWorker] = None
@@ -969,8 +991,8 @@ class NotchOverlay(QWidget):
         # 3. Material and status.
         # The old radial wash covered the lower half of the card in colour,
         # which on white read as a smudge under the words rather than depth.
-        # What is left is a wash quiet enough to be felt and not read, plus a
-        # short level line that carries the voice signal on its own.
+        # What is left is a wash quiet enough to be felt and not read: the
+        # voice signal itself is carried by the foot waveform below.
         s = self._scale
         if not self._edit_mode:
             level = max(0.0, min(1.0, (self._current_glow_alpha - 28) / 140.0))
@@ -988,26 +1010,21 @@ class NotchOverlay(QWidget):
             painter.setBrush(QBrush(wash))
             painter.drawRect(0, 0, w, h)
 
-            # The meter grows from the centre, so it reads as a level, not a
-            # progress bar. At rest it is a short, quiet dash.
+            # The microphone's waveform owns the foot of the card. It is the
+            # strip the level line used to sit in, below the reading line, so
+            # the voice is visible without a second element competing with
+            # the words.
             if not self._peeked:
-                inset = 30 * s
-                track = max(1.0, w - 2 * inset)
-                short = min(track, 26 * s)
-                meter_w = short + (track - short) * level
-                meter = QColor(glow_base)
-                meter.setAlpha(int(105 + 115 * level))
-                painter.setBrush(meter)
-                painter.drawRoundedRect(
-                    QRectF((w - meter_w) / 2.0, h - 7 * s,
-                           meter_w, max(2.0, 2.0 * s)), 1.0, 1.0)
+                self._paint_waveform(painter, s)
             painter.restore()
 
         # 3b. A resting pill still has to say something. Three bars at the
         #     centre read as a level meter, and they are the only element the
         #     peek state shows.
         if self._peeked:
-            level = max(0.0, min(1.0, self._smoothed_volume_level * 4.0))
+            # A muted mic reads as a resting pill, not as a live one.
+            level = 0.0 if self._muted else max(
+                0.0, min(1.0, self._smoothed_volume_level * 4.0))
             color = QColor(self.GLOW_COLOR if self._voice_mode else self.MANUAL_GLOW_COLOR)
             color.setAlpha(235)
             bar_w = 3.0 * s
@@ -1063,6 +1080,12 @@ class NotchOverlay(QWidget):
         glow_target = 0.0 if self._edit_target else float(self._target_glow_alpha)
         if abs(self._glow.target - glow_target) > 0.5:
             self._glow.set_target(glow_target)
+
+        # 1b. The microphone's ribbon. Eased at 30 fps and repainted only
+        #     while it moves: silence, mute and an unplugged mic all cost one
+        #     comparison per tick instead of a frame of compositing.
+        if self._wave_frame_due() and self._advance_waveform():
+            self._repaint_waveform()
 
         # The rail is outside the card and follows the same geometry springs,
         # so it needs no clip of its own while the card collapses.
@@ -1131,6 +1154,7 @@ class NotchOverlay(QWidget):
             self._is_speaking = False
             self._target_glow_alpha = 28
             self._smoothed_volume_level = 0.0
+            self._reset_waveform()
             return
         try:
             worker.blockSignals(True)
@@ -1145,6 +1169,7 @@ class NotchOverlay(QWidget):
         self._is_speaking = False
         self._target_glow_alpha = 28
         self._smoothed_volume_level = 0.0
+        self._reset_waveform()
 
     def _stop_listening_sync(self):
         """Block until any stopping worker has exited. Use before starting new worker."""
@@ -1190,16 +1215,163 @@ class NotchOverlay(QWidget):
             self._smoothed_volume_level = self._smoothed_volume_level * 0.75 + level * 0.25
             intensity = min(1.0, self._smoothed_volume_level * 5.0)
             self._target_glow_alpha = 28 + int(140 * intensity)
+            self._push_wave_level(level)
             # The peek pill animates from this level directly; the glow spring
             # is parked while the reader is put away.
             if self._peeked:
                 self.update()
+
+    # ── Foot waveform ────────────────────────────────────────────────
+    @staticmethod
+    def _wave_amplitude(level: float) -> float:
+        """Map a metered level onto one bar's amplitude.
+
+        RMS energy spends most of a sentence well below half scale, so a
+        linear map reads as dead while someone is talking. The 0.65 power
+        lifts ordinary speech into the visible range and still leaves a
+        raised voice somewhere to go.
+        """
+        return min(1.0, max(0.0, level) * 1.8) ** 0.65
+
+    def _push_wave_level(self, level: float):
+        """Take one microphone level into the ribbon's history.
+
+        One sample per recognised 100 ms block: the ribbon flows at the pace
+        the microphone already hears, not at the repaint rate, so its motion
+        is tied to the room. Muted audio is not speech the reader is
+        following, so it never enters the history.
+        """
+        if self._muted or not self._voice_mode or self._peeked:
+            return
+        self._wave_levels.append(self._wave_amplitude(level))
+        self._wave_last_sample = time.monotonic()
+
+    def _advance_waveform(self) -> bool:
+        """Ease the bars toward the newest levels; True if anything moved.
+
+        Runs inside the 60 fps tick and is deliberately allocation-free: a
+        fixed number of list reads and float writes, no widgets touched.
+        Without a new level the bars drain to rest and stop asking for
+        repaints, so a silent, muted or unplugged microphone costs one
+        comparison per tick and no compositing.
+        """
+        if not self._voice_mode or self._edit_mode or self._peeked:
+            return False
+        now = time.monotonic()
+        # Three ways the ribbon goes quiet: a muted mic, a worker that stopped
+        # sending (unplugged, killed, muted by the OS), and the voice detector
+        # saying nobody is talking. The last one matters most: without it the
+        # 2.7 s of history left on screen keeps a finished sentence alive and
+        # the card looks like it is still listening.
+        draining = (self._muted or not self._is_speaking
+                    or (now - self._wave_last_sample) > self.WAVE_HOLD_SECONDS)
+        levels = self._wave_levels
+        count = len(levels)
+        heights = self._wave_heights
+        moved = False
+        for index in range(self.WAVE_BARS):
+            source = count - self.WAVE_BARS + index
+            target = 0.0 if draining else (
+                levels[source] if 0 <= source < count else 0.0)
+            current = heights[index]
+            delta = target - current
+            if abs(delta) <= 0.004:
+                continue
+            # A fixed fraction per step, not a spring: the ribbon never
+            # overshoots, and its motion reads as a level, not as elastic.
+            heights[index] = current + delta * self.WAVE_EASE
+            moved = True
+        return moved
+
+    def _wave_frame_due(self) -> bool:
+        """Throttle the ribbon to 30 fps inside the 60 fps tick."""
+        now = time.monotonic()
+        if now - self._wave_last_frame < self.WAVE_FRAME_SECONDS:
+            return False
+        self._wave_last_frame = now
+        return True
+
+    def _repaint_waveform(self):
+        """Repaint only the ribbon's strip.
+
+        The band is a few pixels tall; asking Qt to re-raster the whole card
+        thirty times a second for three pixels of bars would spend the frame
+        budget on paint that did not change.
+        """
+        self.update(self.waveform_band().toAlignedRect())
+
+    def _reset_waveform(self):
+        """Flatten and forget the ribbon (mode, mute, peek, new worker)."""
+        self._wave_levels.clear()
+        heights = self._wave_heights
+        for index in range(len(heights)):
+            heights[index] = 0.0
+        self._wave_last_sample = 0.0
+        self._repaint_waveform()
+
+    def waveform_layout(self):
+        """Bar geometry of the foot ribbon: (x0, pitch, count, bar_w).
+
+        One source of truth for the painter and the checks. The narrow card
+        gets fewer bars rather than thinner ones, so the ribbon keeps its
+        weight when the card collapses.
+        """
+        s = self._scale
+        bar_w = max(1.0, self.WAVE_BAR_W * s)
+        gap = max(1.0, self.WAVE_GAP * s)
+        pitch = bar_w + gap
+        room = max(1.0, self._card_width() - 30.0 * s)
+        count = int(min(self.WAVE_BARS, max(7, room // pitch)))
+        total = count * bar_w + (count - 1) * gap
+        return ((self._card_width() - total) / 2.0, pitch, count, bar_w)
+
+    def waveform_band(self) -> QRectF:
+        """Strip the microphone ribbon occupies, in window coordinates.
+
+        Exposed so the design checks can hold the ribbon to the foot of the
+        card instead of letting it drift up into the reading line.
+        """
+        s = self._scale
+        tallest = self.WAVE_MAX_H * s
+        top = self.height() - self.WAVE_TOP_MARGIN * s - tallest / 2.0
+        return QRectF(0.0, top, float(self._card_width()), tallest)
+
+    def _paint_waveform(self, painter: QPainter, s: float):
+        """Draw the microphone's waveform at the foot of the card.
+
+        Symmetric around one baseline, thin bars with rounded caps, mode
+        coloured. At rest it is a row of short dashes; while someone talks
+        the newest levels enter on the right and the ribbon reads as sound.
+        """
+        x0, pitch, count, bar_w = self.waveform_layout()
+        h = float(self.height())
+        tallest = self.WAVE_MAX_H * s
+        rest = max(1.0, self.WAVE_REST_H * s)
+        centre = h - self.WAVE_TOP_MARGIN * s
+        base = self.GLOW_COLOR if self._voice_mode else self.MANUAL_GLOW_COLOR
+        painter.save()
+        painter.setPen(Qt.NoPen)
+        for index in range(count):
+            amplitude = self._wave_heights[self.WAVE_BARS - count + index]
+            bar_h = rest + (tallest - rest) * amplitude
+            # Idle bars stay quiet; the moving ones carry the level. The
+            # alpha ramp is what makes a bar read as signal, not chrome.
+            shade = QColor(base)
+            shade.setAlpha(int(70 + 160 * amplitude))
+            painter.setBrush(shade)
+            painter.drawRoundedRect(
+                QRectF(x0 + index * pitch, centre - bar_h / 2.0, bar_w, bar_h),
+                bar_w / 2.0, bar_w / 2.0)
+        painter.restore()
 
     def _toggle_mic_mute(self):
         self._muted = not self._muted
         self._mic_btn.set_muted(self._muted)
         if self._audio_worker:
             self._audio_worker.set_muted(self._muted)  # worker skips emitting when muted; resets recognizer on unmute
+        # A muted microphone is not silence someone chose to read through:
+        # the ribbon goes flat instead of holding the last thing it heard.
+        self._reset_waveform()
         self._mic_btn.setToolTip("Unmute mic" if self._muted else "Mute mic (stop voice from advancing script)")
         self._mic_btn.setAccessibleName("Unmute microphone" if self._muted else "Mute microphone")
 
@@ -2197,6 +2369,7 @@ class NotchOverlay(QWidget):
         s = self._scale
         self._peek_restore = QRect(self.geometry())
         self._peeked = True
+        self._reset_waveform()
         self._motion_intent = "peek"
         self._text_edit.hide()
         self._chrome.hide()
@@ -2217,6 +2390,9 @@ class NotchOverlay(QWidget):
             return
         self._peeked = False
         self._motion_intent = "restore"
+        # The ribbon paused while the card rested; start it from silence so
+        # it cannot replay the levels it held before the card was put away.
+        self._reset_waveform()
         self._chrome.show()
         self._text_edit.show()
         self._glow.set_target(float(self._target_glow_alpha), carry_velocity=False)
