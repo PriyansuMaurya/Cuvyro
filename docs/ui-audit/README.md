@@ -182,6 +182,112 @@ extractor was ever wired in; the picker, drop target and README now agree.
   decoding silence for throughput and with synthetic results for behaviour;
   a live multi-sentence read was not recorded.
 
+## Speech engine (fourth pass)
+
+The third pass measured the loop around the recogniser. This pass replaced the
+recogniser itself, because the model was the dominant cost left: Vosk spent
+about a quarter of a core decoding speech, and its endpointing was inside the
+binary where it could not be tuned.
+
+Candidates were decoded on the same local audio, from
+`tests/bench_speech_engines.py`. The audio is synthesised with the Windows SAPI
+voices already on the machine (en-US and en-GB, slow/normal/fast), so the
+benchmark itself never touches the network. Reference readings were taken with
+the previous engine still in place, in three interleaved rounds on an
+i7-13620H (10C/16T, 16 GB), best round per engine, because the desktop had
+Chrome open and single runs swung by 3x:
+
+| Engine | CPU per audio second | Real-time factor | Word error (56 sentences) | 100 ms block, median | Model load |
+|---|---|---|---|---|---|
+| Vosk small en-us 0.15 (previous) | 234 ms | 4.3x | 6.5% | 2.0 ms | 0.5 s |
+| **sherpa-onnx zipformer en 2023-06-26, int8, 2 threads** | **68 ms** | **14.8x** | **7.9%** | **0.7 ms** | 4.2 s |
+| sherpa-onnx zipformer en 20M int8 | n/a | n/a | n/a | n/a | excluded |
+
+The 20M model is faster still, but it drops the first two or three words of
+every utterance with sherpa-onnx 2.0.1 (fp32 weights as well as int8), so it is
+excluded rather than tuned around. The zipformer in use is 3.4x cheaper per
+second of audio with the same order of accuracy, and it halves the median block
+cost, which is the headroom the scroll timer runs in.
+
+What changed in `audio_worker`, behind the same `speech_text_signal`:
+
+| Finding | Before | After |
+|---|---|---|
+| Decode cost while speaking | 234 ms per audio second (Vosk) | **68 ms** (zipformer) |
+| Decode cost while nobody talks | 62 ms per audio second, the recogniser saw all of it | **0 ms**: a Silero VAD gates the recogniser, at **6 ms** per audio second to run |
+| End of an utterance | Vosk's internal silence rule, ~1 s, not adjustable | **one 0.75 s pause**, measured 0.80 s after the last audible block |
+| Room noise | RMS gate called a fan "speech", and filler words followed | VAD flags speech, so the glow and the filler-word filter follow a voice |
+| First word after a pause | fed as it arrived | **not clipped**: 400 ms of pre-onset audio is replayed when the VAD confirms speech, because the detector needs ~150 ms before it reports any |
+| Voice mode reactivation | model reloaded on every toggle to the editor and back | **reused**: the loaded engine is leased to one worker at a time, so the 4.2 s cold load is paid once per launch |
+| Waiting for the model | nothing said why the first words were late | `status_signal` reports it, next to the existing "Listening..." |
+
+The matcher's stepping rules were left alone: partials still drive the
+highlight, only a close match for a line's last word steps the line, and
+silence still never moves the reader. Two gaps in it were found by measuring a
+real accented speaker, though, and are fixed (see below).
+
+A 4.2 s cold load is the price of the bigger acoustic model; it is measured on
+a machine with 2.8 GB free of 16 GB, and the load happens once because the
+engine is reused afterwards.
+
+Privacy is asserted, not assumed: `tests/check_speech_engine.py` patches
+`socket.connect`, `connect_ex` and `create_connection` to raise, then loads the
+model and decodes a sentence. Nothing reaches for a socket, and there is no
+network code in either engine — `speech_engine.py` only calls into local ONNX
+models and, for the fallback, Vosk's local Kaldi model.
+
+### Following an accent
+
+A reader with an Indian English accent recorded the 14-sentence corpus
+(`tests/calibrate_voice.py --auto`), and the same takes were decoded and then
+pushed through the real overlay, line gating and all. Transcription is
+imperfect on that voice — **34.6% word error rate** for zipformer on complete
+takes — but transcription is not the promise; following the script is. Two
+failures showed up, both of which would hit any speaker, accent or not:
+
+| | Before | After |
+|---|---|---|
+| Script words reached, driven by these takes | 61.5% | **95.4%** |
+| Rendered lines reached | 63.3% | **81.6%** |
+
+- **Numbers were invisible.** Scripts print `60`, `14`, `19`; speakers say
+  *sixty*, *fourteen*, *nineteen*. The fuzzy score between the two is 0, so one
+  number in a sentence stopped the reader dead. Both sides are now
+  canonicalised to the digit form (ordinals and hyphenated compounds included),
+  which recovered the `60 per cent` sentence on its own.
+- **One missed sentence was permanent.** Alignment only moves forward, and the
+  resync window spans a clause, not a sentence: after a sentence the recogniser
+  lost entirely, every later result was out of reach, and the reader sat at
+  word 80 of 130 for the rest of the session. A final that confirms nothing now
+  licenses a re-anchor — but only the second one in a row, and only onto **three
+  consecutive** strongly matching words, so a cough or a repeated phrase cannot
+  teleport the reader. The same script repeated twice is the trap this avoids.
+
+The remaining 4.6% is audio the session never captured: two takes stop
+mid-sentence at a breath (the recorder's endpoint, not the engine), and the
+re-anchor moves past them as designed. Lines stay behind words because a line
+only advances once its last word is confirmed, which is the intended pause at a
+line boundary.
+
+Known limits of this pass:
+
+- The accent figures come from one speaker. They say the decoder and the
+  matcher are usable on that accent, not that they are calibrated for accents in
+  general; `tests/calibrate_voice.py` is what would answer that per speaker.
+- Accent accuracy beyond decoding was addressed by matcher work only. The
+  acoustic model was not fine-tuned: that needs the icefall training pipeline,
+  hours of speech and a GPU, none of which belong in this repository.
+- The benchmark's "words behind" figure (~1 word for both engines) is a rough
+  proportional measure, not a per-word timestamp comparison; the per-word
+  timestamps the matcher would need are not consumed yet.
+- The 4.2 s load and the 68 ms/second figure come from one machine. The
+  relative order (zipformer cheaper, both real-time capable) is what the
+  selection rests on.
+- Whisper-family models (whisper.cpp, faster-whisper) were excluded on
+  architecture, not benchmarked: they produce a segment after an utterance
+  rather than partials during it, and the reader steps on partials. A
+  benchmark would only have confirmed a latency the design cannot use.
+
 ## Reproducing
 
 ```bash
@@ -199,6 +305,18 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_behavior.py
 
 # line-gated voice follow: pauses, speeds, multi-line finals, reflow
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_voice_follow.py
+
+# the local engine: what it hears, block cost, VAD pause, no sockets opened
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_speech_engine.py
+
+# engine benchmark: SAPI fixtures, throughput, words behind, word error rate
+.venv/Scripts/python.exe tests/bench_speech_engines.py --repeat 3
+
+# your own voice: record the corpus, decode it, list the words to calibrate
+.venv/Scripts/python.exe tests/calibrate_voice.py
+
+# re-score the recorded takes and drive the overlay with them
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/calibrate_voice.py --no-mic --reader
 
 # debounced saves, menu lifecycle, screen clamping, import, shortcuts, access
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py

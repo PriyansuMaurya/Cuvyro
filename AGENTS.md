@@ -24,10 +24,20 @@ configuration and the icon sources.
 ```
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_behavior.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_voice_follow.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_speech_engine.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py
 .venv/Scripts/python.exe tests/check_design.py      # needs a real display
 .venv/Scripts/python.exe tests/check_quality.py     # needs a real display
 ```
+
+`tests/check_speech_engine.py` decodes real audio through the installed model
+and reports SKIP when `model/` has none. `tests/bench_speech_engines.py` is the
+benchmark that chose the engine; it synthesises its fixtures with the local
+SAPI voices and needs no network.
+
+`tests/calibrate_voice.py` scores a speaker against the corpus and drives the
+overlay with the recordings (`--no-mic --reader` re-scores takes already in
+`%TEMP%\notch-voice`). Recordings stay local WAVs; nothing is uploaded.
 
 `tests/check_design.py` asserts surface invariants against rendered pixels and
 `tests/verify_ui.py` reports window geometry. All of them build their own

@@ -72,6 +72,7 @@ def load(win, text, family="Segoe UI", size=12):
     win._current_line = 0
     win._confirmed_word = -1
     win._partial_word = -1
+    win._stalled_finals = 0
     win._apply_highlight(-1)
     win._refresh_lines()
     win._text_edit.verticalScrollBar().setValue(0)
@@ -303,6 +304,55 @@ def main():
           f"{skipped} of {engine.word_count}")
     check("one stray word cannot jump across a skipped clause",
           stray is None, f"{stray}")
+
+    # Scripts print numbers as digits and speakers say them as words. An
+    # accented speaker makes that mismatch likelier, not rarer, and a number
+    # the matcher cannot see is a sentence it cannot follow.
+    engine.load_script("Roughly 60 per cent of the delay came from one supplier.")
+    spoken_number = engine.align_forward(
+        "roughly sixty per cent", 0, engine.word_count)
+    check("a number spoken as a word matches the digits in the script",
+          spoken_number is not None and spoken_number.last_word == 3,
+          f"{spoken_number} of {engine.word_count}")
+    engine.load_script("The council approved 14 of the 19 amendments.")
+    ordinal_number = engine.align_forward(
+        "the council approved fourteenth of the nineteenth", 0,
+        engine.word_count)
+    check("an ordinal number still matches the digits in the script",
+          ordinal_number is not None and ordinal_number.last_word == 6,
+          f"{ordinal_number} of {engine.word_count}")
+
+    # A reader that missed a sentence has to find its place again. One gap is
+    # the resync window's job; a whole missed sentence is only reachable by
+    # re-anchoring, which is why it needs a clear run of words.
+    lost_script = ("The council approved it. "
+                   "Then the numbers were checked twice. "
+                   "We did not expect delivery to take that long.")
+    engine.load_script(lost_script)
+    recovered = engine.align_forward(
+        "we did not expect delivery to take", 0, engine.word_count,
+        resync_skip=9, reanchor=True)
+    without = engine.align_forward(
+        "we did not expect delivery to take", 0, engine.word_count,
+        resync_skip=9)
+    check("a missed sentence is out of reach without re-anchoring",
+          without is None, f"{without}")
+    check("a lost reader re-anchors on a clear phrase",
+          recovered is not None and recovered.last_word == 12,
+          f"{recovered} of {engine.word_count}")
+
+    # Recovery is the app's promise, not the matcher's. A single final that
+    # confirms nothing is ordinary (a cough, a repeated phrase) and must not
+    # move the reader; the second in a row means it is lost and may re-anchor.
+    load(win, lost_script)
+    quiet_speech(win, "we did not expect delivery to take", True)
+    QTest.qWait(30)
+    stayed = win._confirmed_word
+    quiet_speech(win, "we did not expect delivery to take", True)
+    check("one unproductive final leaves the reader where it was",
+          stayed == -1, f"confirmed={stayed}")
+    check("a second unproductive final re-anchors the reader",
+          win._confirmed_word == 12, f"confirmed={win._confirmed_word}")
 
     # ── Latency budget ───────────────────────────────────────────────
     # Recognition itself is the microphone thread's job; this budget covers

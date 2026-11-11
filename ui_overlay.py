@@ -460,6 +460,10 @@ class NotchOverlay(QWidget):
         self._state_restored = False
         self._last_match_time: Optional[float] = None
         self._last_match_pos = -1
+        # Consecutive finals that confirmed nothing. One is normal (a cough,
+        # a repeated phrase); two in a row means the reader has lost its
+        # place, and only then may a final re-anchor the pointer.
+        self._stalled_finals = 0
         self._speech_active_until = 0.0
         # Voice mode: the word-balanced anchor, kept so a retarget can be
         # repeated after a wheel hold without recomputing the share.
@@ -672,6 +676,7 @@ class NotchOverlay(QWidget):
             self._save_state()  # commit the edit now, not only on close
             self._last_match_time = None
             self._last_match_pos = -1
+            self._stalled_finals = 0
             self._line_spans = []
             self._current_line = 0
             self._confirmed_word = -1
@@ -1211,7 +1216,8 @@ class NotchOverlay(QWidget):
     # ═══════════════════════════════════════════════════════════════════
 
     def _align_speech(self, text: str, start_word: int, end_word: int,
-                      resync_skip: Optional[int] = None) -> Optional[int]:
+                      resync_skip: Optional[int] = None,
+                      reanchor: bool = False) -> Optional[int]:
         """Furthest script word reached by a recognised phrase, or None."""
         aligned = self._matching.align_forward(
             text,
@@ -1220,6 +1226,7 @@ class NotchOverlay(QWidget):
             min_score=self.WORD_MATCH_SCORE,
             max_skip=self.WORD_SKIP_TOLERANCE,
             resync_skip=resync_skip,
+            reanchor=reanchor,
         )
         return aligned.last_word if aligned is not None else None
 
@@ -1264,6 +1271,7 @@ class NotchOverlay(QWidget):
                     >= self.PARTIAL_FINISH_SCORE):
                 self._confirmed_word = line.last_word
                 self._partial_word = -1
+                self._stalled_finals = 0
                 self._matching.set_position(self._confirmed_word)
                 self._update_voice_speed(self._confirmed_word, False)
                 moved = self._step_reading_line(force=True)
@@ -1280,6 +1288,13 @@ class NotchOverlay(QWidget):
         words. If one final covers several lines, they are stepped through
         one at a time; the view is only re-anchored when the reader actually
         changes line.
+
+        A final that matches nothing where the reader stands may still be
+        recovery: once two finals in a row have confirmed nothing, the reader
+        has lost its place, and if the phrase contains a strong run of words
+        that lands further on it moves there instead of stalling for the rest
+        of the session. Partials never do this - they are tentative, and a
+        guess must not move the pointer.
         """
         if not self._line_spans:
             self._refresh_lines()
@@ -1292,13 +1307,16 @@ class NotchOverlay(QWidget):
         start = max(0, self._confirmed_word + 1)
         last = self._align_speech(
             text, start, self._matching.word_count,
-            resync_skip=self.RESYNC_SKIP_TOLERANCE)
+            resync_skip=self.RESYNC_SKIP_TOLERANCE,
+            reanchor=self._stalled_finals >= 1)
         if last is None or last <= self._confirmed_word:
             # The final still replaces any tentative shading from partials.
+            self._stalled_finals += 1
             self._partial_word = -1
             self._apply_highlight(self._display_word())
             return
 
+        self._stalled_finals = 0
         self._confirmed_word = last
         self._partial_word = -1
         self._matching.set_position(last)
@@ -2371,6 +2389,7 @@ class NotchOverlay(QWidget):
         self._matching.reset()
         self._last_match_time = None
         self._last_match_pos = -1
+        self._stalled_finals = 0
         self._voice_wpm = 60
         self._manual_scroll_accum = 0.0
         self._voice_scroll_accum = 0.0

@@ -14,6 +14,32 @@ from typing import List, NamedTuple, Optional
 from thefuzz import fuzz
 
 
+# Spoken numbers reach the matcher as words ("sixty") while scripts print them
+# as digits ("60"). Both sides are canonicalised to the digit form so the
+# comparison is exact instead of a 0% fuzzy score.
+_NUMBER_WORDS = {
+    "zero": 0, "oh": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
+    "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+    "hundred": 100, "thousand": 1000, "million": 1000000,
+}
+_ORDINAL_WORDS = {
+    "first": "one", "second": "two", "third": "three", "fourth": "four",
+    "fifth": "five", "sixth": "six", "seventh": "seven", "eighth": "eight",
+    "ninth": "nine", "tenth": "ten", "eleventh": "eleven",
+    "twelfth": "twelve", "thirteenth": "thirteen", "fourteenth": "fourteen",
+    "fifteenth": "fifteen", "sixteenth": "sixteen", "seventeenth": "seventeen",
+    "eighteenth": "eighteen", "nineteenth": "nineteen", "twentieth": "twenty",
+    "thirtieth": "thirty", "fortieth": "forty", "fiftieth": "fifty",
+    "sixtieth": "sixty", "seventieth": "seventy", "eightieth": "eighty",
+    "ninetieth": "ninety", "hundredth": "hundred", "thousandth": "thousand",
+}
+_DIGIT_ORDINAL = re.compile(r"^(\d+)(?:st|nd|rd|th)$")
+
+
 class Alignment(NamedTuple):
     """Result of aligning recognised words against the script."""
 
@@ -133,6 +159,7 @@ class MatchingEngine:
         min_score: Optional[int] = None,
         max_skip: Optional[int] = None,
         resync_skip: Optional[int] = None,
+        reanchor: bool = False,
     ) -> Optional[Alignment]:
         """Align recognised words to the script, forward only.
 
@@ -150,6 +177,13 @@ class MatchingEngine:
 
         The search is bounded by ``[start_word, end_word)``; callers use this
         to keep matching inside the line that is currently on screen.
+
+        ``reanchor`` recovers a reader that has fallen out of step, for
+        example after a sentence the recogniser missed entirely: when nothing
+        in the window matches, the rest of the script is searched for a run
+        of words that match strongly, and the pointer moves there. Only
+        finals ask for it, and the run requirement keeps a stray phrase from
+        throwing the reader somewhere else.
         Returns the furthest script word reached, or None when nothing
         matched.
         """
@@ -192,6 +226,10 @@ class MatchingEngine:
             last_word = best_index
             matched += 1
 
+        if last_word is None and reanchor:
+            anchor = self._find_anchor(spoken_words, cursor, end, threshold)
+            if anchor is not None:
+                return Alignment(last_word=anchor, matched_words=3)
         if last_word is None:
             return None
         return Alignment(last_word=last_word, matched_words=matched)
@@ -217,9 +255,75 @@ class MatchingEngine:
             spoken_words[position + 1], candidate + 1, limit)
         return index is not None and score >= threshold
 
+    def _find_anchor(self, spoken_words, cursor: int, end: int, threshold: int):
+        """Where the reader has got to, when the current window missed.
+
+        Three consecutive spoken words have to land on three consecutive
+        script words, all well above the normal bar, or the reader stays put.
+        Two would be enough for a clear phrase but not for a coincidence:
+        "evening ... and" appears again somewhere in most scripts, and the
+        reader must not teleport on it. The returned index is the last script
+        word of the run, i.e. the furthest reached.
+        """
+        bar = max(86, threshold + 6)
+        span = 3
+        if len(spoken_words) < span or end - cursor < span:
+            return None
+        for position in range(len(spoken_words) - span + 1):
+            run = spoken_words[position:position + span]
+            for index in range(cursor, end - span + 1):
+                if all(fuzz.ratio(word, self._words[index + offset]) >= bar
+                       for offset, word in enumerate(run)):
+                    return index + span - 1
+        return None
+
     # ── Internals ────────────────────────────────────────────────────
 
+    @classmethod
+    def _normalise(cls, word: str) -> str:
+        """Lower-case, strip punctuation and canonicalise numbers.
+
+        A hyphenated compound ("twenty-one") is folded to its value in one
+        step; a number written as two separate words ("twenty one") only
+        matches itself, which keeps the script word indices intact.
+        """
+        cleaned = re.sub(r"[^\w']", "", word.lower())
+        if not cleaned:
+            return cleaned
+        if cleaned.isdigit():
+            return str(int(cleaned))
+        ordinal = _DIGIT_ORDINAL.match(cleaned)
+        if ordinal:
+            return str(int(ordinal.group(1)))
+        if "-" in word or "_" in word:
+            parts = [p for p in re.split(r"[^\w']", word.lower()) if p]
+            value = cls._number_value(parts)
+            if value is not None:
+                return str(value)
+        value = cls._number_value([cleaned])
+        return str(value) if value is not None else cleaned
+
     @staticmethod
-    def _normalise(word: str) -> str:
-        """Lower-case and strip punctuation for comparison."""
-        return re.sub(r"[^\w']", "", word.lower())
+    def _number_value(parts: List[str]) -> Optional[int]:
+        """Value of a run of number words, or None when it is not one."""
+        if not parts:
+            return None
+        total, current, seen = 0, 0, False
+        for part in parts:
+            word = _ORDINAL_WORDS.get(part, part)
+            if word in ("hundred", "thousand", "million"):
+                scale = _NUMBER_WORDS[word]
+                if not seen:
+                    current = 1
+                if scale == 100:
+                    current *= 100
+                else:
+                    total += current * scale
+                    current = 0
+                seen = True
+            elif word in _NUMBER_WORDS:
+                current += _NUMBER_WORDS[word]
+                seen = True
+            else:
+                return None
+        return total + current if seen else None
