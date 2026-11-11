@@ -363,6 +363,14 @@ class NotchOverlay(QWidget):
     # jumping, so the eye is never asked to skip a line.
     LINE_STEP_INTERVAL = 0.18
 
+    # Share of the words on screen that sits above the line being read. The
+    # rest stays ahead of the speaker. The anchor is word weighted, not a
+    # fixed height: one line can hold two words and the next twelve, so a
+    # pixel anchor cannot hold a 30/70 split for long.
+    READING_SHARE = 0.30
+    # Words given the "being spoken" band behind the line.
+    FOCUS_WORDS = 3
+
     def __init__(self):
         super().__init__()
         # When packaged as exe, look for model next to the executable
@@ -436,7 +444,8 @@ class NotchOverlay(QWidget):
         self._last_match_time: Optional[float] = None
         self._last_match_pos = -1
         self._speech_active_until = 0.0
-        # Voice mode: target scroll position (pixels) to keep ~1.5 lines unread visible
+        # Voice mode: the word-balanced anchor, kept so a retarget can be
+        # repeated after a wheel hold without recomputing the share.
         self._voice_target_scroll: Optional[float] = None
         self._last_manual_scroll_time = 0.0  # don't override scroll for this long after user scrolls (seconds)
 
@@ -456,6 +465,7 @@ class NotchOverlay(QWidget):
         # for a text, theme or typography change, where old ranges are stale.
         self._highlight_end = None
         self._highlight_key = None
+        self._focus_span = None   # character range of the banded words
 
         # ── Scroll motion ────────────────────────────────────────────
         # The script glides on a critically damped spring instead of an
@@ -661,6 +671,7 @@ class NotchOverlay(QWidget):
             self._text_edit.setAlignment(Qt.AlignCenter)
             self._apply_read_mode_style()
             self._highlight_key = None  # the editor rewrote the document
+            self._focus_span = None
             self._apply_highlight(-1)
             self._refresh_lines()
             if script_changed:
@@ -1801,6 +1812,7 @@ class NotchOverlay(QWidget):
             self._script_text = text
             self._matching.load_script(text)
             self._highlight_key = None  # a new document: old shading is stale
+            self._focus_span = None
             self._last_match_time = None
             self._last_match_pos = -1
             self._voice_wpm = 60
@@ -2441,24 +2453,76 @@ class NotchOverlay(QWidget):
         if bar.value() != value:
             bar.setValue(value)
 
-    def _scroll_to_reading_line(self, line_index: int):
-        """Anchor the given line at the reading line of the text area.
+    def _scroll_target_for_line(self, line_index: int) -> float:
+        """Scroll offset that keeps ~30% of the visible words behind the line.
 
-        The target depends only on the line, never on the word inside it, so
-        pausing mid-line leaves the view perfectly still. It is recalculated
-        whenever the layout changes, which is what preserves the reading
-        position across font and width changes. The document reserves enough
-        room above and below for the first and last lines to reach the same
-        anchor as every line in between.
+        The line being read is not parked at a fixed height: the anchor is the
+        number of whole rendered lines above it whose words come closest to
+        30% of the words on screen. A dense line therefore pushes the page
+        further than a sparse one, which is what keeps the split true for
+        words rather than for rows.
+
+        Near the start there are not enough spoken words to fill the share and
+        the bar is already at zero, so the card is all upcoming text. Near the
+        end the bar's own limit takes over and the remaining text is shown as
+        it is. The line being read is also kept clear of the floating
+        controls, because a 30% share of a five-line card is one and a half
+        lines and half of one would sit under the toolbar.
+        """
+        lines = self._line_spans
+        edit = self._text_edit
+        bar = edit.verticalScrollBar()
+        index = max(0, min(line_index, len(lines) - 1))
+        height = float(edit.viewport().height())
+        words = [line.last_word - line.first_word + 1 for line in lines]
+
+        # Words of the reading line already heard count as spoken too.
+        spoken = 0
+        position = self._display_word()
+        if index == self._current_line and position >= lines[index].first_word:
+            spoken = min(words[index], position - lines[index].first_word + 1)
+
+        # Candidate anchors are whole lines, never a multiple of the pitch:
+        # blank lines between paragraphs are not rendered, so consecutive
+        # spans can be two pitches apart and counting rows would drift.
+        best = None
+        capacity = max(1, int(height // max(1.0, edit.line_grid())))
+        for first in range(max(0, index - capacity), index + 1):
+            # The topmost line starts on the card's top edge: the line above it
+            # has left the view instead of leaving a slice of descenders.
+            top = lines[first].top
+            reading_top = lines[index].top - top
+            visible = 0
+            for j in range(first, len(lines)):
+                y = lines[j].top - top
+                if y >= height:
+                    break
+                # A line only counts once half of it is on screen.
+                if y + lines[j].height / 2.0 >= 0.0:
+                    visible += words[j]
+            above = sum(words[first:index]) + spoken
+            error = abs(above - self.READING_SHARE * visible)
+            # A share that puts the words being read behind the floating
+            # controls is only used when nothing else is available (opening).
+            if reading_top < self._chrome_strip():
+                error += 1000.0
+            if best is None or error < best[0]:
+                best = (error, top)
+
+        target = lines[index].top if best is None else best[1]
+        return max(0.0, min(float(bar.maximum()), target))
+
+    def _scroll_to_reading_line(self, line_index: int):
+        """Anchor the given line so ~30% of the words on screen are behind it.
+
+        The view is only re-anchored when the reader changes line, never on a
+        partial result, so pausing mid-line leaves it perfectly still. It is
+        also recalculated whenever the layout changes, which is what keeps the
+        word balance across font and width changes.
         """
         if not self._line_spans:
             return
-        index = max(0, min(line_index, len(self._line_spans) - 1))
-        line = self._line_spans[index]
-        inset = self._text_edit.reading_inset()
-        bar = self._text_edit.verticalScrollBar()
-        target = line.top - inset
-        anchored = max(0.0, min(float(bar.maximum()), target))
+        anchored = self._scroll_target_for_line(line_index)
         self._voice_target_scroll = anchored
         self._retarget_scroll(anchored)
 
@@ -2606,8 +2670,22 @@ class NotchOverlay(QWidget):
         base_format.setForeground(QColor(base_hex))
         spoken_format = QTextCharFormat()
         spoken_format.setForeground(QColor(spoken_hex))
+        # The words being spoken come back to full brightness on one quiet
+        # band, so the eye can find its place without the line moving. The
+        # band is the accent pre-blended against the card: QTextEdit paints a
+        # character background opaquely, so a translucent colour would land
+        # as a solid block of accent.
+        current_format = QTextCharFormat(base_format)
+        current_format.setBackground(QColor("#0A1940") if self._dark_theme
+                                     else QColor("#E1EFFF"))
 
         end = self._apply_highlight_end(position)
+        focus = None
+        if position >= 0 and end > 0:
+            first = max(0, min(position, self._matching.word_count - 1) - (self.FOCUS_WORDS - 1))
+            start = self._matching.word_span(first)[0]
+            focus = (start, end)
+        previous_focus = self._focus_span
         # Do not key on id(document()): PyQt hands back a fresh wrapper for
         # the same QTextDocument on every call, so the id changes and every
         # apply would look like a new document. Content changes invalidate
@@ -2620,7 +2698,7 @@ class NotchOverlay(QWidget):
         full = key != self._highlight_key or previous is None
         self._highlight_key = key
         self._highlight_end = end
-        if not full and end == previous:
+        if not full and end == previous and focus == previous_focus:
             return
 
         cursor = QTextCursor(doc)
@@ -2650,6 +2728,20 @@ class NotchOverlay(QWidget):
             cursor.setPosition(end)
             cursor.setPosition(previous, QTextCursor.KeepAnchor)
             cursor.setCharFormat(base_format)
+
+        # Only the words that entered or left the band are touched: moving the
+        # band one word is two tiny formats, not a pass over the script.
+        if focus != previous_focus:
+            if previous_focus:
+                start, stop = previous_focus
+                cursor.setPosition(start)
+                cursor.setPosition(stop, QTextCursor.KeepAnchor)
+                cursor.setCharFormat(spoken_format if stop <= end else base_format)
+            if focus:
+                cursor.setPosition(focus[0])
+                cursor.setPosition(focus[1], QTextCursor.KeepAnchor)
+                cursor.setCharFormat(current_format)
+            self._focus_span = focus
 
     def _apply_line_spacing(self) -> bool:
         """Reference rhythm, at whatever size the reader is set to.
@@ -3130,6 +3222,7 @@ class NotchOverlay(QWidget):
             self._script_text = script
             self._matching.load_script(script)
             self._highlight_key = None
+            self._focus_span = None
             self._line_spans = []
             self._current_line = 0
             self._confirmed_word = -1

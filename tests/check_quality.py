@@ -11,9 +11,11 @@ fails loudly if any of them drift back:
     advances exactly one line,
   * scrolling: one monotonic glide, a bounded per-frame step, no abrupt jump,
     and a settled position on the target,
-  * alignment: every line with room above it settles on the same reading
-    line, a script opens at the top edge of the card, and no resting view
-    slices a line against that edge,
+  * balance: about 30% of the words on screen sit above the line being
+    read and the rest stay ahead of the speaker, at any font size;
+  * alignment: the line being read stays below the floating controls, a
+    script opens at the top edge of the card, and no resting view slices a
+    line against that edge,
   * transparency: the card stays fully opaque while the floating controls
     recede; the type itself is never attenuated at the edges.
 
@@ -30,6 +32,8 @@ import sys
 import tempfile
 
 
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QTextCursor
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication
 
@@ -82,6 +86,8 @@ def settle(win, timeout_ms=2500):
 def load(win, text):
     win._text_edit.setPlainText(text)
     win._spaced_key = None  # mirror the production load path
+    # setPlainText resets the block formats; production re-centres after it.
+    win._text_edit.setAlignment(Qt.AlignCenter)
     win._script_text = text
     win._matching.load_script(text)
     win._line_spans = []
@@ -92,6 +98,51 @@ def load(win, text):
     win._refresh_lines()
     win._scroll_to_reading_line(0)
     settle(win)
+
+
+def word_split(win, index):
+    """(words above the reading line, visible words, fullest line's words).
+
+    The third value is the slack a whole-line anchor is allowed: it can only
+    move a line at a time, so the closest it can reach is one line's worth of
+    words away from the exact share.
+    """
+    edit = win._text_edit
+    lines = win._line_spans
+    height = float(edit.viewport().height())
+    top = float(edit.verticalScrollBar().value())
+    above = visible = slack = 0
+    for j, line in enumerate(lines):
+        y = line.top - top
+        if y >= height:
+            break
+        if y + line.height / 2.0 < 0.0:
+            continue
+        count = line.last_word - line.first_word + 1
+        visible += count
+        slack = max(slack, count)
+        if j < index:
+            above += count
+        elif j == index == win._current_line:
+            # The words of the reading line already spoken are behind the
+            # speaker too, not part of the upcoming share.
+            position = win._display_word()
+            if position >= line.first_word:
+                above += min(count, position - line.first_word + 1)
+    return above, visible, slack
+
+
+def banded_words(win):
+    """Words carrying the "being spoken" band."""
+    banded = 0
+    for word in range(win._matching.word_count):
+        start, _ = win._matching.word_span(word)
+        cursor = QTextCursor(win._text_edit.document())
+        cursor.setPosition(start)
+        cursor.setPosition(start + 1, QTextCursor.KeepAnchor)
+        if cursor.charFormat().background().style() != Qt.NoBrush:
+            banded += 1
+    return banded
 
 
 def fragment_colours(win):
@@ -144,7 +195,9 @@ def main():
         win._dark_theme = dark
         win._apply_read_mode_style()
         win._apply_highlight(-1)
-        win._apply_highlight(win._line_spans[0].first_word + 1)
+        # Far enough in that the document shows all three tiers: spoken, the
+        # banded words being spoken, and the text still to come.
+        win._apply_highlight(min(20, win._matching.word_count - 1))
         colours = fragment_colours(win)
         fill = (0, 0, 0) if dark else (255, 255, 255)
         base = max(colours, key=lambda c: contrast(c, fill))
@@ -156,6 +209,18 @@ def main():
         check(f"{name}: spoken text is the quieter tier",
               contrast(spoken, fill) < contrast(base, fill),
               f"{contrast(spoken, fill):.1f}:1 vs {contrast(base, fill):.1f}:1")
+
+    # The words being spoken keep one quiet band so the eye keeps its place
+    # while the page is gliding; nothing else carries a background.
+    win._apply_highlight(-1)
+    win._apply_highlight(min(20, win._matching.word_count - 1))
+    check("only the words being spoken carry the highlight band",
+          banded_words(win) == win.FOCUS_WORDS,
+          f"{banded_words(win)} banded words of {win._matching.word_count}")
+    check("the script line stays horizontally centred",
+          bool(win._text_edit.alignment() & Qt.AlignHCenter),
+          f"alignment {int(win._text_edit.alignment())}")
+    win._apply_highlight(-1)
 
     win._dark_theme = True
     win._apply_read_mode_style()
@@ -260,13 +325,15 @@ def main():
     check("reversing mid-glide changes direction once", late_reversals <= 1,
           f"{late_reversals} reversals")
 
-    # ── Alignment ───────────────────────────────────────────────────
-    # The anchor is snapped to the document's line grid, so every line with
-    # room above it settles on the same reading line. The opening lines are
-    # the exception by design: nothing is reserved above line one, so a
-    # script opens at the top edge instead of below an empty header band.
+    # ── Word balance ────────────────────────────────────────────────
+    # The anchor follows the words on screen, not a fixed height: about 30%
+    # of them sit above the line being read, so most of the card is still
+    # ahead of the speaker. The opening lines are the exception by design:
+    # nothing is reserved above line one, so a script opens at the top edge.
+    shares = {}
+    readings = {}
     errors = {}
-    inset = edit.reading_inset()
+    slacks = {}
     grid = edit.line_grid()
     for label, index in (
         ("middle", max(0, min(3, len(win._line_spans) // 2))),
@@ -274,20 +341,23 @@ def main():
     ):
         win._scroll_to_reading_line(index)
         settle(win)
-        line = win._line_spans[index]
-        errors[label] = round(line.top - bar.value() - inset, 2)
-    check("every line with room above it sits on the anchor",
-          all(abs(value) <= 1.5 for value in errors.values()),
-          f"inset {inset:.1f}, errors {errors}")
-    check("the anchor sits on the document's line grid",
-          abs(inset - round(inset / grid) * grid) <= 0.5,
-          f"inset {inset:.1f}, grid {grid:.1f}")
+        above, visible, slack = word_split(win, index)
+        shares[label] = round(above / visible, 2) if visible else None
+        errors[label] = abs(above - win.READING_SHARE * visible)
+        slacks[label] = slack
+        readings[label] = round(win._line_spans[index].top - bar.value(), 1)
+    check("about 30% of the visible words sit behind the reading line",
+          errors["middle"] <= slacks["middle"],
+          f"shares {shares}, one line is {slacks['middle']} words")
+    check("the line being read stays below the floating controls",
+          all(value >= win._chrome_strip() - 1 for value in readings.values()),
+          f"line tops {readings}, chrome {win._chrome_strip()}")
 
     win._scroll_to_reading_line(0)
     settle(win)
     first_top = win._line_spans[0].top - bar.value()
     check("a script opens at the top edge of the card",
-          bar.value() == 0 and first_top <= 12,
+          bar.value() <= 12 and abs(first_top) <= 1.0,
           f"scroll {bar.value()}, first line top {first_top:.1f}")
 
     # Every resting view must start on a whole line: the topmost line is

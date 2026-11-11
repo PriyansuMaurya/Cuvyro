@@ -220,16 +220,29 @@ def main():
         colour = cursor.charFormat().foreground().color()
         return (colour.red(), colour.green(), colour.blue())
 
+    def band_at(word):
+        start, _ = shade_win._matching.word_span(word)
+        cursor = QTextCursor(shade_win._text_edit.document())
+        cursor.setPosition(start)
+        cursor.setPosition(start + 1, QTextCursor.KeepAnchor)
+        return cursor.charFormat().background().style() != Qt.NoBrush
+
     spoken = (0x8A, 0x8A, 0x8A)
     base = (0xFA, 0xFA, 0xFA)
     shade_win._apply_highlight(10)
     check("speech shading marks the spoken run",
-          shade_at(10) == spoken and shade_at(40) == base,
-          f"word 10 {shade_at(10)}, word 40 {shade_at(40)}")
+          shade_at(4) == spoken and shade_at(40) == base,
+          f"word 4 {shade_at(4)}, word 40 {shade_at(40)}")
+    check("the words being spoken are the bright tier on one band",
+          shade_at(10) == base and band_at(9) and band_at(10)
+          and not band_at(4),
+          f"word 10 {shade_at(10)}, banded={band_at(10)}")
     shade_win._apply_highlight(5)
     check("stepping back un-shades the words the reader returned to",
-          shade_at(10) == base and shade_at(5) == spoken,
-          f"word 10 {shade_at(10)}, word 5 {shade_at(5)}")
+          shade_at(10) == base and shade_at(2) == spoken,
+          f"word 10 {shade_at(10)}, word 2 {shade_at(2)}")
+    check("the band follows the reader back",
+          band_at(5) and not band_at(10))
     shade_win._apply_highlight(30)
     check("stepping forward re-shades correctly after a backward jump",
           shade_at(10) == spoken and shade_at(40) == base,

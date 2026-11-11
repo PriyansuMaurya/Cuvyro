@@ -7,6 +7,9 @@ microphone) and asserts the behaviour the teleprompter promises:
   * only a confirmed result that reaches the line's last word advances it,
   * advancement is by rendered line, never by word; when one result confirms
     several lines the reader catches up one line at a time,
+  * about 30% of the words on screen stay behind the line being read, at
+    every font size, window size and speaking rhythm; the start and the end
+    of a script are exempt by design,
   * line breaks are rebuilt from the rendered layout when the font size,
     font family or viewport width changes, without losing the read position.
 
@@ -104,11 +107,58 @@ def position_kept(win, word):
 
 
 def target_matches_line(win):
-    line = win._line_spans[win._current_line]
-    bar = win._text_edit.verticalScrollBar()
-    expected = max(0.0, min(float(bar.maximum()),
-                            line.top - win._text_edit.reading_inset()))
+    """The target is the word-balanced anchor for the line being read."""
+    expected = win._scroll_target_for_line(win._current_line)
     return abs((win._voice_target_scroll or 0.0) - expected) <= 0.5
+
+
+def land(win, timeout_ms=2500):
+    """Wait for the spring to settle, then read the resting bar value."""
+    bar = win._text_edit.verticalScrollBar()
+    waited = 0
+    while waited < timeout_ms:
+        if (not win._scroll_moving
+                and abs(bar.value() - (win._voice_target_scroll or 0)) <= 1):
+            break
+        QTest.qWait(10)
+        waited += 10
+    return bar.value()
+
+
+def word_split(win, index):
+    """(words above the reading line, visible words, fullest line's words).
+
+    The third value is the slack a whole-line anchor is allowed: it can only
+    move a line at a time, so the closest split it can reach is one line's
+    worth of words away from the exact share.
+    """
+    edit = win._text_edit
+    lines = win._line_spans
+    height = float(edit.viewport().height())
+    top = float(edit.verticalScrollBar().value())
+    above = visible = slack = 0
+    for j, line in enumerate(lines):
+        y = line.top - top
+        if y >= height:
+            break
+        if y + line.height / 2.0 < 0.0:
+            continue
+        count = line.last_word - line.first_word + 1
+        visible += count
+        slack = max(slack, count)
+        if j < index:
+            above += count
+        elif j == index == win._current_line:
+            # The words of the reading line already spoken are behind the
+            # speaker too, not part of the upcoming share.
+            position = win._display_word()
+            if position >= line.first_word:
+                above += min(count, position - line.first_word + 1)
+    return above, visible, slack
+
+
+def share_ok(win, above, visible, slack):
+    return abs(above - win.READING_SHARE * visible) <= slack
 
 
 def main():
@@ -338,6 +388,100 @@ def main():
     check("the line advances only after its last word after a width change",
           held_line == win._current_line - 1,
           f"{held_line} -> {win._current_line}")
+
+    # ── 30 / 70 balance across sizes and windows ────────────────────
+    # The share is measured on the words actually on screen, and the anchor
+    # has to hold it at every font size and card size, not only at the one
+    # the default happens to use.
+    win.setMinimumSize(1, 1)
+    balance = []
+    balance_ok = True
+    balance_detail = ""
+    for size in (8, 10, 12, 16, 24):
+        for width, height in ((340, 122), (480, 200), (260, 150)):
+            win.resize(width, height)
+            QTest.qWait(220)  # let the resize debounce rebuild the lines
+            win._font_size = size
+            win._apply_typography()
+            QTest.qWait(30)
+            index = max(1, min(len(win._line_spans) // 2,
+                               len(win._line_spans) - 2))
+            win._set_reading_position(win._line_spans[index].first_word)
+            land(win)
+            # At the largest sizes a rendered line is a single word, so
+            # adopting its first word as the position completes it and the
+            # reader steps on to the next one. Measure where it actually is.
+            index = win._current_line
+            above, visible, slack = word_split(win, index)
+            balance.append(round(above / visible, 2) if visible else 0.0)
+            # A short card fits only a few lines, so a whole-line anchor can
+            # only land within one line's words of the exact 30/70 split.
+            if not share_ok(win, above, visible, slack):
+                balance_ok = False
+                balance_detail = (f"{size}pt {width}x{height}: {above}/{visible} "
+                                  f"words behind, one line is {slack}")
+                break
+        if not balance_ok:
+            break
+    check("about 30% of the visible words sit behind the reading line",
+          balance_ok, balance_detail or f"{len(balance)} layouts {balance}")
+
+    # A different speaking rhythm must not move the balance: the anchor only
+    # depends on the words, never on how fast they arrive.
+    win.resize(340, 122)
+    QTest.qWait(220)
+    win._font_size = 12
+    win._apply_typography()
+    QTest.qWait(30)
+    # Start mid-script: the opening is exempt, so the balance is only
+    # promised once there are spoken words to put behind the reading line.
+    start = min(20, len(win._line_spans) - 4)
+    win._set_reading_position(win._line_spans[start].first_word)
+    land(win)
+    rhythm_ok = True
+    rhythm_detail = ""
+    for offset in range(3):
+        line_index = start + offset
+        words = line_words(win, line_index)
+        cursor = 0
+        chunk = (1, 2, 4)[offset]
+        while cursor < len(words):
+            end = min(len(words), cursor + chunk)
+            piece = words[cursor:end]
+            quiet_speech(win, " ".join(piece), False)
+            quiet_speech(win, " ".join(piece), True)
+            QTest.qWait(40)
+            cursor = end
+        land(win)
+        index = win._current_line
+        if index >= len(win._line_spans) - 2:
+            break
+        above, visible, slack = word_split(win, index)
+        if not share_ok(win, above, visible, slack):
+            rhythm_ok = False
+            rhythm_detail = (f"line {index}: {above}/{visible} words behind, "
+                             f"one line is {slack}")
+            break
+    check("the balance holds at slow and fast delivery",
+          rhythm_ok, rhythm_detail)
+
+    # ── The two exceptions ──────────────────────────────────────────
+    load(win, script)
+    QTest.qWait(30)
+    land(win)
+    above, visible, _ = word_split(win, 0)
+    check("a script opens as pure upcoming text",
+          above == 0 and win._text_edit.verticalScrollBar().value() == 0,
+          f"{above}/{visible} words behind, "
+          f"scroll {win._text_edit.verticalScrollBar().value()}")
+    win._scroll_to_reading_line(len(win._line_spans) - 1)
+    land(win)
+    last = win._line_spans[-1]
+    bottom = last.top - win._text_edit.verticalScrollBar().value() + last.height
+    check("the end of the script is shown as it ends, not forced to a ratio",
+          0 < bottom <= win._text_edit.viewport().height() + 1,
+          f"last line bottom {bottom:.1f} of "
+          f"{win._text_edit.viewport().height()}")
 
     win._voice_mode = False
     win.close()
