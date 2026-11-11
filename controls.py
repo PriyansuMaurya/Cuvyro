@@ -408,11 +408,14 @@ class ScriptTextEdit(QTextEdit):
     fully opaque column of type from the top edge to the bottom. It paints
     through QTextEdit itself: no offscreen image, no fade and no blur.
 
-    Nothing is reserved above the first line, so a script opens at the top
-    edge and runs behind the floating chrome; only the foot keeps its room,
-    which lets the last line be scrolled up onto the reading anchor. The
-    anchor itself is snapped to the document's line grid so the top edge of
-    the card always falls on a line boundary (see reading_inset).
+    The document keeps a lead above its first line so a script opens 30% down
+    the card, clear of the floating chrome. The lead is part of the document,
+    not a fixed viewport inset: it scrolls away with the type, so lines that
+    have already been read pass upward behind the controls while the line
+    being read keeps its usual place. Only the foot keeps its room, which lets
+    the last line be scrolled up onto the reading anchor. The anchor itself is
+    snapped to the document's line grid so the top edge of the card always
+    falls on a line boundary (see reading_inset).
     """
 
     # Where the reading line sits inside the reading area, and how much room
@@ -420,6 +423,10 @@ class ScriptTextEdit(QTextEdit):
     READING_TOP = 0.32
     READING_TOP_MIN = 12.0
     READING_BOTTOM_MIN = 12.0
+
+    # How far down the card a script opens. 30% clears the control strip and
+    # keeps the first line whole instead of letting the toolbar sit on it.
+    OPENING_TOP = 0.30
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -441,6 +448,31 @@ class ScriptTextEdit(QTextEdit):
                 or abs(bottom - self._lead_bottom) > 0.01):
             self._lead_top, self._lead_bottom = top, bottom
             self.viewport().update()
+
+    def opening_lead(self) -> float:
+        """Document top margin that opens the script 30% down the card.
+
+        The margin is measured from the document's own edge, so the first
+        rendered line lands OPENING_TOP of the viewport below the top of the
+        card. A block's first line carries its own layout offset (the fixed
+        line height centres the glyphs inside the row), so that offset is
+        subtracted here instead of guessed from the font metrics: the frame
+        margin plus the line's own position is the top of the type. Because
+        the margin belongs to the document it scrolls with the type: at the
+        first line the bar stays at zero so the lead is visible, and from the
+        second line on the page moves up through it, carrying the lines
+        already read behind the controls.
+        """
+        height = float(self.viewport().height())
+        block = self.document().begin()
+        layout = block.layout()
+        if layout is not None and layout.lineCount():
+            first_line = float(layout.lineAt(0).position().y())
+        else:
+            # No laid-out text yet: the margin is re-derived once a script
+            # has been measured, so only a rough lead is needed here.
+            first_line = float(self.document().documentMargin())
+        return max(0.0, height * self.OPENING_TOP - first_line)
 
     def line_grid(self) -> float:
         """The vertical step between lines, as the document lays them out.

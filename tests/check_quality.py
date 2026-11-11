@@ -14,8 +14,8 @@ fails loudly if any of them drift back:
   * balance: about 30% of the words on screen sit above the line being
     read and the rest stay ahead of the speaker, at any font size;
   * alignment: the line being read stays below the floating controls, a
-    script opens at the top edge of the card, and no resting view slices a
-    line against that edge,
+    script opens 30% down the card so its first line clears those controls,
+    and no resting view slices a line against the top edge,
   * transparency: the card stays fully opaque while the floating controls
     recede; the type itself is never attenuated at the edges.
 
@@ -334,8 +334,9 @@ def main():
     # ── Word balance ────────────────────────────────────────────────
     # The anchor follows the words on screen, not a fixed height: about 30%
     # of them sit above the line being read, so most of the card is still
-    # ahead of the speaker. The opening lines are the exception by design:
-    # nothing is reserved above line one, so a script opens at the top edge.
+    # ahead of the speaker. The opening line is the exception by design: the
+    # document keeps a lead above it, so a script opens 30% down the card and
+    # the first line sits clear of the floating controls.
     shares = {}
     readings = {}
     errors = {}
@@ -362,9 +363,12 @@ def main():
     win._scroll_to_reading_line(0)
     settle(win)
     first_top = win._line_spans[0].top - bar.value()
-    check("a script opens at the top edge of the card",
-          bar.value() <= 12 and abs(first_top) <= 1.0,
-          f"scroll {bar.value()}, first line top {first_top:.1f}")
+    start_share = first_top / float(edit.viewport().height())
+    check("a script opens 30% below the top edge, clear of the controls",
+          bar.value() <= 1 and abs(start_share - 0.30) <= 0.01
+          and first_top >= win._chrome_strip() - 1,
+          f"scroll {bar.value()}, first line top {first_top:.1f} "
+          f"({start_share:.1%}), chrome {win._chrome_strip()}")
 
     # Every resting view must start on a whole line: the topmost line is
     # complete and the line above it has left the view. A row of cut

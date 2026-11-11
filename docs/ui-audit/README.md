@@ -40,11 +40,12 @@ Surface treatment, also measured from the captures:
   rectangle it always had (x 18, y 4, 304×32 at 100%) and floats over the
   script's own column, so the type is not pushed into a smaller box below a
   title bar.
-  **Nothing is reserved above the first line.** A script opens at the card's
-  top edge (measured **7.8 px**, the document's own margin) and runs behind
-  the floating chrome, so the window is type from its first pixel instead of
-  type below an empty header band. Only the foot keeps its room, so the last
-  line can still be scrolled up onto the reading line.
+  **The script opens 30% down the card** (measured **36.2 px**), so the first
+  line is whole and clears the floating chrome. That lead belongs to the
+  document rather than to the viewport: once reading starts it scrolls away,
+  carrying the lines already read up behind the controls while the line being
+  read keeps its usual place. Only the foot keeps its room, so the last line
+  can still be scrolled up onto the reading line.
   The reading line sits at **62 px**, snapped to the document's **31 px** line
   grid. Every line therefore lands on a whole multiple of the grid from the top
   of the card: the topmost line is complete and the line above it has left the
@@ -102,10 +103,11 @@ Surface treatment, also measured from the captures:
   top edge always falls on a line boundary. The grid snap also holds when the
   card is resized: a 420×190 window puts the anchor at 93 px and still lands
   the topmost line on 0 instead of half a line above it.
-- The reserved header band above line one went with it: a new script used to
-  open with the upper half of the card empty, because the document reserved
-  the anchor offset above its first line. Measured now: first line at 7.8 px,
-  no reserved space, last line still able to reach the anchor.
+- The fixed header band above line one stayed gone, but the opening is no
+  longer flush with the card edge: the document keeps a 30% lead that scrolls
+  away with the type, so the first line (measured **36.2 px**) sits below the
+  controls and is never half-hidden behind them. The last line can still
+  reach the anchor.
 - The light theme applied the full-strength coloured glow over white, which
   read as a smudge rather than a status hint.
 
@@ -144,10 +146,10 @@ extractor was ever wired in; the picker, drop target and README now agree.
   accessible-name properties, not with a screen reader application.
 - Multi-monitor behaviour was verified by synthetic geometry (an off-screen
   save point), not by physically unplugging a display.
-- The floating toolbar deliberately sits over the first line of type until it
-  recedes after three seconds of stillness. The captures show that overlap;
-  reserving a header strip would cost a line of script in the compact reader,
-  so it stays a deliberate trade-off rather than a measured defect.
+- The floating toolbar still sits over the type once reading starts: the
+  opening lead keeps the first line clear of it, and lines already read pass
+  underneath it as they scroll away, which is the intended behaviour rather
+  than a measured defect.
 - Speech recognition itself was exercised with synthetic word timings in
   `check_voice_follow.py`; live microphone recognition accuracy was not
   measured on this machine.

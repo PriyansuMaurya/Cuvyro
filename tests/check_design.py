@@ -5,9 +5,9 @@ surface drifts back:
 
   * the reader keeps its solid card: fill, wash, level line and hairline are
     all still there, and the window is never a hole in the desktop,
-  * the script runs the full height of the card, from its top edge down
-    behind the floating controls, fully opaque, with no fade or blur and no
-    reserved header band,
+  * the script runs the full height of the card, fully opaque, with no fade
+    or blur, and opens 30% down so its first line clears the floating
+    controls; the opening lead then scrolls away with the type,
   * the controls keep the exact position and size they had, only without a
     header bar behind them, and each one carries a rounded opaque plate that
     lifts its glyph off the script and hides the words passing under it,
@@ -299,14 +299,20 @@ def main():
           f"reader {reader_margin:.1f} vs anchor {anchor_room:.1f}, "
           f"editor {editor_margin:.1f}")
     frame = win._text_edit.document().rootFrame().frameFormat()
-    first_line_room = frame.topMargin() + win._text_edit.document().documentMargin()
-    # No reserved header: the script starts at the card's top edge and runs
-    # behind the floating chrome. Only the foot keeps its room, so the last
-    # line can still be scrolled up onto the reading line.
-    check("the script reserves no header above its first line",
-          frame.topMargin() == 0 and first_line_room <= 12,
-          f"top margin {frame.topMargin():.1f}, "
-          f"first line at {first_line_room:.1f} px")
+    bar.setValue(0)
+    win._sync_scroll_spring()
+    QTest.qWait(60)
+    first_line_room = win._line_spans[0].top - bar.value()
+    # The opening lead belongs to the document, so it scrolls away with the
+    # type instead of clipping the top: the first line clears the controls
+    # at rest, and the foot keeps its room so the last line can still reach
+    # the reading line.
+    check("the script opens 30% down the card, below the controls",
+          abs(first_line_room / win._text_edit.viewport().height() - 0.30) <= 0.01
+          and first_line_room >= win._chrome_strip() - 1,
+          f"first line at {first_line_room:.1f} px of "
+          f"{win._text_edit.viewport().height()}, chrome {win._chrome_strip()}, "
+          f"top margin {frame.topMargin():.1f}")
     check("the last line can still reach the reading line",
           reader_margin >= win._text_edit.viewport().height()
           - win._text_edit.reading_inset()

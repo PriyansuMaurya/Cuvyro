@@ -764,7 +764,8 @@ class NotchOverlay(QWidget):
 
         # ── Script text area ─────────────────────────────────────────
         # Plain, fully opaque type from the card's top edge down (see
-        # ScriptTextEdit): no fade, no blur, no reserved header above it.
+        # ScriptTextEdit): no fade and no blur. The opening lead is part of
+        # the document, so it scrolls away behind the controls with the text.
         self._text_edit = ScriptTextEdit(self)
         self._text_edit.setAcceptRichText(False)  # Paste as plain text only (no colors, bg, etc.)
         self._text_edit.setReadOnly(True)
@@ -2204,16 +2205,18 @@ class NotchOverlay(QWidget):
         self._layout_chrome()
 
     def _apply_document_lead(self):
-        """Reserve the anchor room under the document, never above it.
+        """Reserve the opening lead above the script and the anchor room below.
 
-        The reader keeps blank space below its last line so the end of a
-        script can still be scrolled up onto the reading line. It reserves
-        nothing above the first line: a script opens at the top edge of the
-        card and runs behind the floating chrome, so the window is type from
-        its first pixel rather than type below an empty header band.
+        The reader opens with its first line 30% down the card, below the
+        floating chrome, and keeps blank space below its last line so the end
+        of a script can still be scrolled up onto the reading line. Both
+        strips belong to the document, so they move with the type: once
+        reading starts, the lines already read travel up behind the controls
+        instead of being held still by a fixed inset.
 
-        Re-applied after every document load and every resize, because
-        replacing the text resets the root frame's format and the anchor is
+        The editor reserves neither; its type sits below the toolbar the usual
+        way. Re-applied after every document load and every resize, because
+        replacing the text resets the root frame's format and both leads are
         derived from the viewport height.
         """
         frame = self._text_edit.document().rootFrame()
@@ -2222,7 +2225,7 @@ class NotchOverlay(QWidget):
             top = 0.0
             bottom = None  # the Done button's strip is owned by the footer
         else:
-            top = 0.0
+            top = float(self._text_edit.opening_lead())
             bottom = float(self._text_edit.anchor_padding())
         changed = abs(fmt.topMargin() - top) >= 0.5
         if bottom is not None and abs(fmt.bottomMargin() - bottom) >= 0.5:
@@ -2604,17 +2607,25 @@ class NotchOverlay(QWidget):
         further than a sparse one, which is what keeps the split true for
         words rather than for rows.
 
-        Near the start there are not enough spoken words to fill the share and
-        the bar is already at zero, so the card is all upcoming text. Near the
-        end the bar's own limit takes over and the remaining text is shown as
-        it is. The line being read is also kept clear of the floating
-        controls, because a 30% share of a five-line card is one and a half
-        lines and half of one would sit under the toolbar.
+        At the opening line the lead above the document is shown instead of
+        being scrolled away, so the first line sits 30% down the card and the
+        rest of the page is upcoming text. After that the lead scrolls off
+        with the lines already read. Near the end the bar's own limit takes
+        over and the remaining text is shown as it is. The line being read is
+        also kept clear of the floating controls, because a 30% share of a
+        five-line card is one and a half lines and half of one would sit under
+        the toolbar.
         """
         lines = self._line_spans
         edit = self._text_edit
         bar = edit.verticalScrollBar()
         index = max(0, min(line_index, len(lines) - 1))
+        if index == 0:
+            # The opening lead belongs to the document, so the first line's
+            # target is its top minus that lead: the bar stays at zero and
+            # the lead is what puts the line 30% down the card. Scrolling to
+            # the line's raw top would eat the lead before anything is read.
+            return 0.0
         height = float(edit.viewport().height())
         words = [line.last_word - line.first_word + 1 for line in lines]
 
