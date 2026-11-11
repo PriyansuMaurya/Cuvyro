@@ -501,7 +501,10 @@ class NotchOverlay(QWidget):
         # ── Timers ───────────────────────────────────────────────────
         # Scroll timer (glow + manual scroll); 60 FPS for smooth response
         self._scroll_timer = QTimer(self)
-        self._scroll_timer.setInterval(17)  # ~60 FPS
+        # Stay under the Windows timer tick (15.6 ms): at 17 ms every sixth
+        # frame misses its slot and lands 31 ms late, which reads as the script
+        # stumbling mid-line. 16 ms keeps the glide even.
+        self._scroll_timer.setInterval(16)  # ~60 FPS
         self._scroll_timer.timeout.connect(self._tick)
 
         # Resize events arrive every frame while the narrow/wide animation
@@ -608,6 +611,8 @@ class NotchOverlay(QWidget):
         if self._text_fade_for_expand:
             self._edit_mode = True
             self._text_edit.setReadOnly(False)
+            # The editor is the one surface where undo belongs.
+            self._text_edit.document().setUndoRedoEnabled(True)
             self._text_edit.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
             self._text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -688,6 +693,7 @@ class NotchOverlay(QWidget):
             self._apply_root_margins()
             self._reserve_editor_footer(False)
             self._text_edit.setReadOnly(True)
+            self._text_edit.document().setUndoRedoEnabled(False)
             self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             self._text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             self._text_edit.setAlignment(Qt.AlignCenter)
@@ -783,6 +789,12 @@ class NotchOverlay(QWidget):
         self._text_edit = ScriptTextEdit(self)
         self._text_edit.setAcceptRichText(False)  # Paste as plain text only (no colors, bg, etc.)
         self._text_edit.setReadOnly(True)
+        # The reader formats a run of characters on every recognised word.
+        # With undo enabled each of those writes is kept as an undo command,
+        # so a session grew the stack by ~20 steps a second for nothing: there
+        # is no undo history to protect while the document is read-only. The
+        # stack is switched back on when the editor opens.
+        self._text_edit.document().setUndoRedoEnabled(False)
         self._text_edit.setFont(self._text_font())
         self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)

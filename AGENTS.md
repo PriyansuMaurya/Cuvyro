@@ -26,6 +26,7 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_behavior.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_voice_follow.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_speech_engine.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/profile_reading.py
 .venv/Scripts/python.exe tests/check_design.py      # needs a real display
 .venv/Scripts/python.exe tests/check_quality.py     # needs a real display
 ```
@@ -34,6 +35,11 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py
 and reports SKIP when `model/` has none. `tests/bench_speech_engines.py` is the
 benchmark that chose the engine; it synthesises its fixtures with the local
 SAPI voices and needs no network.
+
+`tests/profile_reading.py` drives the real overlay offscreen at recogniser
+cadence and reports frame cadence, result-to-paint latency, CPU and working
+set. `--interval 17 --undo` reproduces the build before the scroll-clock and
+undo-stack fixes, so the two profiles can be compared directly.
 
 `tests/calibrate_voice.py` scores a speaker against the corpus and drives the
 overlay with the recordings (`--no-mic --reader` re-scores takes already in
