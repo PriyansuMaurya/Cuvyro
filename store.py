@@ -139,13 +139,40 @@ class Store:
             except OSError:
                 pass
 
-    def save(self, script: str, notes: list[dict], settings: dict | None = None) -> None:
+    def _mirror_backup(self, source: str) -> None:
+        """Make .bak a copy of the state that was just put in place.
+
+        The ordinary path promotes the previous state to .bak, which is right
+        for a crash but wrong for a deliberate deletion: the previous state
+        still held the deleted note, and a primary that later fails to parse
+        would let the reader's own deletion be undone by recovery. After a
+        deletion both files carry the new state instead.
+        """
+        handle, temp_path = tempfile.mkstemp(dir=self.directory, suffix=".bak.tmp")
+        os.close(handle)
+        try:
+            shutil.copyfile(source, temp_path)
+            os.replace(temp_path, self.backup_path)
+        except OSError:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+    def save(self, script: str, notes: list[dict], settings: dict | None = None,
+             purge_backup: bool = False) -> None:
         """Write the whole state atomically; the previous good state is .bak.
 
         Nothing is ever written in place: the new file is complete and fsynced
         before it replaces the primary, so a partially written file cannot be
         observed. ``_backup_current`` copies the old primary without removing
         it, so even a crash between the two replaces leaves a readable file.
+
+        ``purge_backup`` is for states that removed something on purpose. The
+        previous copy is not promoted; .bak is written from this state after
+        the primary is in place, so recovery can never restore what the reader
+        deleted. A crash between the two replaces leaves at worst a stale
+        backup, never a missing primary.
         """
         os.makedirs(self.directory, exist_ok=True)
         payload = {
@@ -160,8 +187,12 @@ class Store:
                 json.dump(payload, out, ensure_ascii=False, indent=2)
                 out.flush()
                 os.fsync(out.fileno())
-            self._backup_current()
-            os.replace(temp_path, self.path)
+            if purge_backup:
+                os.replace(temp_path, self.path)
+                self._mirror_backup(self.path)
+            else:
+                self._backup_current()
+                os.replace(temp_path, self.path)
         except OSError:
             try:
                 os.unlink(temp_path)

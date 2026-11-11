@@ -26,6 +26,7 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_behavior.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_voice_follow.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_speech_engine.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_note_clearing.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/profile_reading.py
 .venv/Scripts/python.exe tests/check_design.py      # needs a real display
 .venv/Scripts/python.exe tests/check_quality.py     # needs a real display

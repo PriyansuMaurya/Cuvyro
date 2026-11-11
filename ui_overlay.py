@@ -688,9 +688,16 @@ class NotchOverlay(QWidget):
             # Collapsing: apply pill styling while text is invisible (no snap)
             new_text = self._text_edit.toPlainText()
             script_changed = new_text != self._script_text
+            cleared = bool(script_changed and not new_text.strip())
             self._script_text = new_text
             self._matching.load_script(self._script_text)
-            self._save_state()  # commit the edit now, not only on close
+            if cleared:
+                # The script the notes were written under is gone. Saving
+                # instead would keep them in the file and reopen them over the
+                # empty reader on the next launch.
+                self._discard_script_notes()
+            else:
+                self._save_state()  # commit the edit now, not only on close
             self._last_match_time = None
             self._last_match_pos = -1
             self._stalled_finals = 0
@@ -2015,6 +2022,9 @@ class NotchOverlay(QWidget):
             self._spaced_key = None
             self._text_edit.setAlignment(Qt.AlignCenter) 
             self._script_text = text
+            if not text.strip():
+                # An empty file is a clear, exactly like emptying the editor.
+                self._discard_script_notes()
             self._matching.load_script(text)
             self._highlight_key = None  # a new document: old shading is stale
             self._focus_span = None
@@ -3402,9 +3412,17 @@ class NotchOverlay(QWidget):
                 # closeEvent) then touches a deleted object. Deleting is
                 # deferred to the event loop instead.
                 note.deleteLater()
-        self._save_state()
+        # A closed note is a deliberate deletion, not a state the backup may
+        # undo if the primary file is later unreadable.
+        self._save_state(purge_backup=True)
 
-    def _close_all_notes(self):
+    def _detach_notes(self, persist: bool = False) -> int:
+        """Close every note, optionally removing its saved copy as well.
+
+        ``closed`` is blocked per note: it is the signal that would otherwise
+        save the state once per window, and the window is gone either way.
+        """
+        closed = len(self._notes)
         for note in list(self._notes):
             note.blockSignals(True)
             note.close()
@@ -3413,6 +3431,23 @@ class NotchOverlay(QWidget):
             # be delivering the mouse event that closed the app.
             note.deleteLater()
         self._notes.clear()
+        if persist:
+            self._save_state(purge_backup=True)
+        return closed
+
+    def _discard_script_notes(self):
+        """Drop the notes that belong to a script that is being cleared.
+
+        Notes are written against the script on screen. Keeping them once
+        that script is gone would leave talking points hanging over an empty
+        reader, and the state file would hand them back on the next launch as
+        if they still belonged to something.
+        """
+        if self._detach_notes(persist=True):
+            print("[Notch] Cleared the notes for the cleared script", flush=True)
+
+    def _close_all_notes(self):
+        self._detach_notes()
 
     def _note_state(self) -> list:
         """Only written notes are kept; blank ones disappear on close."""
@@ -3641,13 +3676,20 @@ class NotchOverlay(QWidget):
         """Write the state once the user pauses, not on every keystroke."""
         self._save_timer.start()
 
-    def _save_state(self):
-        """Flush the current state to disk. Safe to call at any time."""
+    def _save_state(self, purge_backup: bool = False):
+        """Flush the current state to disk. Safe to call at any time.
+
+        ``purge_backup`` is passed when a note was removed on purpose: the
+        crash-recovery copy is written from this state too, so a note the
+        reader closed cannot come back if the primary file later fails to
+        parse.
+        """
         if not self._save_enabled:
             return
         self._save_timer.stop()
         try:
-            self._store.save(self._script_text, self._note_state(), self._settings_state())
+            self._store.save(self._script_text, self._note_state(),
+                             self._settings_state(), purge_backup=purge_backup)
         except OSError as exc:
             print(f"[Notch] Could not save state: {exc}", flush=True)
 
