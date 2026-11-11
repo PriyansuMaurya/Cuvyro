@@ -24,13 +24,16 @@ platform's font database, which the offscreen plugin does not provide.
 """
 
 import os
+import re
 import sys
 import tempfile
 
 
-from PyQt5.QtCore import QPoint
+from PyQt5.QtCore import QPoint, QRect
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import (
+    QAbstractButton, QApplication, QLabel, QWidget, QWidgetAction,
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
@@ -144,10 +147,10 @@ def main():
     check("every control keeps the same baseline", tops == {int(4 * s)},
           f"y offsets {sorted(tops)}")
 
-    # Each control carries a subtle glass plate: a rounded, low-alpha surface
-    # with a hairline, not a solid chip. Sampled inside the plate, below the
-    # glyph, in both themes: a few levels off the card and never more, so the
-    # words behind the chrome still read through it.
+    # Each control carries its own plate: a rounded solid with a hairline.
+    # Sampled inside the plate, below the glyph, in both themes: it has to be
+    # a visible step off the card, and (see below) it has to hide what passes
+    # behind it.
     for dark in (True, False):
         win._dark_theme = dark
         win._apply_read_mode_style()
@@ -161,12 +164,42 @@ def main():
         for label, btn in (("minimize", win._close_btn), ("note", win._note_btn),
                            ("mic", win._mic_btn), ("width", win._compact_btn)):
             at = btn.mapTo(win, QPoint(0, 0))
-            sample = pixel(image, at.x() + btn.width() / 2,
-                           at.y() + btn.height() - 5)
+            # The material, not the glyph: a filled glyph (the microphone)
+            # reaches into the sampled band, so the band's most common colour
+            # is the plate and whatever is left is ink.
+            band = [pixel(image, at.x() + btn.width() / 2 + dx,
+                          at.y() + btn.height() - 8 + dy)
+                    for dx in (-4, -2, 0, 2, 4) for dy in (0, 1, 2)]
+            sample = max(set(band), key=band.count)
             drifts[label] = max(abs(a - b) for a, b in zip(sample, fill))
-        check(f"{name}: every control sits on a glass plate",
-              all(3 <= value <= 40 for value in drifts.values()),
+        check(f"{name}: every control sits on its own plate",
+              all(6 <= value <= 40 for value in drifts.values()),
               f"plate drift {drifts} levels from card {fill}")
+
+    # ── The plates are opaque ────────────────────────────────────
+    # A control is opaque when the surface behind it cannot change its
+    # pixels, so the same button rendered on black and on white has to come
+    # back identical. The plate used to be 6% white glass mixed over whatever
+    # was behind it, which let the script's words read through the toolbar.
+    import controls
+
+    samples = []
+    for backdrop in ("#000000", "#FFFFFF"):
+        host = QWidget()
+        host.setStyleSheet(f"background: {backdrop};")
+        host.resize(44, 44)
+        plate = controls.NoteButton(host)
+        plate.move(7, 7)
+        host.show()
+        QTest.qWait(80)
+        shot = host.grab().toImage()
+        samples.append(pixel(shot, 7 + plate.width() // 2,
+                             7 + plate.height() - 5))
+        host.close()
+        host.deleteLater()
+    check("a control's plate hides whatever is behind it",
+          samples[0] == samples[1],
+          f"{samples[0]} on black, {samples[1]} on white")
 
     # The text actually occupies the window at the reference size.
     win._dark_theme = False

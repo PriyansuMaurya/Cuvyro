@@ -70,14 +70,16 @@ Surface treatment, also measured from the captures:
   you type into rather than a script passing under a toolbar.
 - **Light theme**: white surface, `#111111` text, `#E2E2E2` hairline, and the
   voice glow scaled to 45% so it reads as a hint rather than a blue smudge.
-- **Controls**: four outline glyphs, each on its own rounded glass plate.
-  The plate is a low-alpha fill (6% white on the dark card, 4.5% black on the
-  light one) with a hairline and one lit line across its top, at a 9 px radius
-  inside the 30 px target. Measured: the plate sits **20** levels off the card
-  in dark and **16** in light, so words behind the chrome still read through
-  it; hover raises the fill, press raises it again, and the glyph brightens
-  from 136 to 176 without changing size. The narrow/wide toggle is two 1.4 px
-  strokes rather than a filled square.
+- **Controls**: four outline glyphs, each on its own rounded plate.
+  The plate is an opaque fill (`#0F0F0F` on the dark card, `#F4F4F4` on the
+  light one: the value the old 6%/4.5% glass blended to, kept so the bar looks
+  unchanged) with a hairline and one lit line across its top, at a 9 px radius
+  inside the 30 px target. Measured: the plate material sits **15** levels off
+  the card in dark and **11** in light, and a control's pixels are identical
+  whether it is drawn over black or over white, so a word in the script no
+  longer reads through it; hover raises the fill, press raises it again, and
+  the glyph brightens from 136 to 176 without changing size. The narrow/wide
+  toggle is two 1.4 px strokes rather than a filled square.
 - **No menu control**: the "more" glyph earned its place only while the menu
   had nowhere else to open. It is gone, and the menu opens on a right click
   over the card or over the script, so the toolbar is four glyphs instead of

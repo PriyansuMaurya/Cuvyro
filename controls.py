@@ -35,18 +35,19 @@ class GlyphButton(QAbstractButton):
                 "focus": "#007AFF"},
     }
 
-    # Glass plate under each glyph: a low-alpha fill, a hairline, and one lit
-    # line along the top. The script runs under the chrome now, so a bare
-    # glyph would sit directly on the words; the plate lifts it off the type
-    # without turning the toolbar into a row of solid boxes. Alphas are per
-    # theme and stay low enough that the words behind them still read.
-    GLASS = {
-        True: {"fill": (255, 255, 255, 0.06), "hover": (255, 255, 255, 0.11),
-               "press": (255, 255, 255, 0.15), "edge": (255, 255, 255, 0.10),
-               "lit": (255, 255, 255, 0.17)},
-        False: {"fill": (0, 0, 0, 0.045), "hover": (0, 0, 0, 0.075),
-                "press": (0, 0, 0, 0.10), "edge": (0, 0, 0, 0.09),
-                "lit": (255, 255, 255, 0.85)},
+    # Plate under each glyph: a solid fill, a hairline, and one lit line along
+    # the top. The script runs under the chrome, so a bare glyph would sit
+    # directly on the words - and the plate used to be low-alpha glass, which
+    # let those words read through the controls. The fill is opaque now, mixed
+    # to the exact value the glass used to blend to over the card, so the
+    # toolbar looks unchanged while nothing shows through it. The hairline and
+    # the lit line stay translucent: they are light catching the material, not
+    # the material itself.
+    PLATE = {
+        True: {"fill": "#0F0F0F", "hover": "#1C1C1C", "press": "#262626",
+               "edge": (255, 255, 255, 0.10), "lit": (255, 255, 255, 0.17)},
+        False: {"fill": "#F4F4F4", "hover": "#ECECEC", "press": "#E6E6E6",
+                "edge": (0, 0, 0, 0.09), "lit": (255, 255, 255, 0.85)},
     }
     PLATE_INSET = 0.10      # of the hit box, so it tracks the target size
     PLATE_RADIUS = 0.30     # of the plate: 9 px at a 30 px target
@@ -157,24 +158,27 @@ class GlyphButton(QAbstractButton):
         super().keyReleaseEvent(event)
 
     # ── painting ─────────────────────────────────────────────────────
-    def _glass_alpha(self) -> float:
-        table = self.GLASS[self._dark]
+    def plate_color(self) -> QColor:
+        """The plate's material for the state the control is in.
+
+        Opaque by construction. The script passes under the chrome, so a word
+        that happens to sit behind a control must not read through it.
+        """
+        table = self.PLATE[self._dark]
         if self._press.value > 0.05:
-            return table["press"][3]
+            return QColor(table["press"])
         if self._hover:
-            return table["hover"][3]
-        return table["fill"][3]
+            return QColor(table["hover"])
+        return QColor(table["fill"])
 
     def _paint_plate(self, painter: QPainter) -> None:
         inset = self.width() * self.PLATE_INSET
         plate = QRectF(self.rect()).adjusted(inset, inset, -inset, -inset)
         radius = plate.width() * self.PLATE_RADIUS
-        table = self.GLASS[self._dark]
+        table = self.PLATE[self._dark]
 
-        fill = QColor(*table["fill"][:3])
-        fill.setAlphaF(self._glass_alpha())
         painter.setPen(Qt.NoPen)
-        painter.setBrush(fill)
+        painter.setBrush(self.plate_color())
         painter.drawRoundedRect(plate, radius, radius)
 
         edge = QColor(*table["edge"][:3])
@@ -183,8 +187,8 @@ class GlyphButton(QAbstractButton):
         painter.setBrush(Qt.NoBrush)
         painter.drawRoundedRect(plate.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
 
-        # One bright line across the top: that highlight is what reads as
-        # glass. Without it the plate is just a slightly tinted rectangle.
+        # One bright line across the top: that highlight is what reads as a
+        # lit surface. Without it the plate is just a slightly tinted rectangle.
         lit = QColor(*table["lit"][:3])
         lit.setAlphaF(table["lit"][3])
         painter.setPen(QPen(lit, 1.0))
