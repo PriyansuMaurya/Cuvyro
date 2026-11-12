@@ -93,9 +93,9 @@ def words(text: str) -> list:
 def main() -> int:
     app = QApplication(sys.argv)  # noqa: F841 — the worker is a QThread
 
-    import speech_engine
-    from audio_worker import AudioWorker
-    from matching_engine import MatchingEngine
+    from notch.audio import speech as speech_engine
+    from notch.audio.worker import AudioWorker
+    from notch.audio.matching import MatchingEngine
 
     if speech_engine.find_sherpa_model_dir(MODEL_DIR) is None and not os.path.isdir(
             os.path.join(MODEL_DIR, "conf")):

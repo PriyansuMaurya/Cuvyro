@@ -1,5 +1,5 @@
 """
-settings_dialog.py — Microphone and audio configuration dialog.
+notch.ui.settings — Microphone and audio configuration dialog.
 
 Provides:
   • Dropdown of available input devices (via sounddevice).
@@ -21,8 +21,8 @@ from PyQt5.QtWidgets import (
 )
 
 
-import hotkeys as hk
-from win_capture import exclude_from_capture
+from notch.platform import hotkeys as hk
+from notch.platform.capture import exclude_from_capture
 
 class SettingsDialog(QDialog):
     """Modal dialog for microphone and audio settings."""

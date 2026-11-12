@@ -2,7 +2,7 @@
 """PyInstaller spec for Notch (Windows onedir build).
 
 The app looks for the speech model at <exe dir>/model when frozen
-(see ui_overlay.py), so the build script copies model/ next to Notch.exe
+(see notch/paths.py), so the build script copies model/ next to Notch.exe
 instead of bundling it inside _internal.
 
 sherpa-onnx is the engine the app prefers. Its wheel carries the sherpa and
@@ -30,7 +30,7 @@ for pkg in ("sherpa_onnx", "vosk", "sounddevice", "thefuzz", "rapidfuzz", "cv2",
 
 # Imported from inside AudioWorker.run, so name it here rather than rely on the
 # analyser walking a function-local import.
-hiddenimports.append("speech_engine")
+hiddenimports.append("notch.audio.speech")
 
 # PyQt5 is resolved by PyInstaller's own hooks; only silence noisy optional modules.
 excludes = [

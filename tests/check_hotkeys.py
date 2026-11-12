@@ -56,9 +56,9 @@ def os_chord(*keys):
 
 def main():
     app = QApplication(sys.argv)
-    import hotkeys as hk
-    import ui_overlay
-    from store import Store
+    from notch.platform import hotkeys as hk
+    from notch.ui import overlay as ui_overlay
+    from notch.storage.store import Store
 
     if not hk.available():
         print("SKIP  global hotkeys are Windows-only")

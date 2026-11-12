@@ -250,7 +250,7 @@ excluded rather than tuned around. The zipformer in use is 3.4x cheaper per
 second of audio with the same order of accuracy, and it halves the median block
 cost, which is the headroom the scroll timer runs in.
 
-What changed in `audio_worker`, behind the same `speech_text_signal`:
+What changed in `notch/audio/worker.py`, behind the same `speech_text_signal`:
 
 | Finding | Before | After |
 |---|---|---|
@@ -274,7 +274,7 @@ engine is reused afterwards.
 Privacy is asserted, not assumed: `tests/check_speech_engine.py` patches
 `socket.connect`, `connect_ex` and `create_connection` to raise, then loads the
 model and decodes a sentence. Nothing reaches for a socket, and there is no
-network code in either engine — `speech_engine.py` only calls into local ONNX
+network code in either engine — `notch/audio/speech.py` only calls into local ONNX
 models and, for the fallback, Vosk's local Kaldi model.
 
 ### Following an accent

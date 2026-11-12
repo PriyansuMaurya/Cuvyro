@@ -130,9 +130,9 @@ class Profile:
 
 
 def build_overlay(profile, detach_effects=False):
-    import controls
-    import ui_overlay
-    from store import Store
+    from notch.ui import controls
+    from notch.ui import overlay as ui_overlay
+    from notch.storage.store import Store
 
     class ProfiledText(controls.ScriptTextEdit):
         def paintEvent(self, event):

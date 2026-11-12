@@ -36,7 +36,7 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)
 
-import head_tracking as ht
+from notch.tracking import head as ht
 
 failures = []
 # The cadence the worker actually achieves, measured on the machine this was
@@ -783,12 +783,12 @@ def check_local_only():
     check("head tracking runs with the network unavailable", ok)
 
     source = ht.CameraHeadSource()
-    module_text = open(os.path.join(REPO_ROOT, "head_tracking.py"),
+    module_text = open(os.path.join(REPO_ROOT, "notch", "tracking", "head.py"),
                        encoding="utf-8").read()
     check("the camera module imports no network client",
           not any(token in module_text for token in
                   ("import socket", "urllib", "requests", "http://", "https://")),
-          "no socket, urllib, requests or URL in head_tracking.py")
+          "no socket, urllib, requests or URL in notch/tracking/head.py")
     check("frames are never written to disk",
           "imwrite" not in module_text and "VideoWriter" not in module_text)
     check("the camera source starts stopped", not source.running)
@@ -1033,7 +1033,7 @@ class _FakeSource:
 def check_geometry():
     """The card placement helper keeps every region on screen and up top."""
     from PyQt5.QtCore import QRect, QSize
-    from ui_overlay import grid_card_rect
+    from notch.ui.overlay import grid_card_rect
 
     area = QRect(0, 0, 1920, 1080)
     size = QSize(384, 122)
@@ -1071,8 +1071,8 @@ def check_integration():
     from PyQt5.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)
-    import ui_overlay
-    from store import Store
+    from notch.ui import overlay as ui_overlay
+    from notch.storage.store import Store
 
     win = ui_overlay.NotchOverlay()
     win._store = Store(tempfile.mkdtemp(prefix="notch-head-"))

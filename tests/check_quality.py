@@ -166,8 +166,8 @@ def fragment_colours(win):
 
 def main():
     app = QApplication(sys.argv)
-    import ui_overlay
-    from store import Store
+    from notch.ui import overlay as ui_overlay
+    from notch.storage.store import Store
 
     win = ui_overlay.NotchOverlay()
     win._store = Store(tempfile.mkdtemp(prefix="notch-quality-"))

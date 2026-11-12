@@ -1,5 +1,5 @@
 """
-speech_engine.py — local streaming speech recognition behind one small interface.
+notch.audio.speech — local streaming speech recognition behind one small interface.
 
 Two backends, both fully offline:
 

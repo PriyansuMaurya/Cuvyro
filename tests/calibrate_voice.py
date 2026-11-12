@@ -149,7 +149,7 @@ def track(script: str, events) -> float:
     survivable, a reader that stops advancing is not. The matcher is the same
     one the overlay uses, with the same thresholds.
     """
-    from matching_engine import MatchingEngine
+    from notch.audio.matching import MatchingEngine
 
     matcher = MatchingEngine()
     matcher.load_script(script)
@@ -289,7 +289,7 @@ def record_all_auto(sentences, out_dir, device, max_seconds=12.0):
       the delay..." arrived as "roughly sixty".
     """
     import sounddevice as sd
-    import speech_engine
+    from notch.audio import speech as speech_engine
 
     vad = speech_engine.create_vad(MODEL_DIR, trailing_silence=4.0)
     os.makedirs(out_dir, exist_ok=True)
@@ -340,7 +340,7 @@ def record_all_auto(sentences, out_dir, device, max_seconds=12.0):
 
 def record_all(sentences, out_dir, device):
     import sounddevice as sd
-    import speech_engine
+    from notch.audio import speech as speech_engine
 
     vad = speech_engine.create_vad(MODEL_DIR)
     model = None
@@ -389,8 +389,8 @@ def reader_follow(sentences, takes, engine):
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication
 
-    import ui_overlay
-    from store import Store
+    from notch.ui import overlay as ui_overlay
+    from notch.storage.store import Store
 
     app = QApplication.instance() or QApplication(sys.argv)  # noqa: F841
     win = ui_overlay.NotchOverlay()
@@ -512,7 +512,7 @@ def main() -> int:
     if args.limit:
         sentences = sentences[:args.limit]
 
-    import speech_engine
+    from notch.audio import speech as speech_engine
 
     engines = build_engines(speech_engine, compare=args.compare)
     if not engines:

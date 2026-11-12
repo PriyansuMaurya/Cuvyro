@@ -28,7 +28,7 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)
 
-from note_placement import (  # noqa: E402
+from notch.ui.note_placement import (  # noqa: E402
     GRID_LIMIT, _candidate_points, choose_position,
 )
 
@@ -85,8 +85,8 @@ def write_state(directory, notes):
 
 
 def make_overlay(directory):
-    import ui_overlay
-    from store import Store
+    from notch.ui import overlay as ui_overlay
+    from notch.storage.store import Store
 
     win = ui_overlay.NotchOverlay()
     win._store = Store(directory)

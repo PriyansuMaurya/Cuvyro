@@ -72,8 +72,8 @@ def saved_note(directory, index=0):
 
 
 def make_overlay(directory):
-    import ui_overlay
-    from store import Store
+    from notch.ui import overlay as ui_overlay
+    from notch.storage.store import Store
 
     win = ui_overlay.NotchOverlay()
     win._store = Store(directory)
@@ -91,9 +91,9 @@ def on_screen(rect):
 def main():
     QSettings("Notch", "Notch").setValue("guide_seen", True)
     app = QApplication(sys.argv)
-    import ui_overlay
-    import settings_dialog
-    from store import Store
+    from notch.ui import overlay as ui_overlay
+    from notch.ui import settings as settings_dialog
+    from notch.storage.store import Store
 
     # ── Persistence is debounced, and every close path flushes ────────
     tmp = tempfile.mkdtemp(prefix="notch-robust-save-")
@@ -823,7 +823,7 @@ def main():
     settings._vu_start_timer.stop()  # never shown: no meter to start
     settings.deleteLater()
 
-    from controls import TextButton
+    from notch.ui.controls import TextButton
     primary_contrast = contrast((255, 255, 255), hex_rgb(TextButton.PRIMARY))
     check("the primary button label clears 4.5:1 on its fill",
           primary_contrast >= 4.5,

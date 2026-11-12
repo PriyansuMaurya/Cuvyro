@@ -26,13 +26,21 @@ from PyQt5.QtWidgets import (
     QStackedWidget, QButtonGroup,
 )
 
-# Assumed external dependencies based on your project structure
-from audio_worker import AudioWorker
-from matching_engine import MatchingEngine
-from settings_dialog import SettingsDialog
-from note_window import NoteWindow
-from note_placement import choose_position
-from store import Store, sane_coord, sane_number
+from notch import paths
+from notch.audio.matching import MatchingEngine
+from notch.audio.worker import AudioWorker
+from notch.platform import hotkeys as hk
+from notch.platform.capture import exclude_from_capture
+from notch.storage.store import Store, sane_coord, sane_number
+from notch.tracking import head as ht
+from notch.ui.controls import (
+    CompactButton, GlyphButton, MenuRowNav, MicButton, MinimizeButton,
+    NoteButton, RoundedMenu, ScriptTextEdit, TextButton,
+)
+from notch.ui.note_placement import choose_position
+from notch.ui.notes import NoteWindow
+from notch.ui.settings import SettingsDialog
+from notch.ui.spring import Spring, SpringGroup, system_allows_motion
 
 
 class _RenderedLine(NamedTuple):
@@ -42,11 +50,6 @@ class _RenderedLine(NamedTuple):
     last_word: int
     top: float
     height: float
-
-
-from spring import Spring, SpringGroup, system_allows_motion
-import head_tracking as ht
-import hotkeys as hk
 
 # Measurement aid, not a feature: NOTCH_HEAD_TRACE=1 prints the tracker's raw
 # reading and the offsets it produced five times a second, so a head turn can be
@@ -59,11 +62,6 @@ _HEAD_TRACE = os.environ.get("NOTCH_HEAD_TRACE", "") not in ("", "0")
 # scroll offset reached, to notch.log beside the executable. Nothing is
 # written unless the variable is set.
 _MANUAL_TRACE = os.environ.get("NOTCH_MANUAL_TRACE", "") not in ("", "0")
-from controls import (
-    CompactButton, GlyphButton, MenuRowNav, MicButton, MinimizeButton,
-    NoteButton, RoundedMenu, ScriptTextEdit, TextButton,
-)
-from win_capture import exclude_from_capture
 
 
 def grid_card_rect(area: QRect, size: QSize, u: float, v: float) -> QRect:
@@ -492,7 +490,7 @@ class NotchOverlay(QWidget):
     COMPACT_CARD_W = 100   # ~2 word width with compact font
     COMPACT_W = COMPACT_CARD_W + RAIL_W
     COMPACT_FONT = 8  # smallest allowed text size; 6 pt was below reading size
-    MODEL_PATH = "model"  # overridden in __init__ when running as frozen exe
+    MODEL_PATH = paths.model_dir()
 
     # Script formats the reader can actually open. The README used to promise
     # PDF and DOCX as well, but no extractor was ever wired in, so the file
@@ -547,12 +545,10 @@ class NotchOverlay(QWidget):
 
     def __init__(self):
         super().__init__()
-        # When packaged as exe, look for model next to the executable
+        # The model sits beside the exe when frozen and at the repository
+        # root in a source checkout; notch.paths owns that rule.
         if getattr(sys, "frozen", False):
-            self.MODEL_PATH = os.path.join(os.path.dirname(sys.executable), "model")
             self._log_install_paths()
-        else:
-            self.MODEL_PATH = NotchOverlay.MODEL_PATH
 
         # ── State ────────────────────────────────────────────────────
         self._font_size = 10

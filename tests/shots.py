@@ -85,12 +85,12 @@ def main():
     light = theme == "light"
 
     app = QApplication(sys.argv)
-    import ui_overlay
+    from notch.ui import overlay as ui_overlay
 
     win = ui_overlay.NotchOverlay()
     # Captures must not write into the app's saved state: the notes they open
     # used to come back as extra note windows on the next real launch.
-    from store import Store
+    from notch.storage.store import Store
     win._store = Store(tempfile.mkdtemp(prefix="notch-shots-"))
     win.show()
     # After show(): showEvent restores the saved theme from the store, so the

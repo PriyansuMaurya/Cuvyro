@@ -52,9 +52,9 @@ def wheel(widget, notches):
 
 def main():
     app = QApplication(sys.argv)
-    import ui_overlay
-    from note_window import NoteWindow
-    from store import Store
+    from notch.ui import overlay as ui_overlay
+    from notch.ui.notes import NoteWindow
+    from notch.storage.store import Store
 
     tmp = tempfile.mkdtemp(prefix="notch-check-")
     win = ui_overlay.NotchOverlay()

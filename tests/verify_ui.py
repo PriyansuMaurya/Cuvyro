@@ -73,7 +73,7 @@ def main():
         return
 
     app = QApplication(sys.argv)
-    import ui_overlay
+    from notch.ui import overlay as ui_overlay
 
     # --prefix NAME names the captures; --theme light flips the palette.
     prefix = "after"
@@ -84,7 +84,7 @@ def main():
     win = ui_overlay.NotchOverlay()
     # A capture run must not write into the app's own saved state: the note it
     # opens used to come back as an extra note window on the next launch.
-    from store import Store
+    from notch.storage.store import Store
     win._store = Store(tempfile.mkdtemp(prefix="notch-verify-"))
     if light:
         win._dark_theme = False
@@ -137,10 +137,10 @@ def main():
 def check_protection():
     """Assert the windows really do carry capture exclusion when shown."""
     app = QApplication([])
-    import ui_overlay
+    from notch.ui import overlay as ui_overlay
 
     win = ui_overlay.NotchOverlay()
-    from store import Store
+    from notch.storage.store import Store
     win._store = Store(tempfile.mkdtemp(prefix="notch-protection-"))
     win.show()
     note = win._open_note()

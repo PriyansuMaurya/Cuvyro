@@ -1,5 +1,5 @@
 """
-matching_engine.py — Word alignment for script following.
+notch.audio.matching — Word alignment for script following.
 
 Takes the full script and the words coming from the speech engine and reports
 how far through the script the speaker has got. Alignment only ever moves
