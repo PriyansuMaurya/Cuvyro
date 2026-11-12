@@ -1,0 +1,46 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments (Crucial to ignore)
+.venv/
+venv/
+env/
+
+# Distribution / Packaging (PyInstaller/setuptools artifacts)
+build/
+dist/
+*.spec
+# ...except the hand-written PyInstaller spec, which is build config rather than output
+!packaging/notch.spec
+
+# IDE settings (Optional but recommended)
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Run logs (start-notch.bat writes here)
+notch-run*.log
+notch-run*.err
+head-runtime.log
+
+# Local agent/skill tooling, not part of the app
+.agents/
+.claude/
+agent/
+skills-lock.json
+
+# One-shot patch scripts and scratch captures
+packaging/patch_*.py
+
+# Local speech model (downloaded by the installer build)
+model/
+
+# Recorded microphone sessions (tests/check_predictive_speech.py --live)
+# Kept out of git: they are one person's voice, and a replay fixture should be
+# copied somewhere deliberate if it is meant to be shared.
+.sessions/

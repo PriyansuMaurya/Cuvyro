@@ -1,0 +1,363 @@
+{
+  "vosk small en-us 0.15 (current)": {
+    "load_ms": 545.0488999995287,
+    "silence_cpu_ms_per_audio_s": 59.7,
+    "silence_rtf": 16.7,
+    "throughput_audio_s": 74.48,
+    "throughput_cpu_s": 45.17,
+    "rtf": 1.65,
+    "cpu_ms_per_audio_s": 606.6,
+    "wer_mean": 0.046,
+    "wer_worst": 0.2,
+    "wer_detail": [
+      {
+        "id": "david-us-00",
+        "wer": 0.0,
+        "heard": "good evening and thanks for joining",
+        "said": "Good evening, and thanks for joining."
+      },
+      {
+        "id": "david-us-01",
+        "wer": 0.0,
+        "heard": "tonight i want to show you three small things not thirty",
+        "said": "Tonight I want to show you three small things, not thirty."
+      },
+      {
+        "id": "david-us-02",
+        "wer": 0.0,
+        "heard": "first how the board reads a city block",
+        "said": "First, how the board reads a city block."
+      },
+      {
+        "id": "david-us-03",
+        "wer": 0.167,
+        "heard": "second why the harbor plan changed",
+        "said": "Second, why the harbour plan changed."
+      },
+      {
+        "id": "david-us-04",
+        "wer": 0.0,
+        "heard": "third what we need from you by friday",
+        "said": "Third, what we need from you by Friday."
+      },
+      {
+        "id": "david-us-05",
+        "wer": 0.0,
+        "heard": "everything here is our own material written for this rehearsal",
+        "said": "Everything here is our own material, written for this rehearsal."
+      },
+      {
+        "id": "david-us-06",
+        "wer": 0.2,
+        "heard": "the council approved fourteen of the nineteen amendments last tuesday",
+        "said": "The council approved 14 of the 19 amendments last Tuesday."
+      },
+      {
+        "id": "david-us-07",
+        "wer": 0.0,
+        "heard": "we didn't expect the second reading to take that long",
+        "said": "We didn't expect the second reading to take that long."
+      },
+      {
+        "id": "david-us-08",
+        "wer": 0.1,
+        "heard": "catherine could you walk us through the cost table again",
+        "said": "Katherine, could you walk us through the cost table again?"
+      },
+      {
+        "id": "david-us-09",
+        "wer": 0.182,
+        "heard": "roughly sixty per center of the delay came from one supplier",
+        "said": "Roughly 60 per cent of the delay came from one supplier."
+      },
+      {
+        "id": "david-us-10",
+        "wer": 0.0,
+        "heard": "that isn't a rounding error it's a scheduling problem",
+        "said": "That isn't a rounding error, it's a scheduling problem."
+      },
+      {
+        "id": "david-us-11",
+        "wer": 0.091,
+        "heard": "if we moved the review to march the numbers still hold",
+        "said": "If we move the review to March, the numbers still hold."
+      },
+      {
+        "id": "david-us-12",
+        "wer": 0.0,
+        "heard": "so the question is simple what do we ship and when",
+        "said": "So the question is simple: what do we ship, and when?"
+      },
+      {
+        "id": "david-us-13",
+        "wer": 0.0,
+        "heard": "thank you and i'll take questions at the end",
+        "said": "Thank you, and I'll take questions at the end."
+      },
+      {
+        "id": "hazel-gb-00",
+        "wer": 0.0,
+        "heard": "good evening and thanks for joining",
+        "said": "Good evening, and thanks for joining."
+      },
+      {
+        "id": "hazel-gb-01",
+        "wer": 0.0,
+        "heard": "tonight i want to show you three small things not thirty",
+        "said": "Tonight I want to show you three small things, not thirty."
+      }
+    ],
+    "words_behind_mean": -0.97,
+    "words_behind_worst": 2.24,
+    "tail_latency_ms": -492.0,
+    "tail_latency_worst_ms": -225.0,
+    "block_ms_p50": 2.0,
+    "block_ms_p95": 210.5,
+    "block_ms_worst": 1075.1
+  },
+  "sherpa-onnx zipformer en 20M int8": {
+    "load_ms": 2112.6182000007248,
+    "silence_cpu_ms_per_audio_s": 101.0,
+    "silence_rtf": 9.9,
+    "throughput_audio_s": 74.48,
+    "throughput_cpu_s": 7.97,
+    "rtf": 9.35,
+    "cpu_ms_per_audio_s": 107.0,
+    "wer_mean": 0.414,
+    "wer_worst": 0.833,
+    "wer_detail": [
+      {
+        "id": "david-us-00",
+        "wer": 0.833,
+        "heard": "S FOR ADJOINING",
+        "said": "Good evening, and thanks for joining."
+      },
+      {
+        "id": "david-us-01",
+        "wer": 0.091,
+        "heard": "NIGHT I WANT TO SHOW YOU THREE SMALL THINGS NOT THIRTY",
+        "said": "Tonight I want to show you three small things, not thirty."
+      },
+      {
+        "id": "david-us-02",
+        "wer": 0.5,
+        "heard": "OD READS A CITY BLOCK",
+        "said": "First, how the board reads a city block."
+      },
+      {
+        "id": "david-us-03",
+        "wer": 0.167,
+        "heard": "D WHY THE HARBOUR PLAN CHANGED",
+        "said": "Second, why the harbour plan changed."
+      },
+      {
+        "id": "david-us-04",
+        "wer": 0.75,
+        "heard": "U BY FRIDAY",
+        "said": "Third, what we need from you by Friday."
+      },
+      {
+        "id": "david-us-05",
+        "wer": 0.2,
+        "heard": "OR IS OUR OWN MATERIAL WRITTEN FOR THIS REHEARSAL",
+        "said": "Everything here is our own material, written for this rehearsal."
+      },
+      {
+        "id": "david-us-06",
+        "wer": 0.4,
+        "heard": "UL APPROVED FOURTEEN OF THE NINETEEN AMENDMENTS LAST TUESDAY",
+        "said": "The council approved 14 of the 19 amendments last Tuesday."
+      },
+      {
+        "id": "david-us-07",
+        "wer": 0.2,
+        "heard": "T EXPECT THE SECOND READING TO TAKE THAT LONG",
+        "said": "We didn't expect the second reading to take that long."
+      },
+      {
+        "id": "david-us-08",
+        "wer": 0.4,
+        "heard": "UCK US THROUGH THE COST TABLE AGAIN",
+        "said": "Katherine, could you walk us through the cost table again?"
+      },
+      {
+        "id": "david-us-09",
+        "wer": 0.273,
+        "heard": "LY SIXTY PER CENTER OF THE DELAY CAME FROM ONE SUPPLIER",
+        "said": "Roughly 60 per cent of the delay came from one supplier."
+      },
+      {
+        "id": "david-us-10",
+        "wer": 0.667,
+        "heard": "UR ITS A SCHEDULING PROBLEM",
+        "said": "That isn't a rounding error, it's a scheduling problem."
+      },
+      {
+        "id": "david-us-11",
+        "wer": 0.455,
+        "heard": "UE TO MARCH THE NUMBERS STILL HOLD",
+        "said": "If we move the review to March, the numbers still hold."
+      },
+      {
+        "id": "david-us-12",
+        "wer": 0.273,
+        "heard": "IS SIMPLE WHAT DO WE SHIP AND WHEN",
+        "said": "So the question is simple: what do we ship, and when?"
+      },
+      {
+        "id": "david-us-13",
+        "wer": 0.667,
+        "heard": "S AT THE END",
+        "said": "Thank you, and I'll take questions at the end."
+      },
+      {
+        "id": "hazel-gb-00",
+        "wer": 0.667,
+        "heard": "S FOR JOINING",
+        "said": "Good evening, and thanks for joining."
+      },
+      {
+        "id": "hazel-gb-01",
+        "wer": 0.091,
+        "heard": "NIGHT I WANT TO SHOW YOU THREE SMALL THINGS NOT THIRTY",
+        "said": "Tonight I want to show you three small things, not thirty."
+      }
+    ],
+    "words_behind_mean": 1.0,
+    "words_behind_worst": 5.45,
+    "tail_latency_ms": -52.0,
+    "tail_latency_worst_ms": 203.0,
+    "block_ms_p50": 0.9,
+    "block_ms_p95": 49.4,
+    "block_ms_worst": 164.8
+  },
+  "sherpa-onnx zipformer en 2023-06-26 int8": {
+    "load_ms": 9006.623900000704,
+    "silence_cpu_ms_per_audio_s": 193.1,
+    "silence_rtf": 5.2,
+    "throughput_audio_s": 74.48,
+    "throughput_cpu_s": 7.26,
+    "rtf": 10.26,
+    "cpu_ms_per_audio_s": 97.4,
+    "wer_mean": 0.084,
+    "wer_worst": 0.333,
+    "wer_detail": [
+      {
+        "id": "david-us-00",
+        "wer": 0.167,
+        "heard": "GOOD EVENING AND THANKS FOR ADJOINING",
+        "said": "Good evening, and thanks for joining."
+      },
+      {
+        "id": "david-us-01",
+        "wer": 0.182,
+        "heard": "TO NIGHT I WANT TO SHOW YOU THREE SMALL THINGS NOT THIRTY",
+        "said": "Tonight I want to show you three small things, not thirty."
+      },
+      {
+        "id": "david-us-02",
+        "wer": 0.0,
+        "heard": "FIRST HOW THE BOARD READS A CITY BLOCK",
+        "said": "First, how the board reads a city block."
+      },
+      {
+        "id": "david-us-03",
+        "wer": 0.0,
+        "heard": "SECOND WHY THE HARBOUR PLAN CHANGED",
+        "said": "Second, why the harbour plan changed."
+      },
+      {
+        "id": "david-us-04",
+        "wer": 0.0,
+        "heard": "THIRD WHAT WE NEED FROM YOU BY FRIDAY",
+        "said": "Third, what we need from you by Friday."
+      },
+      {
+        "id": "david-us-05",
+        "wer": 0.0,
+        "heard": "EVERYTHING HERE IS OUR OWN MATERIAL WRITTEN FOR THIS REHEARSAL",
+        "said": "Everything here is our own material, written for this rehearsal."
+      },
+      {
+        "id": "david-us-06",
+        "wer": 0.2,
+        "heard": "THE COUNCIL APPROVED FOURTEEN OF THE NINETEEN AMENDMENTS LAST TUESDAY",
+        "said": "The council approved 14 of the 19 amendments last Tuesday."
+      },
+      {
+        "id": "david-us-07",
+        "wer": 0.0,
+        "heard": "WE DIDN'T EXPECT THE SECOND READING TO TAKE THAT LONG",
+        "said": "We didn't expect the second reading to take that long."
+      },
+      {
+        "id": "david-us-08",
+        "wer": 0.1,
+        "heard": "CATHERINE COULD YOU WALK US THROUGH THE COST TABLE AGAIN",
+        "said": "Katherine, could you walk us through the cost table again?"
+      },
+      {
+        "id": "david-us-09",
+        "wer": 0.182,
+        "heard": "ROUGHLY SIXTY PER CENTER OF THE DELAY CAME FROM ONE SUPPLIER",
+        "said": "Roughly 60 per cent of the delay came from one supplier."
+      },
+      {
+        "id": "david-us-10",
+        "wer": 0.333,
+        "heard": "THAT IS INTERROUNDING ERROR IT'S A SCHEDULING PROBLEM",
+        "said": "That isn't a rounding error, it's a scheduling problem."
+      },
+      {
+        "id": "david-us-11",
+        "wer": 0.0,
+        "heard": "IF WE MOVE THE REVIEW TO MARCH THE NUMBERS STILL HOLD",
+        "said": "If we move the review to March, the numbers still hold."
+      },
+      {
+        "id": "david-us-12",
+        "wer": 0.0,
+        "heard": "SO THE QUESTION IS SIMPLE WHAT DO WE SHIP AND WHEN",
+        "said": "So the question is simple: what do we ship, and when?"
+      },
+      {
+        "id": "david-us-13",
+        "wer": 0.0,
+        "heard": "THANK YOU AND I'LL TAKE QUESTIONS AT THE END",
+        "said": "Thank you, and I'll take questions at the end."
+      },
+      {
+        "id": "hazel-gb-00",
+        "wer": 0.0,
+        "heard": "GOOD EVENING AND THANKS FOR JOINING",
+        "said": "Good evening, and thanks for joining."
+      },
+      {
+        "id": "hazel-gb-01",
+        "wer": 0.182,
+        "heard": "TO NIGHT I WANT TO SHOW YOU THREE SMALL THINGS NOT THIRTY",
+        "said": "Tonight I want to show you three small things, not thirty."
+      }
+    ],
+    "words_behind_mean": -0.59,
+    "words_behind_worst": 2.46,
+    "tail_latency_ms": 39.0,
+    "tail_latency_worst_ms": 467.0,
+    "block_ms_p50": 0.7,
+    "block_ms_p95": 86.5,
+    "block_ms_worst": 146.9
+  },
+  "silero VAD (sherpa-onnx)": {
+    "rtf": 61.06,
+    "cpu_ms_per_audio_s": 16.4,
+    "endpoint_silence_s": 0.08,
+    "first_segment_at_s": 0.22,
+    "trailing_silence_s": 0.75
+  },
+  "RMS gate (current)": {
+    "cpu_ms_per_audio_s": 0.5,
+    "rtf": 2197.14,
+    "silence_window_s": 0.75,
+    "silence_threshold_blocks": 8
+  }
+}

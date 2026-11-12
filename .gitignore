@@ -1,46 +1,31 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual Environments (Crucial to ignore)
-.venv/
-venv/
-env/
-
-# Distribution / Packaging (PyInstaller/setuptools artifacts)
-build/
-dist/
-*.spec
-# ...except the hand-written PyInstaller spec, which is build config rather than output
-!packaging/notch.spec
-
-# IDE settings (Optional but recommended)
-.vscode/
-.idea/
-
-# OS generated files
-.DS_Store
-Thumbs.db
-
-# Run logs (start-notch.bat writes here)
-notch-run*.log
-notch-run*.err
-head-runtime.log
-
-# Local agent/skill tooling, not part of the app
+# ── Workspace root ───────────────────────────────────────────────────
+# Agent tooling, not part of any project
 .agents/
 .claude/
-agent/
 skills-lock.json
 
-# One-shot patch scripts and scratch captures
-packaging/patch_*.py
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
 
-# Local speech model (downloaded by the installer build)
+# Build output
+build/
+dist/
+
+# Large binaries: speech/face models and installers are rebuilt, not tracked
 model/
+bench-models/sherpa-onnx-*/
+bench-models/*.onnx
+bench-models/*.bin
 
-# Recorded microphone sessions (tests/check_predictive_speech.py --live)
-# Kept out of git: they are one person's voice, and a replay fixture should be
-# copied somewhere deliberate if it is meant to be shared.
+# rea-work: built Electron bundle and NSIS leftovers, not source
+rea-work/app/
+rea-work/installer/
+rea-work/app-js/node_modules/
+rea-work/app-js/dist/
+
+# Recorded sessions and logs
 .sessions/
+*.log

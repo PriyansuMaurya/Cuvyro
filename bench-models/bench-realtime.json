@@ -1,0 +1,151 @@
+{
+  "vosk small en-us 0.15 (current)": {
+    "load_ms": 937.5398000047426,
+    "silence_cpu_ms_per_audio_s": 175.2,
+    "silence_rtf": 5.7,
+    "throughput_audio_s": 35.81,
+    "throughput_cpu_s": 23.32,
+    "rtf": 1.54,
+    "cpu_ms_per_audio_s": 651.3,
+    "wer_mean": 0.046,
+    "wer_worst": 0.2,
+    "wer_detail": [
+      {
+        "id": "david-us-00",
+        "wer": 0.0,
+        "heard": "good evening and thanks for joining",
+        "said": "Good evening, and thanks for joining."
+      },
+      {
+        "id": "david-us-01",
+        "wer": 0.0,
+        "heard": "tonight i want to show you three small things not thirty",
+        "said": "Tonight I want to show you three small things, not thirty."
+      },
+      {
+        "id": "david-us-02",
+        "wer": 0.0,
+        "heard": "first how the board reads a city block",
+        "said": "First, how the board reads a city block."
+      },
+      {
+        "id": "david-us-03",
+        "wer": 0.167,
+        "heard": "second why the harbor plan changed",
+        "said": "Second, why the harbour plan changed."
+      },
+      {
+        "id": "david-us-04",
+        "wer": 0.0,
+        "heard": "third what we need from you by friday",
+        "said": "Third, what we need from you by Friday."
+      },
+      {
+        "id": "david-us-05",
+        "wer": 0.0,
+        "heard": "everything here is our own material written for this rehearsal",
+        "said": "Everything here is our own material, written for this rehearsal."
+      },
+      {
+        "id": "david-us-06",
+        "wer": 0.2,
+        "heard": "the council approved fourteen of the nineteen amendments last tuesday",
+        "said": "The council approved 14 of the 19 amendments last Tuesday."
+      },
+      {
+        "id": "david-us-07",
+        "wer": 0.0,
+        "heard": "we didn't expect the second reading to take that long",
+        "said": "We didn't expect the second reading to take that long."
+      }
+    ],
+    "words_behind_mean": -0.94,
+    "words_behind_worst": 1.83,
+    "tail_latency_ms": -517.0,
+    "tail_latency_worst_ms": -416.0,
+    "block_ms_p50": 2.0,
+    "block_ms_p95": 226.1,
+    "block_ms_worst": 1071.3
+  },
+  "sherpa-onnx zipformer en 2023-06-26 int8 (2 threads)": {
+    "load_ms": 9916.540699996403,
+    "silence_cpu_ms_per_audio_s": 278.4,
+    "silence_rtf": 3.6,
+    "throughput_audio_s": 35.81,
+    "throughput_cpu_s": 10.75,
+    "rtf": 3.33,
+    "cpu_ms_per_audio_s": 300.2,
+    "wer_mean": 0.069,
+    "wer_worst": 0.2,
+    "wer_detail": [
+      {
+        "id": "david-us-00",
+        "wer": 0.167,
+        "heard": "GOOD EVENING AND THANKS FOR ADJOINING",
+        "said": "Good evening, and thanks for joining."
+      },
+      {
+        "id": "david-us-01",
+        "wer": 0.182,
+        "heard": "TO NIGHT I WANT TO SHOW YOU THREE SMALL THINGS NOT THIRTY",
+        "said": "Tonight I want to show you three small things, not thirty."
+      },
+      {
+        "id": "david-us-02",
+        "wer": 0.0,
+        "heard": "FIRST HOW THE BOARD READS A CITY BLOCK",
+        "said": "First, how the board reads a city block."
+      },
+      {
+        "id": "david-us-03",
+        "wer": 0.0,
+        "heard": "SECOND WHY THE HARBOUR PLAN CHANGED",
+        "said": "Second, why the harbour plan changed."
+      },
+      {
+        "id": "david-us-04",
+        "wer": 0.0,
+        "heard": "THIRD WHAT WE NEED FROM YOU BY FRIDAY",
+        "said": "Third, what we need from you by Friday."
+      },
+      {
+        "id": "david-us-05",
+        "wer": 0.0,
+        "heard": "EVERYTHING HERE IS OUR OWN MATERIAL WRITTEN FOR THIS REHEARSAL",
+        "said": "Everything here is our own material, written for this rehearsal."
+      },
+      {
+        "id": "david-us-06",
+        "wer": 0.2,
+        "heard": "THE COUNCIL APPROVED FOURTEEN OF THE NINETEEN AMENDMENTS LAST TUESDAY",
+        "said": "The council approved 14 of the 19 amendments last Tuesday."
+      },
+      {
+        "id": "david-us-07",
+        "wer": 0.0,
+        "heard": "WE DIDN'T EXPECT THE SECOND READING TO TAKE THAT LONG",
+        "said": "We didn't expect the second reading to take that long."
+      }
+    ],
+    "words_behind_mean": -0.58,
+    "words_behind_worst": 2.21,
+    "tail_latency_ms": 134.0,
+    "tail_latency_worst_ms": 545.0,
+    "block_ms_p50": 0.7,
+    "block_ms_p95": 112.1,
+    "block_ms_worst": 172.7
+  },
+  "silero VAD (sherpa-onnx)": {
+    "rtf": 46.9,
+    "cpu_ms_per_audio_s": 21.3,
+    "endpoint_silence_s": 0.08,
+    "first_segment_at_s": 0.26,
+    "trailing_silence_s": 0.75
+  },
+  "RMS gate (current)": {
+    "cpu_ms_per_audio_s": 0.4,
+    "rtf": 2793.81,
+    "silence_window_s": 0.75,
+    "silence_threshold_blocks": 8
+  }
+}
