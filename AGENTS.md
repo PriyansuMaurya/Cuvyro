@@ -70,29 +70,51 @@ the displacement limits and the modelled eye-rotation change, then exercises
 the reader itself (default off, card travel, on-screen clamping, immediate
 disable, camera-failure path).
 
-Two of its checks exist because the feature failed in the field without any
-test failing. `check_detection_range` holds the frame size to the detector's
-measured floor: the frontal cascade needs a face box around 56 px, so a reader
-80 cm from the lens needs roughly 93 px of head, which 320 px of frame never
-gave them — the detector returned nothing and the card never moved.
+Several of its checks exist because the feature failed in the field without
+any test failing. `check_detection_range` holds the frame size to the
+detector's measured floor: the old frontal cascade needed a face box around
+56 px, so a reader 80 cm from the lens needs roughly 93 px of head, which
+320 px of frame never gave them — the detector returned nothing and the card
+never moved. That is why the frame is 640×480 and why the detector is now a
+MediaPipe landmarker, which reads a face far smaller than that.
 `check_sparse_camera` includes a camera that delivers one reading and then
 stops: calibration used to be advanced only from incoming samples, so that
-state left the tracker calibrating for ever.
-It prints a VERDICT line. It read NOT MEANINGFUL while the words were capped at
-14 DIP of travel; carrying the whole card instead (150 DIP) lifts the modelled
-removal of head-induced eye rotation to ~38%, past the 25% bar, so the verdict
-now reads MEANINGFUL. It still ships off by default: a profile cascade, run
-only when the frontal pass misses and on a half-size copy, keeps a turned head
-alive for about a second, but a face that leaves the frame is still a lost face
-and the feature has not been watched on a second machine. Calibration starts
-its window at the first face sample and takes a median, because a camera can
-report a face only every second or so; it also resolves on a deadline in
-`poll`, so a stalled window cannot leave the feature inert. The window is
-rolling and only closes on a still head: a lean that fell inside it used to
-become the neutral, after which a 45 mm lean moved the card the full 150 DIP
-in the wrong direction. That is covered by `check_sparse_camera`.
-`tests/measure_head_tracking.py` is the real-device half — sample rate, detector cost, stillness and drift — and SKIPs
-when there is no camera or no face.
+state left the tracker calibrating for ever. `check_landmarks` pins the sign
+of every axis from a synthetic 478-point face (a wrong sign looks like the
+words running away, not like a bug), `check_gaze` holds gaze to its share of
+the travel and asserts that line-scanning saccades move nothing, and
+`check_gaze_feedback` models the loop where moving the card changes the gaze,
+because that is the shape that hunts from side to side if the gain is too
+high. `check_outliers` drops one wild reading and follows two that agree.
+It prints a VERDICT line. Full compensation (gain 1.0) removes ~38% of the
+modelled head-induced eye rotation and was measured, against a real reader
+swaying between comfortable leans, to pin the card against its stop for a
+fifth of a live session. At the shipped 0.45 gain it removes ~14% and the
+card stays off its stop; the verdict says MEANINGFUL at that gain and
+deliberately not maximal. The feature still ships off by default: it has now
+been watched on one machine, with a landmarker that loses a face that leaves
+the frame, and has not been watched on a second.
+Calibration starts its window at the first face sample and takes a median,
+because a camera can report a face only every second or so; it also resolves
+on a deadline in `poll`, so a stalled window cannot leave the feature inert.
+The window is rolling and only closes on a still head: a lean that fell inside
+it used to become the neutral, after which a 45 mm lean moved the card the
+full 150 DIP in the wrong direction. That is covered by `check_sparse_camera`.
+
+The worker's camera order is measured, not theoretical: DirectShow first,
+MediaFoundation as the fallback. On the machine this was fixed for, MSMF's
+constructor took 5.5 s and the first reading arrived at 11.8 s; DSHOW produced
+one in about a second, and both are shared on Windows 10+ (a second process
+opened and read the same device alongside the worker). A `stop()` that times
+out leaves `_thread` set on purpose — `running` stays true so a second source
+cannot open a second handle on a device the first has not released — and only
+one source may hold the camera at a time, which is what stops the camera light
+flickering.
+
+`tests/measure_head_tracking.py` is the real-device half — fresh-reading rate,
+frame cost, stillness, lean travel and gaze separation — and SKIPs when there
+is no camera or no face. It walks the subject through timed phases, so it needs
+a person in front of the lens.
 
 `tests/check_design.py` asserts surface invariants against rendered pixels and
 `tests/verify_ui.py` reports window geometry. All of them build their own

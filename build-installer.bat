@@ -46,6 +46,15 @@ if not exist "model\sherpa\tokens.txt" (
   )
 )
 
+REM Head tracking reads the face landmarker from model\face_landmarker.task.
+REM It is a plain file beside the speech model, so it travels with the build.
+if not exist "model\face_landmarker.task" (
+  echo ERROR: no face landmark model found.
+  echo Put the MediaPipe face landmarker at model\face_landmarker.task:
+  echo   https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+  goto :err
+)
+
 echo [3/5] Freezing app with PyInstaller...
 if exist "build" rmdir /s /q "build"
 if exist "dist" rmdir /s /q "dist"
@@ -57,7 +66,7 @@ if not exist "dist\Notch\Notch.exe" (
   goto :err
 )
 
-echo [4/5] Placing speech model next to the executable...
+echo [4/5] Placing the model folder next to the executable...
 xcopy /e /i /y "model" "dist\Notch\model" >nul
 if errorlevel 1 goto :err
 

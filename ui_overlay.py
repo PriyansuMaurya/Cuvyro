@@ -66,6 +66,24 @@ from controls import (
 from win_capture import exclude_from_capture
 
 
+def clamp_shift_to_screen(base: QRect, area: QRect, dx: int, dy: int) -> tuple:
+    """Bound a head-driven card shift: wholly on screen, in the upper half.
+
+    The upper-half rule is about the *movement*, not about where the reader put
+    the card. A card already below the midline gets no downward travel at all —
+    shoving it up to satisfy the rule would move the words to a place the
+    reader did not choose. A card with room above the midline travels down
+    until its bottom edge reaches the middle, and no further.
+    """
+    dx = max(area.left() - base.left(), min(dx, area.right() - base.right()))
+    midline = area.top() + area.height() // 2
+    if base.bottom() > midline:
+        dy = max(area.top() - base.top(), min(dy, 0))
+    else:
+        dy = max(area.top() - base.top(), min(dy, midline - base.bottom()))
+    return (int(dx), int(dy))
+
+
 class HelpDialog(QDialog):
     """First-time guide / Help dialog — frameless, rounded, pill-style."""
     CORNER_RADIUS = 16
@@ -565,6 +583,7 @@ class NotchOverlay(QWidget):
         self._head_offsets = ht.ZERO
         self._head_last_sample: Optional[float] = None
         self._head_wanted = False
+        self._head_starting_reported = False
         self._head_trace_at = 0.0
         # When the feature was switched on, and whether it has already said
         # that it cannot see a face. Without this the only two states a user
@@ -809,7 +828,7 @@ class NotchOverlay(QWidget):
         return self._shift_inside_screen(dx, dy)
 
     def _shift_inside_screen(self, dx: int, dy: int) -> tuple:
-        """Trim a head shift so the card stays wholly on its display."""
+        """Trim a head shift so the card stays on screen and in the top half."""
         if dx == 0 and dy == 0:
             return (0, 0)
         base = QRect(int(round(self._sx.value)), int(round(self._sy.value)),
@@ -824,12 +843,7 @@ class NotchOverlay(QWidget):
             screen = QApplication.primaryScreen()
         if screen is None:
             return (dx, dy)
-        area = screen.availableGeometry()
-        dx = max(area.left() - base.left(),
-                 min(dx, area.right() - base.right()))
-        dy = max(area.top() - base.top(),
-                 min(dy, area.bottom() - base.bottom()))
-        return (int(dx), int(dy))
+        return clamp_shift_to_screen(base, screen.availableGeometry(), dx, dy)
 
     def _head_layout_origin(self) -> QPoint:
         """Where the card would be standing if no head offset were applied.
@@ -850,6 +864,7 @@ class NotchOverlay(QWidget):
             source, self._head_source = self._head_source, None
             self._head_last_sample = None
             self._head_no_face_reported = False
+            self._head_starting_reported = False
             if source is not None:
                 source.stop()
             self._head_offsets = ht.ZERO
@@ -861,10 +876,20 @@ class NotchOverlay(QWidget):
         if self._head_track_enabled and self._head_source is not None:
             return
         source = ht.CameraHeadSource()
-        source.start()
+        if not source.start():
+            # Another tracker in this process already owns the device. Two
+            # handles on one camera is what makes the light blink and the
+            # readings fight; refusing is the honest outcome.
+            print(f"[Notch] Head tracking off: {source.error}", flush=True)
+            self._head_wanted = False
+            self._head_track_enabled = False
+            self._head_source = None
+            self._schedule_save()
+            return
         self._head_source = source
         self._head_last_sample = None
         self._head_no_face_reported = False
+        self._head_starting_reported = False
         self._head_enabled_at = time.monotonic()
         # Enabling is also the moment neutral is measured, so a posture
         # change between sessions does not park the text off-centre.
@@ -894,21 +919,44 @@ class NotchOverlay(QWidget):
         now = time.monotonic()
         sample = source.read()
         if sample is not None:
-            stamp = sample[2]
-            if self._head_last_sample is None or stamp > self._head_last_sample:
-                self._head_last_sample = stamp
-                self._head_motion.feed(sample[0], sample[1], now)
-        elif (not self._head_no_face_reported
-              and now - self._head_enabled_at >= 4.0):
-            # The camera opened and is delivering frames, but the cascade has
-            # never produced a reading. Say so once: the failure this replaces
-            # was a toggle that looked on and did nothing at all, which is
-            # indistinguishable from a broken feature and leaves the reader no
-            # way to fix it. Turning it off is still one click away.
-            self._head_no_face_reported = True
-            print("[Notch] Head tracking is on but the camera sees no face — "
-                  "sit within about a metre of the lens and face it, "
-                  "or switch head tracking off", flush=True)
+            if (self._head_last_sample is None
+                    or sample.stamp > self._head_last_sample):
+                self._head_last_sample = sample.stamp
+                # A face is back: a later loss deserves its own report rather
+                # than being swallowed by the first one.
+                self._head_no_face_reported = False
+                self._head_motion.feed(sample.x, sample.y, now,
+                                       sample.gaze_x, sample.gaze_y)
+        elif not source.ready and not self._head_starting_reported:
+            # The first enable loads a face model: ~6 s on this machine, mostly
+            # MediaPipe's import. Saying nothing for those seconds is what
+            # makes a working feature feel like a dead switch.
+            waited = now - self._head_enabled_at
+            if waited >= 1.5:
+                self._head_starting_reported = True
+                print("[Notch] Head tracking starting (loading the face model, "
+                      "a few seconds on the first enable)", flush=True)
+        elif source.ready and not self._head_no_face_reported:
+            # Only once the model is loaded: before that, no reading is
+            # expected, and accusing the reader of not being there while the
+            # landmarker is still loading is worse than saying nothing.
+            # Sustained absence, not an instantaneous gap: ``read`` returns None
+            # the moment the newest sample is a few hundred milliseconds old,
+            # and a single missed detection must not accuse the reader of
+            # leaving. Four seconds without a reading means it.
+            absent_since = (self._head_last_sample
+                            if self._head_last_sample is not None
+                            else self._head_enabled_at)
+            patience = 4.0 if self._head_last_sample is not None else 8.0
+            if now - absent_since >= patience:
+                # The failure this replaces was a toggle that looked on and did
+                # nothing at all, which is indistinguishable from a broken
+                # feature and leaves the reader no way to fix it. Turning it
+                # off is still one click away.
+                self._head_no_face_reported = True
+                print("[Notch] Head tracking is on but the camera sees no face — "
+                      "sit within about a metre of the lens and face it, "
+                      "or switch head tracking off", flush=True)
         offsets = self._head_motion.poll(now)
         if offsets != self._head_offsets:
             self._head_offsets = offsets
@@ -927,7 +975,9 @@ class NotchOverlay(QWidget):
         if now - self._head_trace_at < 0.2:
             return
         self._head_trace_at = now
-        raw = "none" if sample is None else f"{sample[0]:+.3f},{sample[1]:+.3f}"
+        raw = ("none" if sample is None
+               else f"{sample.x:+.3f},{sample.y:+.3f} gaze={sample.gaze_x:+.2f},"
+                    f"{sample.gaze_y:+.2f} eyes={sample.eyes}")
         age = (now - self._head_last_sample
                if self._head_last_sample is not None else -1.0)
         off = self._head_offsets

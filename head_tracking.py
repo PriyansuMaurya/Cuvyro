@@ -43,8 +43,10 @@ than magic values:
 
 from __future__ import annotations
 
+import atexit
 import math
 import os
+import sys
 import threading
 import time
 from typing import NamedTuple, Optional
@@ -65,11 +67,20 @@ MAX_TEXT_DY = 100.0
 # still moving, which reads as two motions fighting.
 CARD_GAIN = 1.0
 TEXT_GAIN = 1.0
+# How much of the head's displacement the card actually carries.
+#
+# Full compensation (1.0) is the number that maximises eye contact with the
+# lens, and it is unusable: measured against a real reader swaying between
+# comfortable leans, |deviation| p95 was 0.136 of a half-frame, so 1:1 gain
+# pinned a 150 DIP card against its stop for a fifth of a live session. The
+# brief is subtle, predictable movement, not a mirror, and 0.45 of the same
+# sway moves the card ~30 DIP — visible, gentle, and never against the stop.
+FOLLOW_GAIN = 0.45
 
 # Normalised head displacement (1.0 = half the frame) that must be exceeded
 # before anything moves at all. A head sways a few millimetres while a person
 # reads; tracking that would make the words breathe.
-DEAD_ZONE = 0.03
+DEAD_ZONE = 0.045
 # The head displacement that reaches the full text limit. Deliberately much
 # smaller than the frame: a lean of ~35 mm at laptop distance is the range the
 # words should span end to end, and anything past it saturates. Scaling to the
@@ -78,7 +89,7 @@ DEAD_ZONE = 0.03
 # 0.20 of a half-frame is ~58 mm at laptop distance — a lean a little past the
 # 45 mm the eye-contact model allows for, so a deliberate lean reaches the end
 # of the travel without a shoulder roll being needed to get there.
-RANGE = 0.20
+RANGE = 0.22
 # Output hysteresis, in DIP. Raised with the travel: at 150 DIP the same
 # smoothed noise would put a 7 DIP tremble on a still head, which reads as the
 # card shivering. Three DIP is 2% of the travel — 1.2 mm on the glass, below
@@ -125,6 +136,51 @@ SETTLE = 0.6
 CALIBRATE_SECONDS = 1.2
 CALIBRATE_MIN_SAMPLES = 6
 
+# ── Gaze ────────────────────────────────────────────────────────────────
+# The mesh carries both irises, which says which way the reader is looking
+# without a second camera. It is a coarse signal (a webcam sees the iris
+# through a keyhole of eyelid), so it is allowed to add only a share of the
+# travel, and only when the look is sustained rather than a saccade.
+#
+# The gain is small on purpose. Moving the card toward a gaze changes the
+# gaze, which is a feedback loop: at 0.15 the loop settles gently instead of
+# hunting, which ``check_gaze_feedback`` models and asserts.
+GAZE_GAIN = 0.15
+# Iris deviation inside the eye, where 1.0 is the eye's own half-width.
+# Reading sweeps the eyes across a line several times a second; a dead zone
+# this wide keeps that natural scanning out of the card's position.
+GAZE_DEAD_ZONE = 0.22
+# The deviation that reaches the full gaze share of the travel.
+GAZE_RANGE = 0.55
+# A fixed time constant, not the 1€ filter the head uses. That one opens up
+# with speed — which is what makes a head turn feel direct — and speed is the
+# one thing gaze must ignore: a reading saccade is the fastest movement the
+# eyes make. Measured against 0.45 s, a line-to-line sweep of ±0.3 is
+# attenuated to ±0.12, which is inside the dead zone above, so scanning the
+# words moves nothing at all.
+GAZE_TAU = 0.45
+# An eye open narrower than this, as a fraction of its own width, is a blink
+# or a shut eye. Its iris reading is not gaze and must not move the card.
+EYE_OPEN_MIN = 0.14
+
+
+class FaceSample(NamedTuple):
+    """One landmarker reading: where the head and the eyes are.
+
+    ``x`` and ``y`` are the head anchor measured from the frame's centre with
+    1.0 at the frame's edge, in screen directions (a lean to the reader's
+    right reads positive x). ``gaze_x`` and ``gaze_y`` are the iris deviation
+    inside the eye, 1.0 at the eye's half-width. ``eyes`` is how many eyes the
+    reading actually used: 0 means the face was found but not its gaze.
+    """
+
+    x: float
+    y: float
+    gaze_x: float
+    gaze_y: float
+    stamp: float
+    eyes: int = 0
+
 
 class HeadOffsets(NamedTuple):
     """What the reader should do with this sample, in DIP."""
@@ -147,6 +203,37 @@ def _alpha(cutoff: float, dt: float) -> float:
     """One-Euro's smoothing factor for a cutoff (Hz) over a step (s)."""
     tau = 1.0 / (2.0 * math.pi * max(1e-3, cutoff))
     return 1.0 / (1.0 + tau / dt)
+
+
+class _LowPass:
+    """First-order smoothing with a fixed time constant.
+
+    Used for gaze, where the point is to ignore fast movement. The 1€ filter
+    is the opposite kind of smoother: it deliberately lets speed through.
+    """
+
+    __slots__ = ("tau", "_x", "_t", "_primed")
+
+    def __init__(self, tau: float = GAZE_TAU):
+        self.tau = max(1e-3, float(tau))
+        self.reset()
+
+    def reset(self) -> None:
+        self._x = 0.0
+        self._t = 0.0
+        self._primed = False
+
+    def filter(self, value: float, now: float) -> float:
+        if not self._primed:
+            self._x = float(value)
+            self._t = now
+            self._primed = True
+            return self._x
+        dt = max(1e-3, now - self._t)
+        self._t = now
+        k = 1.0 - math.exp(-dt / self.tau)
+        self._x += (float(value) - self._x) * k
+        return self._x
 
 
 class _OneEuro:
@@ -189,6 +276,12 @@ class _OneEuro:
         a = _alpha(cutoff, dt)
         self._x = a * value + (1.0 - a) * self._x
         return self._x
+
+
+# The largest believable change in head position between two camera samples,
+# as a share of a half-frame. A head cannot cross a fifth of the picture in
+# 66 ms; the mesh occasionally can, when it re-locks on the wrong thing.
+MAX_STEP = 0.22
 
 
 def _through_dead_zone(value: float, dead_zone: float, full: float) -> float:
@@ -238,13 +331,25 @@ class HeadMotion:
 
         self._x_filter = _OneEuro()
         self._y_filter = _OneEuro()
+        self._gaze_x_filter = _LowPass()
+        self._gaze_y_filter = _LowPass()
         self._active = False
         self._calibrating = False
         self._calib_started = 0.0
         self._calib_samples: list[tuple[float, float]] = []
         self._neutral_x = 0.0
         self._neutral_y = 0.0
+        # Where the eyes sat while the reader was looking straight at the
+        # words. Gaze is measured against this, not against the middle of the
+        # eye: every face rests its irises a little differently, and a
+        # per-user neutral is the difference between a card that sits still
+        # and one that is permanently nudged to the side.
+        self._neutral_gaze_x = 0.0
+        self._neutral_gaze_y = 0.0
         self._last_sample = 0.0
+        # The last two raw readings, for the outlier gate in ``feed``.
+        self._last_raw: Optional[tuple[float, float]] = None
+        self._prev_raw: Optional[tuple[float, float]] = None
         self._target = (0.0, 0.0)          # text target, DIP
         self._applied = (0.0, 0.0)         # text offset currently rendered
         self._offsets = ZERO
@@ -271,6 +376,10 @@ class HeadMotion:
         self._active = True
         self._x_filter.reset()
         self._y_filter.reset()
+        self._gaze_x_filter.reset()
+        self._gaze_y_filter.reset()
+        self._last_raw = None
+        self._prev_raw = None
         self._calibrating = True
         self._calib_started = now
         self._calib_samples = []
@@ -297,19 +406,38 @@ class HeadMotion:
         return ZERO
 
     # ── input ────────────────────────────────────────────────────────
-    def feed(self, x: float, y: float, now: float) -> None:
-        """Take one detector reading: head centre, normalised to ±1.
+    def feed(self, x: float, y: float, now: float,
+             gaze_x: float = 0.0, gaze_y: float = 0.0) -> None:
+        """Take one detector reading: head anchor, normalised to ±1.
 
         ``x`` and ``y`` are measured from the frame's centre with 1.0 at the
         frame's edge, so the numbers do not depend on the camera's resolution.
+        ``gaze_x`` / ``gaze_y`` are the iris deviation inside the eye, 1.0 at
+        the eye's half-width; they add a bounded share of the travel.
         """
         if not self._active:
             return
         if not (math.isfinite(x) and math.isfinite(y)):
             return
+        if not (math.isfinite(gaze_x) and math.isfinite(gaze_y)):
+            gaze_x = gaze_y = 0.0
         self._last_sample = now
         x = max(-1.0, min(1.0, float(x)))
         y = max(-1.0, min(1.0, float(y)))
+
+        # Outlier gate. The mesh is stable to about a pixel a frame, so a jump
+        # this large is the detector re-locking, not a head. A single such
+        # sample is dropped; two in agreement are accepted, because a genuinely
+        # fast turn also produces a big step and must not be ignored.
+        last, prev = self._last_raw, self._prev_raw
+        if last is not None and math.hypot(x - last[0], y - last[1]) > MAX_STEP:
+            agreed = (prev is not None
+                      and math.hypot(x - prev[0], y - prev[1]) <= MAX_STEP)
+            if not agreed:
+                self._prev_raw = (x, y)
+                return
+        self._prev_raw = last
+        self._last_raw = (x, y)
 
         if self._calibrating:
             if not self._calib_samples:
@@ -317,7 +445,7 @@ class HeadMotion:
                 # switch was flipped: the camera takes a second or two to open,
                 # and a window that expired during that would stand no chance.
                 self._calib_started = now
-            self._calib_samples.append((now, x, y))
+            self._calib_samples.append((now, x, y, float(gaze_x), float(gaze_y)))
             # Rolling window: only the last ``calibrate_seconds`` of readings
             # describe where this reader's head is now. Until this was a
             # window at all, a lean that happened to fall inside it became the
@@ -352,7 +480,27 @@ class HeadMotion:
         rel_y = self._y_filter.filter(y - self._neutral_y, now)
         shaped_x = _through_dead_zone(rel_x, self.dead_zone, self.full_range)
         shaped_y = _through_dead_zone(rel_y, self.dead_zone, self.full_range)
-        self._target = (shaped_x * self.max_dx, shaped_y * self.max_dy)
+
+        # Gaze rides on top of the head, after its own slower filter and its own
+        # dead zone. It is a *bias* toward where the reader is looking, never a
+        # tracker of the eyes themselves: reading sweeps the eyes across the
+        # line several times a second, and following that would make the words
+        # chase the reader instead of settling in front of them.
+        gaze_px = _through_dead_zone(
+            self._gaze_x_filter.filter(
+                max(-1.0, min(1.0, float(gaze_x) - self._neutral_gaze_x)), now),
+            GAZE_DEAD_ZONE, GAZE_RANGE) * self.max_dx * GAZE_GAIN
+        gaze_py = _through_dead_zone(
+            self._gaze_y_filter.filter(
+                max(-1.0, min(1.0, float(gaze_y) - self._neutral_gaze_y)), now),
+            GAZE_DEAD_ZONE, GAZE_RANGE) * self.max_dy * GAZE_GAIN
+
+        self._target = (
+            max(-self.max_dx, min(self.max_dx,
+                                  shaped_x * self.max_dx * FOLLOW_GAIN + gaze_px)),
+            max(-self.max_dy, min(self.max_dy,
+                                  shaped_y * self.max_dy * FOLLOW_GAIN + gaze_py)),
+        )
 
     def _calibration_is_still(self) -> bool:
         """Whether the window describes a head that is holding still.
@@ -376,14 +524,20 @@ class HeadMotion:
         """
         xs = sorted(sample[1] for sample in self._calib_samples)
         ys = sorted(sample[2] for sample in self._calib_samples)
+        gxs = sorted(sample[3] for sample in self._calib_samples)
+        gys = sorted(sample[4] for sample in self._calib_samples)
         self._neutral_x = xs[len(xs) // 2]
         self._neutral_y = ys[len(ys) // 2]
+        self._neutral_gaze_x = gxs[len(gxs) // 2]
+        self._neutral_gaze_y = gys[len(gys) // 2]
         self._calibrating = False
         self._calib_samples = []
         # Start the filter at the neutral point, not at 0, so the first filtered
         # sample is not a step from the frame centre.
         self._x_filter.reset()
         self._y_filter.reset()
+        self._gaze_x_filter.reset()
+        self._gaze_y_filter.reset()
 
     # ── output ───────────────────────────────────────────────────────
     def poll(self, now: float) -> HeadOffsets:
@@ -465,121 +619,222 @@ class HeadMotion:
 
 
 _detector_lock = threading.Lock()
-_detector: Optional[tuple] = None
+_landmarker = None
+_last_timestamp = 0
+# Exactly one worker may own the camera. Two handles on one device is how
+# the camera light ends up blinking, and how each handle keeps taking
+# frames from the other.
+_live_source_lock = threading.Lock()
+_live_source = None
+
+# The model ships with the app, beside the speech model, so nothing is
+# downloaded at run time and the feature keeps working offline. It is the
+# MediaPipe face landmarker: 478 points per face, both irises included.
+MODEL_NAME = "face_landmarker.task"
+
+# Which way a lean moves the picture. The camera image is not mirrored: a
+# reader leaning to their right appears to the *left* of the frame, so the
+# card has to travel the opposite way to stay in front of them. Getting this
+# sign wrong does not look like a bug — it looks like the words running away
+# from the reader twice as fast, which is why it is named rather than inlined.
+HEAD_X_SIGN = -1.0
+
+# Both eyes, as (outer corner, inner corner, upper lid, lower lid, iris).
+# MediaPipe's canonical indices; the irises are the last ten of the 478.
+_EYE_GEOMETRY = (
+    (33, 133, 159, 145, 468),
+    (263, 362, 386, 374, 473),
+)
+# An eye narrower than this many pixels is too small for its iris to say
+# anything: the deviation would be measuring landmark noise.
+MIN_EYE_PX = 18.0
 
 
-def load_detector() -> tuple:
-    """Import OpenCV and load the face cascades once per process.
+def model_dir() -> str:
+    """Where the model lives: beside the exe when frozen, beside this file otherwise.
 
-    Two cascades, because one cannot sit through a head turn: the frontal one
-    belongs to a face looking at the lens, the profile one to a face turned
-    away from it. A reader does both, so tracking must survive both.
-
-    Loading is slow the first time — a cold ``import cv2`` plus parsing a
-    cascade took over a second here. Doing that inside each enable made the
-    first toggle feel stuck *and* let the worker finish opening the camera
-    after the user had already switched tracking off, holding a device it had
-    been told to release. One process, one detector, one slow first time.
+    ``model/`` is copied next to Notch.exe by the build, not into the bundle —
+    the same rule the speech model follows — so ``__file__`` inside
+    ``_internal`` would look in the wrong place.
     """
-    global _detector
+    if getattr(sys, "frozen", False):
+        return os.path.join(os.path.dirname(sys.executable), "model")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "model")
+
+
+def model_path() -> str:
+    return os.path.join(model_dir(), MODEL_NAME)
+
+
+def load_landmarker():
+    """Load the face landmarker once per process.
+
+    Raises ``ImportError`` when MediaPipe is absent and ``RuntimeError`` when
+    the model file is missing, so the reader can say which of the two is wrong
+    instead of switching on a feature that will never see anything.
+
+    ``num_faces=1`` is deliberate: the reader has one face, and asking for the
+    most prominent one stops a face in a photo on the shelf from taking the
+    reading.
+    """
+    global _landmarker
     with _detector_lock:
-        if _detector is not None:
-            return _detector
-        import cv2
+        if _landmarker is not None:
+            return _landmarker
+        from mediapipe.tasks.python import vision
+        from mediapipe.tasks.python.core.base_options import BaseOptions
 
-        data = getattr(cv2, "data", None)
-        if data is None or not getattr(data, "haarcascades", ""):
-            raise RuntimeError("face detector model is missing")
-        frontal = cv2.CascadeClassifier(
-            os.path.join(data.haarcascades, "haarcascade_frontalface_default.xml"))
-        if frontal.empty():
-            raise RuntimeError("face detector model is missing")
-        # Optional: a wheel without the profile cascade still tracks a face
-        # looking straight ahead, it just loses it on a turn.
-        profile = None
-        profile_path = os.path.join(data.haarcascades, "haarcascade_profileface.xml")
-        if os.path.exists(profile_path):
-            candidate = cv2.CascadeClassifier(profile_path)
-            if not candidate.empty():
-                profile = candidate
-        _detector = (cv2, frontal, profile)
-        return _detector
+        path = model_path()
+        if not os.path.exists(path):
+            raise RuntimeError(
+                "the face landmark model is missing (model/%s)" % MODEL_NAME)
+        options = vision.FaceLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=path),
+            running_mode=vision.RunningMode.VIDEO,
+            num_faces=1,
+            output_face_blendshapes=False,
+            output_facial_transformation_matrixes=False,
+            min_face_detection_confidence=0.5,
+            min_face_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        _landmarker = vision.FaceLandmarker.create_from_options(options)
+        # Closed before the interpreter tears the C dispatcher down; letting
+        # __del__ do it prints a TypeError traceback on every exit.
+        atexit.register(_close_landmarker)
+        return _landmarker
 
 
-def flip_box(box, frame_w: int) -> tuple:
-    """Mirror a box found in a horizontally flipped frame back into the frame.
+def _close_landmarker() -> None:
+    """Close the shared model once, before the interpreter goes away.
 
-    The profile cascade only knows faces turned one way. Running it a second
-    time on a mirrored copy of the frame, and flipping the boxes back, teaches
-    it the other way for the price of one copy of a 320x240 grey image.
+    MediaPipe 1.2.3's ``FaceLandmarker.__del__`` closes through a dispatcher
+    whose executor Python has already shut down by the time destructors run at
+    exit, so every exit printed a RuntimeError traceback. Closing it here —
+    while the executor is alive — makes that destructor redundant, and a
+    no-op destructor is the only way to keep the traceback out of the reader's
+    log, because the object is held in a reference cycle until finalisation.
     """
-    x, y, w, h = (int(v) for v in box)
-    return (int(frame_w) - x - w, y, w, h)
+    global _landmarker
+    with _detector_lock:
+        landmarker, _landmarker = _landmarker, None
+    if landmarker is None:
+        return
+    try:
+        landmarker.close()
+    except Exception:
+        pass
+    try:
+        landmarker.__class__.__del__ = lambda self: None
+    except Exception:
+        pass
 
 
-def pick_nearest_face(faces, last_centre):
-    """Centre of the box closest to the last one, or of the largest first.
+def _next_timestamp() -> int:
+    """A strictly increasing millisecond clock for the video-mode model.
 
-    Continuity first and size second: a face in the background must not steal
-    the reading between frames, but with nothing to be continuous with, the
-    biggest box is the one at the desk.
+    The landmarker rejects a timestamp that does not advance, and it outlives
+    any one worker: a stopped-and-restarted tracker must not begin its clock
+    again from zero or the first frame after re-enabling is refused.
     """
-    best = None
-    for (fx, fy, fw, fh) in faces:
-        cx = fx + fw / 2.0
-        cy = fy + fh / 2.0
-        if last_centre is None:
-            distance = -fw * fh
-        else:
-            distance = ((cx - last_centre[0]) ** 2
-                        + (cy - last_centre[1]) ** 2)
-        if best is None or distance < best[0]:
-            best = (distance, cx, cy)
-    if best is None:
-        return None
-    return (best[1], best[2])
+    global _last_timestamp
+    with _detector_lock:
+        _last_timestamp = max(_last_timestamp + 1, int(time.monotonic() * 1000.0))
+        return _last_timestamp
+
+
+def gaze_from_landmarks(landmarks, width: float, height: float) -> tuple:
+    """Iris deviation inside each usable eye: ``(gx, gy, eyes_used)``.
+
+    ``1.0`` is the eye's own half-width, so the number does not depend on how
+    big the face is on screen. A blink or a shut eye is rejected rather than
+    read: its iris is behind a lid, and the lid's position is not a gaze.
+    """
+    gx_total = gy_total = 0.0
+    used = 0
+    for outer, inner, top, bottom, iris in _EYE_GEOMETRY:
+        ox, oy = landmarks[outer].x * width, landmarks[outer].y * height
+        ix, iy = landmarks[inner].x * width, landmarks[inner].y * height
+        tx, ty = landmarks[top].x * width, landmarks[top].y * height
+        bx, by = landmarks[bottom].x * width, landmarks[bottom].y * height
+        px, py = landmarks[iris].x * width, landmarks[iris].y * height
+        eye_w = math.hypot(ix - ox, iy - oy)
+        if eye_w < MIN_EYE_PX:
+            continue
+        lid_gap = math.hypot(bx - tx, by - ty)
+        if lid_gap / max(1e-6, eye_w) < EYE_OPEN_MIN:
+            continue
+        gx_total += (px - (ox + ix) / 2.0) / (eye_w / 2.0)
+        gy_total += (py - (ty + by) / 2.0) / max(1e-6, lid_gap / 2.0)
+        used += 1
+    if not used:
+        return 0.0, 0.0, 0
+    return gx_total / used, gy_total / used, used
+
+
+def reading_from_landmarks(landmarks, width: float, height: float) -> FaceSample:
+    """Turn one face's 478 points into a head position and a gaze.
+
+    The head anchor is the midpoint of the two outer eye corners: unlike the
+    nose or the irises, it does not move when the reader looks somewhere. A
+    turned head moves it only a little, which is right — a turn should not
+    throw the words sideways.
+    """
+    if not landmarks:
+        return FaceSample(0.0, 0.0, 0.0, 0.0, 0.0, 0)
+    rox = landmarks[33].x * width
+    lox = landmarks[263].x * width
+    ax = (rox + lox) / 2.0
+    ay = (landmarks[33].y * height + landmarks[263].y * height) / 2.0
+    nx = (ax - width / 2.0) / (width / 2.0) * HEAD_X_SIGN
+    ny = (ay - height / 2.0) / (height / 2.0)
+    gx, gy, used = gaze_from_landmarks(landmarks, width, height)
+    return FaceSample(max(-1.0, min(1.0, nx)), max(-1.0, min(1.0, ny)),
+                      gx * HEAD_X_SIGN, gy, 0.0, used)
 
 
 class CameraHeadSource:
-    """Reads head position from the webcam, locally, on its own thread.
+    """Reads head position and gaze from the webcam, locally, on its own thread.
 
     Deliberate properties, each one a constraint from the brief:
 
-    * **Local.** Only two floats leave this object. No frame is written to
-      disk, no frame is sent anywhere. ``tests/check_head_tracking.py`` runs
-      the pipeline with sockets disabled to keep it that way.
-    * **Shared.** MediaFoundation (``CAP_MSMF``) is tried first, which is the
-      backend that lets a video call keep the device; DirectShow — usually
-      exclusive — is only the fallback. The frame size and rate are the
-      smallest that still finds a face, so the device is not held at 1080p
-      while a call wants it.
-    * **Honest failure.** If the camera is busy or absent, ``error`` says so
-      and the reader stays off. It does not retry in a loop or silently
-      pretend to track.
+    * **Local.** Only numbers leave this object. No frame is written to disk,
+      no frame is sent anywhere. MediaPipe runs in-process against a model
+      that ships with the app.
+    * **One device.** A process-wide lease means a second tracker cannot open
+      a second handle on the camera while the first is still closing. The old
+      stop() cleared its thread reference before the join had finished, so a
+      fast off/on could open a new capture on top of a live one — two handles
+      fighting over a device that only one can own is exactly how the camera
+      ends up switching itself on and off.
+    * **Self-healing.** A dropped frame, a device that stalls or a backend
+      that hands back nothing is retried and the capture is reopened. Only a
+      camera that has been gone for GIVE_UP_SECONDS is reported as failed,
+      because a single lost frame used to kill the worker for good — the
+      feature then sat switched on, tracking nothing, until the reader
+      noticed. Nothing here retries in a tight loop, so the camera light does
+      not flicker while a transient problem passes.
     """
 
-    # 640x480 at 15 fps. This was 320x240, chosen on the arithmetic that a
-    # 14 cm face at 50 cm is ~77 px wide there and that the cascade's floor is
-    # the configured MIN_FACE of 40. Measured against the shipped cascade, the
-    # floor is not 40: it needs a face box around 56 px before it reports
-    # anything with minNeighbors=5. At 320 wide a reader 70-80 cm back gives a
-    # 62-71 px head, which is below that floor, so the detector returned no
-    # face at all — and a feature that never sees a face is a feature that
-    # silently does nothing, which is how this one failed in the field.
-    #
-    # At 640x480 the same reader is 124-142 px, comfortably inside the range:
-    # a sweep of head heights from 84 to 252 px detected in every case, which
-    # covers roughly 40 cm to 1.2 m. The frame costs ~33 ms to search against
-    # a 67 ms budget; the profile cascade is no longer run on frames that
-    # already found a face (see ``_run``), which is what pays for the area.
+    # 640x480 at 15 fps. The landmarker works on the whole frame and finds a
+    # face down to roughly a tenth of the frame's width, which is far below
+    # the frontal cascade's ~56 px floor that made a reader at 80 cm invisible
+    # at 320 px wide.
     FRAME_W = 640
     FRAME_H = 480
     FPS = 15
-    MIN_FACE = 40
-    # How long a profile detection may hold the last known position without a
-    # frontal one to back it up. Long enough to sit through a glance away,
-    # short enough that a reader who has left is not tracked forever.
-    PROFILE_HOLD = 1.0
+    # A reading older than this is not where the head is now. Reading it again
+    # would let a face that has left the frame keep steering the words.
+    STALE_SECONDS = 0.6
+    # Consecutive failed reads before the device is reopened. At 15 fps this is
+    # under half a second of trouble, which a camera that is being shared with
+    # a video call produces routinely.
+    REOPEN_AFTER = 6
+    # More reopen attempts than this in one unbroken bad patch means the device
+    # is gone, not busy. Bounded so the camera light cannot blink forever.
+    MAX_REOPENS = 3
+    # How long the worker keeps trying before it reports failure.
+    GIVE_UP_SECONDS = 12.0
 
     def __init__(self, index: int = 0, *, frame_w: Optional[int] = None,
                  frame_h: Optional[int] = None, fps: Optional[int] = None):
@@ -590,14 +845,17 @@ class CameraHeadSource:
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
-        self._latest: Optional[tuple[float, float, float]] = None
+        self._latest: Optional[FaceSample] = None
         self._error: Optional[str] = None
         self._backend = ""
         self._detect_seconds = 0.0
-        # Which cascade produced the last reading: "frontal", "profile", or
-        # "none". Exposed so a live session can be checked rather than guessed
-        # at — a turned head should read "profile", not silence.
+        # "face" while the mesh is finding one, "none" before the first.
         self._last_source = "none"
+        self._recovering = False
+        # False until the model is loaded. The first load costs ~5.8 s on this
+        # machine (5.1 s of it importing MediaPipe), and a reader who toggles
+        # tracking on deserves to be told that rather than shown a dead card.
+        self._ready = False
 
     # ── lifecycle ────────────────────────────────────────────────────
     @property
@@ -606,8 +864,21 @@ class CameraHeadSource:
 
     @property
     def error(self) -> Optional[str]:
+        """The reason tracking cannot work, or None. Only fatal failures."""
         with self._lock:
             return self._error
+
+    @property
+    def recovering(self) -> bool:
+        """True while the device is being reopened after a dropped frame."""
+        with self._lock:
+            return self._recovering
+
+    @property
+    def ready(self) -> bool:
+        """True once the face model is loaded and frames are being read."""
+        with self._lock:
+            return self._ready
 
     @property
     def backend(self) -> str:
@@ -620,27 +891,26 @@ class CameraHeadSource:
 
     @property
     def detect_seconds(self) -> float:
-        """Cost of the last detection, in seconds.
-
-        Exposed so ``tests/measure_head_tracking.py`` can report what the
-        detector adds to the latency budget instead of assuming it is free.
-        """
+        """Cost of the last frame, camera wait plus inference, in seconds."""
         with self._lock:
             return self._detect_seconds
 
     def start(self) -> bool:
-        """Begin capture. Opening the device happens on the worker.
-
-        The open can block for a second on Windows, so it must not happen on
-        the UI thread; the reader instead polls :attr:`error` and stays off
-        when the camera could not be used.
-        """
+        """Begin capture. Opening the device happens on the worker."""
         if self.running:
             return True
+        global _live_source
+        with _live_source_lock:
+            other = _live_source
+            if other is not None and other is not self and other.running:
+                self._fail("the camera is already in use by another tracker")
+                return False
+            _live_source = self
         self._stop.clear()
         with self._lock:
             self._error = None
             self._latest = None
+            self._recovering = False
         self._thread = threading.Thread(target=self._run, name="notch-head",
                                         daemon=True)
         self._thread.start()
@@ -650,17 +920,32 @@ class CameraHeadSource:
         """Stop and release the device. Safe to call twice."""
         self._stop.set()
         thread = self._thread
-        self._thread = None
         if thread is not None and thread.is_alive():
-            thread.join(timeout=1.5)
+            thread.join(timeout=2.0)
+        if thread is not None and thread.is_alive():
+            # Still inside a blocking read. Keep the reference: `running`
+            # stays true, so a new source refuses to open a second handle on
+            # a device this one has not let go of yet.
+            return
+        self._thread = None
+        global _live_source
+        with _live_source_lock:
+            if _live_source is self:
+                _live_source = None
         with self._lock:
             self._latest = None
+            self._recovering = False
 
     # ── reading ──────────────────────────────────────────────────────
-    def read(self) -> Optional[tuple[float, float, float]]:
-        """Latest ``(x, y, timestamp)``, or None before the first face."""
+    def read(self) -> Optional[FaceSample]:
+        """Latest reading, or None when there is no fresh one."""
         with self._lock:
-            return self._latest
+            latest = self._latest
+        if latest is None:
+            return None
+        if time.monotonic() - latest.stamp > self.STALE_SECONDS:
+            return None
+        return latest
 
     # ── worker ───────────────────────────────────────────────────────
     def _fail(self, message: str) -> None:
@@ -668,12 +953,23 @@ class CameraHeadSource:
             self._error = message
 
     def _open(self, cv2):
-        """Open the camera on the backend most likely to share it."""
+        """Open the camera on the backend that delivers frames first.
+
+        DirectShow is first here, not MediaFoundation, on measurement rather
+        than theory: on the machine this was fixed for, MSMF's constructor
+        took 5.5 s and the first usable reading arrived at 11.8 s, while
+        DSHOW produced one in about a second. Both are shared on Windows 10+
+        — a second process opened and read the same device alongside this
+        worker — so the sharing argument that put MSMF first does not hold,
+        and a camera that takes twelve seconds to say anything reads as a
+        broken feature. MSMF stays as the fallback for machines where DSHOW
+        cannot open the device at all.
+        """
         attempts = []
-        if hasattr(cv2, "CAP_MSMF"):
-            attempts.append(("MSMF", cv2.CAP_MSMF))
         if hasattr(cv2, "CAP_DSHOW"):
             attempts.append(("DSHOW", cv2.CAP_DSHOW))
+        if hasattr(cv2, "CAP_MSMF"):
+            attempts.append(("MSMF", cv2.CAP_MSMF))
         attempts.append(("default", 0))
         for name, backend in attempts:
             if self._stop.is_set():
@@ -691,20 +987,51 @@ class CameraHeadSource:
                 pass
         return None, ""
 
+    def _configure(self, cv2, capture) -> None:
+        try:
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.frame_w))
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.frame_h))
+            capture.set(cv2.CAP_PROP_FPS, float(self.fps))
+            if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
+                capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _frame_size(cv2, capture, fallback_w: int, fallback_h: int) -> tuple:
+        try:
+            width = float(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or fallback_w)
+            height = float(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or fallback_h)
+        except Exception:
+            width, height = float(fallback_w), float(fallback_h)
+        if width <= 0 or height <= 0:
+            return float(fallback_w), float(fallback_h)
+        return width, height
+
     def _run(self) -> None:
         try:
-            cv2, cascade, profile = load_detector()
+            landmarker = load_landmarker()
+        except ImportError:
+            self._fail("MediaPipe is not installed")
+            return
+        except Exception as exc:
+            self._fail(str(exc) or "the face landmark model could not be loaded")
+            return
+        if self._stop.is_set():
+            return
+        with self._lock:
+            self._ready = True
+        try:
+            import cv2
         except ImportError:
             self._fail("OpenCV is not installed")
             return
-        except Exception as exc:
-            self._fail(str(exc) or "face detector could not be loaded")
-            return
-        # The detector load is the slow part; a stop that arrived while it ran
-        # must win, or the camera is opened for a feature the user just offed.
-        if self._stop.is_set():
-            return
+        # The landmarker is process-wide and cached: closing it here would
+        # leave the next enable with a closed model. It is closed once, at exit.
+        self._capture(cv2, landmarker)
 
+    def _capture(self, cv2, landmarker) -> None:
+        global _landmarker
         capture, backend = self._open(cv2)
         if self._stop.is_set():
             if capture is not None:
@@ -717,109 +1044,86 @@ class CameraHeadSource:
             self._fail("camera unavailable (busy or not connected)")
             return
         self._backend = backend
-        try:
-            # Small frame, low rate, one buffered frame: the least the device
-            # can be asked for while a call might want it too, and the least
-            # stale frame when it is ours.
-            capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.frame_w))
-            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.frame_h))
-            capture.set(cv2.CAP_PROP_FPS, float(self.fps))
-            if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
-                capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            width = float(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or self.frame_w)
-            height = float(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or self.frame_h)
-            if width <= 0 or height <= 0:
-                width, height = float(self.frame_w), float(self.frame_h)
+        self._configure(cv2, capture)
+        width, height = self._frame_size(cv2, capture, self.frame_w, self.frame_h)
 
-            interval = 1.0 / max(1.0, float(self.fps))
-            misses = 0
-            last_centre: Optional[tuple[float, float]] = None
-            # When a frontal face was last seen. A profile detection may keep
-            # the last position alive, but only for a while: a reader who has
-            # genuinely turned away should get their words back.
-            last_frontal = 0.0
+        interval = 1.0 / max(1.0, float(self.fps))
+        misses = 0
+        reopens = 0
+        failing_since: Optional[float] = None
+        reopen_at = 0.0
+
+        import mediapipe as mp
+
+        try:
             while not self._stop.is_set():
                 started = time.monotonic()
+                if capture is None:
+                    if time.monotonic() < reopen_at:
+                        self._stop.wait(0.05)
+                        continue
+                    capture, backend = self._open(cv2)
+                    if capture is None:
+                        if failing_since is None:
+                            failing_since = time.monotonic()
+                        if time.monotonic() - failing_since > self.GIVE_UP_SECONDS:
+                            self._fail("camera unavailable (busy or not connected)")
+                            return
+                        reopen_at = time.monotonic() + 0.5
+                        continue
+                    self._backend = backend
+                    self._configure(cv2, capture)
+                    width, height = self._frame_size(cv2, capture,
+                                                     self.frame_w, self.frame_h)
+                    with self._lock:
+                        self._recovering = False
+
                 ok, frame = capture.read()
+                cost = time.monotonic() - started
                 if not ok or frame is None:
                     misses += 1
-                    if misses >= 6:
-                        self._fail("camera stopped delivering frames")
-                        return
+                    if failing_since is None:
+                        failing_since = time.monotonic()
+                    if misses >= self.REOPEN_AFTER:
+                        misses = 0
+                        reopens += 1
+                        with self._lock:
+                            self._recovering = True
+                            self._last_source = "reopen"
+                        try:
+                            capture.release()
+                        except Exception:
+                            pass
+                        capture = None
+                        reopen_at = time.monotonic() + 0.2 * reopens
+                        if (reopens > self.MAX_REOPENS
+                                and time.monotonic() - failing_since
+                                > self.GIVE_UP_SECONDS):
+                            self._fail("camera stopped delivering frames")
+                            return
                     self._stop.wait(interval)
                     continue
                 misses = 0
-                faces = ()
-                profiles = ()
-                try:
-                    grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                    grey = cv2.equalizeHist(grey)
-                    faces = cascade.detectMultiScale(
-                        grey, scaleFactor=1.2, minNeighbors=5,
-                        minSize=(self.MIN_FACE, self.MIN_FACE),
-                    )
-                    # The profile cascade only matters on a miss: when the
-                    # frontal pass found a face its boxes are discarded below,
-                    # so running it anyway spent ~25 ms of a 67 ms frame on
-                    # two searches whose answer was thrown away — CPU taken
-                    # straight from the speech recogniser. It now runs only
-                    # when the face is actually turned or gone, at half scale,
-                    # which is enough to keep a turned head alive and costs
-                    # nothing on the frames that matter for movement.
-                    if not len(faces) and profile is not None:
-                        half = cv2.resize(
-                            grey,
-                            (max(1, grey.shape[1] // 2),
-                             max(1, grey.shape[0] // 2)),
-                            interpolation=cv2.INTER_AREA,
-                        )
-                        small = max(8, self.MIN_FACE // 2)
-                        kwargs = {"scaleFactor": 1.15, "minNeighbors": 4,
-                                  "minSize": (small, small)}
-                        profiles = list(
-                            profile.detectMultiScale(half, **kwargs))
-                        flipped = cv2.flip(half, 1)
-                        for box in profile.detectMultiScale(flipped, **kwargs):
-                            profiles.append(flip_box(box, half.shape[1]))
-                        # Back into frame pixels, the units every other box in
-                        # this loop is in.
-                        profiles = [(int(x * 2), int(y * 2),
-                                     int(w * 2), int(h * 2))
-                                    for (x, y, w, h) in profiles]
-                except Exception:
-                    faces, profiles = (), ()
-                frame_cost = time.monotonic() - started
                 with self._lock:
-                    if frame_cost > 0.0:
-                        # The whole cycle for this frame — waiting for it and
-                        # detecting in it — whether or not it found a face. A
-                        # missed frame is latency the reader still pays.
-                        self._detect_seconds = frame_cost
-                centre = pick_nearest_face(faces, last_centre)
-                if centre is not None:
-                    cx, cy = centre
-                    last_centre = centre
-                    last_frontal = time.monotonic()
-                    # Normalised to the frame, independent of resolution:
-                    # ±1 at the frame's edge.
-                    nx = (cx - width / 2.0) / (width / 2.0)
-                    ny = (cy - height / 2.0) / (height / 2.0)
+                    self._detect_seconds = cost
+
+                try:
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                    result = landmarker.detect_for_video(image, _next_timestamp())
+                    faces = list(result.face_landmarks or [])
+                except Exception:
+                    faces = []
+
+                if faces:
+                    reading = reading_from_landmarks(faces[0], width, height)
                     with self._lock:
-                        self._latest = (nx, ny, time.monotonic())
-                        self._last_source = "frontal"
-                elif profiles and self._latest is not None:
-                    # A turned head is still this reader's head. The profile
-                    # box is neither the same shape nor the same place as a
-                    # frontal one, so it does not move the words — it keeps
-                    # the last position alive, which is what stops a turn
-                    # from sending the card home mid-paragraph. Bounded by
-                    # PROFILE_HOLD so a reader who really has left the desk
-                    # still gets their words back.
-                    if time.monotonic() - last_frontal <= PROFILE_HOLD:
-                        with self._lock:
-                            self._latest = (self._latest[0], self._latest[1],
-                                            time.monotonic())
-                            self._last_source = "profile"
+                        self._latest = reading._replace(stamp=time.monotonic())
+                        self._last_source = "face"
+                        self._recovering = False
+                    failing_since = None
+                    reopens = 0
+
                 wait = interval - (time.monotonic() - started)
                 if wait > 0:
                     self._stop.wait(wait)
