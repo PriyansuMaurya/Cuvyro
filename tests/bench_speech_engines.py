@@ -42,7 +42,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
 os.chdir(REPO_ROOT)
 
-DEFAULT_MODEL_ROOT = os.path.join(os.path.dirname(REPO_ROOT), "bench-models")
+DEFAULT_MODEL_ROOT = os.path.join(REPO_ROOT, "bench-models")
 DEFAULT_VOSK_MODEL = os.path.join(REPO_ROOT, "model")
 
 SAMPLE_RATE = 16_000
