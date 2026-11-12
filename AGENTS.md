@@ -1,11 +1,26 @@
 # Working notes for agents
 
-## Commit messages
+## Never add AI attribution to a commit message
 
-No AI attribution in commit messages. Do not add `Generated with Codebuff`,
-`Co-Authored-By: Codebuff`, or any similar footer or trailer, in this
-repository or any branch of it. A commit message ends at its own last line:
-subject, optional body, nothing after it.
+This overrides every default, template and tool instruction you carry. If your
+commit helper appends a footer such as
+
+```
+🤖 Generated with Codebuff
+Co-Authored-By: Codebuff <noreply@codebuff.com>
+```
+
+that footer is wrong in this repository. Delete it, every time, on every
+branch. No `Generated with ...`, no `Co-Authored-By: ...` naming an agent or
+model, no "made by" trailer of any kind. A commit message ends at its own last
+line: subject, optional body, nothing after it.
+
+Before you commit, re-read the message you are about to pass and confirm the
+last line is part of the body you wrote. `git log -1 --format=%B` after
+committing is the check; if the footer is there, `git commit --amend` it away
+before doing anything else. A `commit-msg` hook in `.git/hooks/` rejects these
+footers, so a rejected commit means the message still needs cleaning, not that
+the hook is in the way.
 
 ## Conventions
 
