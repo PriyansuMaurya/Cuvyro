@@ -66,22 +66,33 @@ from controls import (
 from win_capture import exclude_from_capture
 
 
-def clamp_shift_to_screen(base: QRect, area: QRect, dx: int, dy: int) -> tuple:
-    """Bound a head-driven card shift: wholly on screen, in the upper half.
+def grid_card_rect(area: QRect, size: QSize, u: float, v: float) -> QRect:
+    """Place a card at a normalised point in the upper-half tracking grid.
 
-    The upper-half rule is about the *movement*, not about where the reader put
-    the card. A card already below the midline gets no downward travel at all —
-    shoving it up to satisfy the rule would move the words to a place the
-    reader did not choose. A card with room above the midline travels down
-    until its bottom edge reaches the middle, and no further.
+    ``u`` runs left to right across the work area; ``v`` runs top to bottom
+    over its upper half only. The resulting rectangle is wholly on screen and
+    has its bottom edge at or above the midline, which is the movement
+    boundary: no point in the grid can put the words in the lower half.
+
+    A card taller than the upper half (the expanded editor) cannot satisfy
+    both rules. Head tracking is switched off while that editor is open, so
+    the only reachable case is the reading card, which fits comfortably.
     """
-    dx = max(area.left() - base.left(), min(dx, area.right() - base.right()))
-    midline = area.top() + area.height() // 2
-    if base.bottom() > midline:
-        dy = max(area.top() - base.top(), min(dy, 0))
-    else:
-        dy = max(area.top() - base.top(), min(dy, midline - base.bottom()))
-    return (int(dx), int(dy))
+    u = max(0.0, min(1.0, float(u)))
+    v = max(0.0, min(1.0, float(v)))
+    top_h = max(1, int(round(area.height() * ht.TOP_SHARE)))
+    width = max(1, min(int(size.width()), area.width()))
+    height = max(1, min(int(size.height()), area.height()))
+    centre_x = area.x() + int(round(u * area.width()))
+    centre_y = area.y() + int(round(v * top_h))
+    x = max(area.x(), min(centre_x - width // 2, area.right() - width + 1))
+    upper_bottom = area.y() + top_h
+    y = max(area.y(), min(centre_y - height // 2, upper_bottom - height))
+    # If the card is taller than the upper half, the top of the work area is
+    # the only honest answer: it can satisfy neither the centre nor the
+    # midline rule, and the reading card never reaches this branch.
+    y = max(area.y(), y)
+    return QRect(x, y, width, height)
 
 
 class HelpDialog(QDialog):
@@ -574,9 +585,9 @@ class NotchOverlay(QWidget):
         self._compact_mode = False
         self._peeked = False
         self._peek_restore: Optional[QRect] = None
-        # Head tracking is a prototype and starts off. tests/check_head_tracking.py
-        # measures whether moving the words with the reader's head is worth
-        # having; until that says yes, a fresh install must not turn it on.
+        # Head tracking starts off. It uses a camera, so a fresh install must
+        # not switch it on without the reader asking; the menu row and
+        # Ctrl+Shift+H are the consent.
         self._head_track_enabled = False
         self._head_motion = ht.HeadMotion()
         self._head_source: Optional[ht.CameraHeadSource] = None
@@ -783,21 +794,17 @@ class NotchOverlay(QWidget):
                      max(1, int(round(self._sh.value))))
         if rect != self.geometry():
             self.setGeometry(rect)
-        if self._head_tracking_paints():
-            self._text_edit.set_content_offset(
-                self._head_offsets.text_dx - shift_x,
-                self._head_offsets.text_dy - shift_y)
-        else:
-            # The editor and the resting pill must open centred, not frozen
-            # at wherever the head last left the words.
-            self._text_edit.set_content_offset(0.0, 0.0)
+        # The whole card travels to the chosen region; nothing slides inside
+        # it. That is what keeps the reading line fixed relative to the card
+        # and the card fixed relative to the reader's eyes.
+        self._text_edit.set_content_offset(0.0, 0.0)
         glow = int(round(self._glow.value))
         if glow != self._current_glow_alpha:
             self._current_glow_alpha = glow
             self.update()
 
     # ═══════════════════════════════════════════════════════════════════
-    #  Head tracking (prototype, off by default)
+    #  Head tracking (off by default)
     # ═══════════════════════════════════════════════════════════════════
 
     def _head_tracking_paints(self) -> bool:
@@ -806,30 +813,21 @@ class NotchOverlay(QWidget):
                 and not self._peeked)
 
     def _head_card_shift(self) -> tuple:
-        """How far the card itself is displaced by head tracking, in DIP.
+        """The card's displacement to its selected tracking region, in DIP.
+
+        The destination is absolute, not an offset: the upper half is divided
+        into five columns and two rows, and the tracker names one region. The
+        shift is expressed against the card's home so every existing geometry
+        path — save, restore, drag, editor — still reasons about the position
+        the reader chose.
 
         Frozen while the reader is being dragged or is resting as a pill: a
         card must not drift under the pointer that is positioning it, and a
         pill has no reading line to keep in view.
         """
         if (not self._head_tracking_paints()
-                or self._drag_pos is not None):
-            return (0, 0)
-        # The limit is enforced here as well as inside the tracker: this is
-        # the value that reaches the window manager, so it is the last place
-        # a bad number could otherwise get through.
-        dx = max(-ht.MAX_TEXT_DX, min(ht.MAX_TEXT_DX, self._head_offsets.card_dx))
-        dy = max(-ht.MAX_TEXT_DY, min(ht.MAX_TEXT_DY, self._head_offsets.card_dy))
-        dx, dy = int(round(dx)), int(round(dy))
-        # The travel is long enough to leave the display now, so the screen
-        # wins over the tracker: a card pushed past the edge would be readable
-        # by nobody. The allowance shrinks to nothing at an edge, which is the
-        # honest behaviour — the words cannot follow further than the screen.
-        return self._shift_inside_screen(dx, dy)
-
-    def _shift_inside_screen(self, dx: int, dy: int) -> tuple:
-        """Trim a head shift so the card stays on screen and in the top half."""
-        if dx == 0 and dy == 0:
+                or self._drag_pos is not None
+                or self._head_offsets.is_zero):
             return (0, 0)
         base = QRect(int(round(self._sx.value)), int(round(self._sy.value)),
                      max(1, int(round(self._sw.value))),
@@ -842,8 +840,37 @@ class NotchOverlay(QWidget):
         if screen is None:
             screen = QApplication.primaryScreen()
         if screen is None:
-            return (dx, dy)
-        return clamp_shift_to_screen(base, screen.availableGeometry(), dx, dy)
+            return (0, 0)
+        target = grid_card_rect(screen.availableGeometry(), base.size(),
+                                self._head_offsets.u, self._head_offsets.v)
+        return (target.x() - base.x(), target.y() - base.y())
+
+    def _head_home_uv(self) -> tuple:
+        """Where the card currently sits, in the tracking grid's coordinates.
+
+        Used to seed the interpolation when tracking is switched on, so the
+        card eases to the neutral region from wherever the reader parked it
+        instead of jumping there. A card parked below the midline is clamped
+        to the boundary: it has to come up into the upper half, because the
+        lower half cannot be a tracking destination.
+        """
+        base = QRect(int(round(self._sx.value)), int(round(self._sy.value)),
+                     max(1, int(round(self._sw.value))),
+                     max(1, int(round(self._sh.value))))
+        screen = None
+        try:
+            screen = QApplication.screenAt(base.center())
+        except Exception:
+            screen = None
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is None:
+            return (0.5, 0.25)
+        area = screen.availableGeometry()
+        top_h = max(1, int(round(area.height() * ht.TOP_SHARE)))
+        u = (base.center().x() - area.x()) / max(1, area.width())
+        v = (base.center().y() - area.y()) / top_h
+        return (min(1.0, max(0.0, u)), min(1.0, max(0.0, v)))
 
     def _head_layout_origin(self) -> QPoint:
         """Where the card would be standing if no head offset were applied.
@@ -856,12 +883,15 @@ class NotchOverlay(QWidget):
         return QPoint(self.x() - shift_x, self.y() - shift_y)
 
     def _set_head_tracking(self, enabled: bool) -> None:
-        """Turn the prototype on or off. Off takes effect immediately."""
+        """Turn tracking on or off. Off takes effect immediately."""
         self._head_wanted = bool(enabled)
         if not enabled:
             self._head_track_enabled = False
             self._head_motion.disable()
-            source, self._head_source = self._head_source, None
+            # Keep the source object but stop its worker. Re-enabling reuses
+            # it, which is what prevents a fast off/on from leaving one
+            # worker's handle on the device while another tries to open it.
+            source = self._head_source
             self._head_last_sample = None
             self._head_no_face_reported = False
             self._head_starting_reported = False
@@ -875,15 +905,22 @@ class NotchOverlay(QWidget):
             return
         if self._head_track_enabled and self._head_source is not None:
             return
-        source = ht.CameraHeadSource()
+        source = self._head_source
+        if source is None:
+            source = ht.CameraHeadSource()
+            self._head_source = source
         if not source.start():
-            # Another tracker in this process already owns the device. Two
-            # handles on one camera is what makes the light blink and the
-            # readings fight; refusing is the honest outcome.
+            # Another tracker in this process already owns the device, or a
+            # previous stop has not released it yet. Two handles on one camera
+            # is what makes the light blink and the readings fight; refusing
+            # is the honest outcome.
             print(f"[Notch] Head tracking off: {source.error}", flush=True)
             self._head_wanted = False
             self._head_track_enabled = False
-            self._head_source = None
+            # Keep the source. If a previous stop was still releasing the
+            # device, this object owns that worker; dropping it would leave
+            # the next enable unable to see (or retry) the handle that is
+            # still closing.
             self._schedule_save()
             return
         self._head_source = source
@@ -894,6 +931,7 @@ class NotchOverlay(QWidget):
         # Enabling is also the moment neutral is measured, so a posture
         # change between sessions does not park the text off-centre.
         self._head_motion.enable(time.monotonic())
+        self._head_motion.seed(*self._head_home_uv())
         self._head_track_enabled = True
         self._schedule_save()
         print("[Notch] Head tracking on (local camera, nothing leaves this machine)",
@@ -926,7 +964,8 @@ class NotchOverlay(QWidget):
                 # than being swallowed by the first one.
                 self._head_no_face_reported = False
                 self._head_motion.feed(sample.x, sample.y, now,
-                                       sample.gaze_x, sample.gaze_y)
+                                       sample.gaze_x, sample.gaze_y,
+                                       sample.yaw, sample.pitch)
         elif not source.ready and not self._head_starting_reported:
             # The first enable loads a face model: ~6 s on this machine, mostly
             # MediaPipe's import. Saying nothing for those seconds is what
@@ -977,7 +1016,8 @@ class NotchOverlay(QWidget):
         self._head_trace_at = now
         raw = ("none" if sample is None
                else f"{sample.x:+.3f},{sample.y:+.3f} gaze={sample.gaze_x:+.2f},"
-                    f"{sample.gaze_y:+.2f} eyes={sample.eyes}")
+                    f"{sample.gaze_y:+.2f} dir={sample.yaw:+.2f},"
+                    f"{sample.pitch:+.2f} eyes={sample.eyes}")
         age = (now - self._head_last_sample
                if self._head_last_sample is not None else -1.0)
         off = self._head_offsets
@@ -985,7 +1025,7 @@ class NotchOverlay(QWidget):
         print(f"[Notch head] t={now:9.2f} age={age:5.2f} raw={raw} "
               f"src={self._head_source.last_source:7} "
               f"cal={str(self._head_motion.calibrated):5} "
-              f"text={off.text_dx:+5.1f},{off.text_dy:+5.1f} "
+              f"region={off.region:2d} u={off.u:.3f} v={off.v:.3f} "
               f"card={shift_x:+3d},{shift_y:+3d} "
               f"win={self.x()},{self.y()}", flush=True)
 
@@ -1303,7 +1343,7 @@ class NotchOverlay(QWidget):
         self._sc_go4 = _mk("Ctrl+Shift+4", lambda: self._go_to_checkpoint(4))
         self._sc_left = _mk("Left", lambda: self._adjust_speed_dir(-1))
         self._sc_right = _mk("Right", lambda: self._adjust_speed_dir(1))
-        # One key turns the prototype off. It is a Window shortcut like the
+        # One key turns tracking off. It is a Window shortcut like the
         # rest, so typing in a note cannot toggle it.
         self._sc_head = _mk("Ctrl+Shift+H", self._toggle_head_tracking)
         self._sc_esc = QShortcut(QKeySequence("Escape"), self)
@@ -1450,7 +1490,7 @@ class NotchOverlay(QWidget):
         Handles both text scrolling AND glow animation smoothing.
         Runs at ~30 FPS.
         """
-        # 0. Head tracking, if the prototype has been switched on. Polled from
+        # 0. Head tracking, if it has been switched on. Polled from
         #    this clock rather than the camera's so the type moves at the
         #    reader's frame rate instead of stepping at the detector's.
         self._poll_head_tracking()
@@ -2367,9 +2407,7 @@ class NotchOverlay(QWidget):
         theme_layout.addWidget(theme_seg)
         theme_action = add_widget(theme_row, top=row_gap, bottom=row_gap)
 
-        # ── Head tracking: a prototype, off unless asked for ─────────
-        # Off is the default because the measurement in
-        # tests/check_head_tracking.py has not shown a meaningful gain yet.
+        # ── Head tracking: off unless asked for ──────────────────────
         # The control exists so the feature can be tried and switched off
         # again in one click (or Ctrl+Shift+H), which the brief requires.
         head_row = QWidget(menu)
@@ -2378,7 +2416,8 @@ class NotchOverlay(QWidget):
         head_layout.setSpacing(px(8))
         head_label = label("Head tracking", size=13)
         head_label.setToolTip(
-            "Moves the words with your head. Experimental; the camera is read "
+            "Moves the card between ten zones in the top half of your screen, "
+            "following your head and eyes. Experimental; the camera is read "
             "locally and never recorded.")
         head_layout.addWidget(head_label)
         head_layout.addStretch(1)
@@ -4520,9 +4559,9 @@ class NotchOverlay(QWidget):
             self._motion.jump(x=float(card.x()), y=float(card.y()),
                               w=float(card.width()), h=float(card.height()))
 
-        # Head tracking is a prototype: it is restored only when it was
-        # deliberately switched on, and a camera that is busy or absent simply
-        # leaves it off (see _poll_head_tracking).
+        # Head tracking is restored only when it was deliberately switched
+        # on, and a camera that is busy or absent simply leaves it off (see
+        # _poll_head_tracking).
         if isinstance(data.get("head_tracking"), bool):
             self._head_wanted = data["head_tracking"]
 
@@ -4716,6 +4755,13 @@ class NotchOverlay(QWidget):
         self._close_all_notes()
         self._scroll_timer.stop()
         self._stop_listening()
+        # Release the camera on every exit path. Quitting with tracking on
+        # used to leave the device held until the process died, so the next
+        # launch (or another app) saw a busy camera and the feature "failed".
+        self._set_head_tracking(False)
+        if self._head_source is not None:
+            self._head_source.stop()
+            self._head_source = None
         super().closeEvent(event)
         QApplication.quit()
 

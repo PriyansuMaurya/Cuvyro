@@ -64,11 +64,19 @@ overlay with the recordings (`--no-mic --reader` re-scores takes already in
 `%TEMP%\notch-voice`). Recordings stay local WAVs; nothing is uploaded.
 
 `tests/check_head_tracking.py` drives `HeadMotion` with explicit timestamps at
-the cadence the worker achieves (10 Hz — a 66 ms camera frame plus the search,
-not the 15 fps it asks the camera for) and measures latency, jitter, settling,
-the displacement limits and the modelled eye-rotation change, then exercises
-the reader itself (default off, card travel, on-screen clamping, immediate
-disable, camera-failure path).
+the cadence the worker achieves (14.7 Hz — a 66 ms camera frame plus the
+inference, not the 15 fps it asks the camera for). It measures all ten regions
+of the 5x2 upper-half grid, the continuity of every transition, the upper-half
+and screen bounds, calibration, dead zones, hysteresis, jitter, fusion of head
+/ iris / face direction, release, and disable. It then exercises the reader
+itself (default off, absolute region placement, on-screen clamping, immediate
+disable, camera-failure path) and drives the real worker against a simulated
+device for dropout recovery, reopen backoff, restart and no-face behaviour.
+`check_seed` pins the switch-on path: the spring is seeded from the card's
+parked position, so enabling eases to the neutral region instead of
+teleporting there. The recovery check holds the simulated device down for
+thirteen seconds as well as three, because the field report was tracking
+stopping after 10-15 s and the old worker gave up at twelve.
 
 Several of its checks exist because the feature failed in the field without
 any test failing. `check_detection_range` holds the frame size to the
@@ -77,44 +85,41 @@ detector's measured floor: the old frontal cascade needed a face box around
 320 px of frame never gave them — the detector returned nothing and the card
 never moved. That is why the frame is 640×480 and why the detector is now a
 MediaPipe landmarker, which reads a face far smaller than that.
-`check_sparse_camera` includes a camera that delivers one reading and then
+`check_calibration` includes a camera that delivers one reading and then
 stops: calibration used to be advanced only from incoming samples, so that
-state left the tracker calibrating for ever. `check_landmarks` pins the sign
-of every axis from a synthetic 478-point face (a wrong sign looks like the
-words running away, not like a bug), `check_gaze` holds gaze to its share of
-the travel and asserts that line-scanning saccades move nothing, and
-`check_gaze_feedback` models the loop where moving the card changes the gaze,
-because that is the shape that hunts from side to side if the gain is too
-high. `check_outliers` drops one wild reading and follows two that agree.
-It prints a VERDICT line. Full compensation (gain 1.0) removes ~38% of the
-modelled head-induced eye rotation and was measured, against a real reader
-swaying between comfortable leans, to pin the card against its stop for a
-fifth of a live session. At the shipped 0.45 gain it removes ~14% and the
-card stays off its stop; the verdict says MEANINGFUL at that gain and
-deliberately not maximal. The feature still ships off by default: it has now
-been watched on one machine, with a landmarker that loses a face that leaves
-the frame, and has not been watched on a second.
-Calibration starts its window at the first face sample and takes a median,
-because a camera can report a face only every second or so; it also resolves
-on a deadline in `poll`, so a stalled window cannot leave the feature inert.
-The window is rolling and only closes on a still head: a lean that fell inside
-it used to become the neutral, after which a 45 mm lean moved the card the
-full 150 DIP in the wrong direction. That is covered by `check_sparse_camera`.
+state left the tracker calibrating for ever; a polling deadline now resolves
+it. It also holds the window to a still head, because a lean captured as
+neutral turned every later lean into the wrong-direction travel.
+`check_landmarks` pins the sign of every axis — head position, iris, yaw and
+pitch — from a synthetic 478-point face, because a wrong sign looks like the
+words running away, not like a bug. `check_outliers` drops one wild reading
+and follows two that agree. `check_continuity` walks the card across all ten
+cells and asserts that no painted frame carries a snap; `check_fusion` holds
+that the eyes refine the position inside a cell but do not get a vote on
+crossing a boundary, which is the shape that hunts when the card moving toward
+a glance changes the glance. `check_jitter` includes a head hovering on a
+boundary, which is what the hysteresis is for.
 
-The worker's camera order is measured, not theoretical: DirectShow first,
-MediaFoundation as the fallback. On the machine this was fixed for, MSMF's
-constructor took 5.5 s and the first reading arrived at 11.8 s; DSHOW produced
-one in about a second, and both are shared on Windows 10+ (a second process
-opened and read the same device alongside the worker). A `stop()` that times
-out leaves `_thread` set on purpose — `running` stays true so a second source
-cannot open a second handle on a device the first has not released — and only
-one source may hold the camera at a time, which is what stops the camera light
-flickering.
+The camera worker's recovery policy is deliberate. It gives up only when the
+device has *never* opened, within twelve seconds; after a first frame it keeps
+retrying with a capped backoff, because turning the feature off after twelve
+seconds of a transient problem made tracking appear to stop after 10-15 s. It
+remembers the backend that worked (DirectShow first, MediaFoundation as the
+fallback; measured on this machine: MSMF's constructor took 5.5 s and the
+first reading arrived at 11.8 s, DSHOW about one second), so a reopen does not
+probe all three and flash the camera light. A watchdog thread releases a
+capture whose read has stopped answering, which is the only way to get an
+OpenCV read out of a blocking wait. A `stop()` that times out leaves `_thread`
+set on purpose — `running` stays true so a second source cannot open a second
+handle on a device the first has not released — and only one source may hold
+the camera at a time, which is what stops the light flickering. The reader
+reuses that source on re-enable and stops it on close.
 
 `tests/measure_head_tracking.py` is the real-device half — fresh-reading rate,
-frame cost, stillness, lean travel and gaze separation — and SKIPs when there
-is no camera or no face. It walks the subject through timed phases, so it needs
-a person in front of the lens.
+the largest gap between readings, frame cost, stillness, and a guided walk
+across all ten regions followed by a continuous phase. It needs a person in
+front of the lens; it reports the regions it actually selected and does not
+pretend a missed pose is a pass. It SKIPs when there is no camera or no face.
 
 `tests/check_design.py` asserts surface invariants against rendered pixels and
 `tests/verify_ui.py` reports window geometry. All of them build their own

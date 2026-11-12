@@ -4,11 +4,12 @@
 timestamps. This is the other half: what the device actually delivers, which
 no simulation can tell you — effective sample rate, what the landmarker costs
 per frame, how much the published position moves while a person holds still,
-and whether the reader's own pipeline turns a lean and a glance into a card
-that moves.
+whether the worker survives a long run without dropping out, and whether a
+person can actually reach all ten regions of the grid.
 
-It runs five phases and prints what to do before each one. Sit in front of the
-camera within about a metre, face it, and follow the prompts:
+It runs a still phase, a guided walk across the ten regions, and a continuous
+phase, and prints what to do before each one. Sit in front of the camera within
+about a metre, face it, and follow the prompts:
 
     .venv/Scripts/python.exe tests/measure_head_tracking.py
 
@@ -20,7 +21,6 @@ Nothing is recorded, written or sent: the worker publishes a few numbers per
 frame and this script keeps them in memory.
 """
 
-import math
 import os
 import statistics
 import sys
@@ -33,32 +33,69 @@ os.chdir(REPO_ROOT)
 
 import head_tracking as ht
 
-# (label, instruction, seconds)
-PHASES = (
-    ("still", "sit still and look straight at the words", 5.0),
-    ("look right", "look to your right, without turning your head", 3.0),
-    ("look left", "look to your left, without turning your head", 3.0),
-    ("lean right", "lean your head to the right, then hold", 3.0),
-    ("lean left", "lean your head to the left, then hold", 3.0),
-    ("still again", "sit still and look straight at the words", 3.0),
-)
+# The guided walk uses the same ten poses the deterministic check uses, but a
+# person is asked for the intent rather than a number: lean and turn toward
+# the corner, and look that way.
+_REGION_ROWS = ("top", "bottom")
+_COLUMN_HINTS = ("far left", "left", "centre", "right", "far right")
+STILL_SECONDS = 6.0
+REGION_SECONDS = 2.6
+CONTINUOUS_SECONDS = 12.0
 
 
 def skip(what, why):
     print(f"SKIP  {what} — {why}")
 
 
-def phase_prompt(label, instruction, seconds):
-    print(f"\n  >>> {label.upper()}: {instruction} ({seconds:.0f} s)", flush=True)
-    for remaining in range(int(seconds), 0, -1):
-        print(f"      {remaining}…", end="", flush=True)
-        time.sleep(1.0)
-    print()
+def status_prompt(label, instruction, seconds):
+    """Announce a phase. The measurement runs for ``seconds`` from here."""
+    print(f"\n  >>> {label.upper()}: {instruction} ({seconds:.1f} s, starting now)",
+          flush=True)
+
+
+def run_phase(source, motion, seconds, clock, fresh):
+    """Feed the real camera into the motion policy for one phase."""
+    start = time.monotonic()
+    samples = []
+    polls = 0
+    while time.monotonic() - start < seconds:
+        sample = source.read()
+        polls += 1
+        if sample is not None and (clock["stamp"] is None
+                                   or sample.stamp > clock["stamp"]):
+            clock["stamp"] = sample.stamp
+            fresh.append(sample.stamp)
+            samples.append(sample)
+            motion.feed(sample.x, sample.y, sample.stamp,
+                        sample.gaze_x, sample.gaze_y,
+                        sample.yaw, sample.pitch)
+        motion.poll(time.monotonic())
+        if source.error:
+            break
+        time.sleep(0.01)
+    return samples, polls
+
+
+def summarise(samples):
+    if not samples:
+        return None
+    return {
+        "n": len(samples),
+        "x": statistics.mean(s.x for s in samples),
+        "y": statistics.mean(s.y for s in samples),
+        "gx": statistics.mean(s.gaze_x for s in samples),
+        "gy": statistics.mean(s.gaze_y for s in samples),
+        "yaw": statistics.mean(s.yaw for s in samples),
+        "pitch": statistics.mean(s.pitch for s in samples),
+        "eyes": statistics.mean(s.eyes for s in samples),
+        "sx": statistics.pstdev([s.x for s in samples]) if len(samples) > 2 else 0.0,
+        "sy": statistics.pstdev([s.y for s in samples]) if len(samples) > 2 else 0.0,
+    }
 
 
 def main():
     source = ht.CameraHeadSource()
-    print("head + eye tracking — real device")
+    print("head + eye tracking — real device, 5x2 upper-half grid")
     print(f"requesting {source.frame_w}x{source.frame_h} at {source.fps} fps")
     print(f"model {os.path.relpath(ht.model_path(), REPO_ROOT)}")
     source.start()
@@ -89,70 +126,86 @@ def main():
     # The reader's own motion policy, fed exactly what the worker publishes.
     motion = ht.HeadMotion()
     motion.enable(now=0.0)
-    clock = 0.0
-
-    results = []
-    fresh = 0
+    clock = {"stamp": None}
+    fresh = []
+    phases = []
     polls = 0
     costs = []
-    last_stamp = None
     last_cost = 0.0
 
-    for label, instruction, seconds in PHASES:
-        if label == "still":
-            # Calibration happens on the first phase's samples, as it does in
-            # the reader: a prompt that changed posture first would be
-            # measuring the wrong neutral.
-            pass
-        phase_prompt(label, instruction, seconds)
-        start = time.monotonic()
-        samples = []
-        while time.monotonic() - start < seconds:
-            sample = source.read()
-            polls += 1
-            if sample is not None and (last_stamp is None
-                                       or sample.stamp > last_stamp):
-                last_stamp = sample.stamp
-                fresh += 1
-                samples.append(sample)
-                clock = sample.stamp
-                motion.feed(sample.x, sample.y, clock,
-                            sample.gaze_x, sample.gaze_y)
-            cost = source.detect_seconds
-            if cost and cost > 0.0 and cost != last_cost:
-                last_cost = cost
-                costs.append(cost)
-            if source.error:
-                break
-            time.sleep(0.01)
-        offsets = motion.poll(time.monotonic())
+    print("\n  The grid is the top half of the screen: five columns by two rows.")
+    print("  The card starts in the middle of the top row after calibration.")
+    status_prompt("still", "sit still and look straight at the words",
+                  STILL_SECONDS)
+    samples, count = run_phase(source, motion, STILL_SECONDS, clock, fresh)
+    polls += count
+    phases.append(("still", summarise(samples), motion.offsets()))
+    if source.error:
+        skip("guided walk", source.error)
+    if len(samples) < 3:
+        # A face that is not there for the still phase cannot walk the grid.
+        # Saying so is more useful than ten phases that all read the neutral.
+        skip("guided walk", "the camera saw no steady face during the still "
+                            "phase — sit in front of the lens and rerun")
+        print(f"tracker still running          "
+              f"{'yes' if source.running and not source.error else 'NO'}")
+        source.stop()
+        return 0
+
+    grid = ht.TrackingGrid()
+    for row, row_name in enumerate(_REGION_ROWS):
         if source.error:
             break
-        if not samples:
-            results.append((label, None))
-            continue
-        results.append((label, {
-            "n": len(samples),
-            "sx": statistics.pstdev([s.x for s in samples]) if len(samples) > 2 else 0.0,
-            "sy": statistics.pstdev([s.y for s in samples]) if len(samples) > 2 else 0.0,
-            "sgx": statistics.pstdev([s.gaze_x for s in samples]) if len(samples) > 2 else 0.0,
-            "x": statistics.mean(s.x for s in samples),
-            "y": statistics.mean(s.y for s in samples),
-            "gx": statistics.mean(s.gaze_x for s in samples),
-            "gy": statistics.mean(s.gaze_y for s in samples),
-            "eyes": statistics.mean(s.eyes for s in samples),
-            "text_x": offsets.text_dx,
-            "text_y": offsets.text_dy,
-            "offset": offsets,
-        }))
+        for column, hint in enumerate(_COLUMN_HINTS):
+            label = f"{row_name}-{hint}"
+            instruction = (
+                f"lean and turn toward the {hint} of your comfortable range, "
+                f"then {'look up' if row == 0 else 'look down'} and hold")
+            status_prompt(label, instruction, REGION_SECONDS)
+            deadline = time.monotonic() + REGION_SECONDS
+            while time.monotonic() < deadline:
+                sample = source.read()
+                polls += 1
+                if sample is not None and (clock["stamp"] is None
+                                           or sample.stamp > clock["stamp"]):
+                    clock["stamp"] = sample.stamp
+                    fresh.append(sample.stamp)
+                    motion.feed(sample.x, sample.y, sample.stamp,
+                                sample.gaze_x, sample.gaze_y,
+                                sample.yaw, sample.pitch)
+                motion.poll(time.monotonic())
+                cost = source.detect_seconds
+                if cost and cost > 0.0 and cost != last_cost:
+                    last_cost = cost
+                    costs.append(cost)
+                if source.error:
+                    break
+                time.sleep(0.01)
+            # A short settle so the spring lands before the region is read.
+            settle_until = time.monotonic() + 0.35
+            while time.monotonic() < settle_until:
+                motion.poll(time.monotonic())
+                time.sleep(0.01)
+            offsets = motion.offsets()
+            expected = row * grid.columns + column
+            print(f"      selected region {offsets.region} "
+                  f"(the {label} pose asks for {expected})")
+            phases.append((label, None, offsets))
+
+    if source.error:
+        skip("continuous phase", source.error)
+
+    status_prompt("continuous", "sit still; this checks for a mid-run dropout",
+                  CONTINUOUS_SECONDS)
+    samples, count = run_phase(source, motion, CONTINUOUS_SECONDS, clock, fresh)
+    polls += count
+    phases.append(("continuous", summarise(samples), motion.offsets()))
 
     source.stop()
     if source.error:
-        skip("second half of the run", source.error)
+        skip("end of run", source.error)
 
     # A camera the reader is not using must be free for the next application.
-    # This is the whole promise of "does not interfere with other camera apps",
-    # so it is measured rather than assumed.
     try:
         import cv2
 
@@ -163,16 +216,26 @@ def main():
     except Exception:
         skip("release check", "OpenCV unavailable")
 
-    if not any(r[1] for r in results):
+    if not fresh:
         skip("measurement", "no face readings during any phase")
         return 0
 
-    # ── Cadence ──────────────────────────────────────────────────────
+    # ── Cadence and continuity ───────────────────────────────────────
+    gaps = [b - a for a, b in zip(fresh, fresh[1:])]
     print()
-    print(f"fresh readings                 {fresh} of {polls} polls"
-          f"  ({100.0 * fresh / max(1, polls):.0f}%)")
-    print(f"gaze usable                    "
-          f"{statistics.mean(r[1]['eyes'] for r in results if r[1]):.1f} of 2 eyes")
+    print(f"fresh readings                 {len(fresh)} of {polls} polls"
+          f"  ({100.0 * len(fresh) / max(1, polls):.0f}%)")
+    if len(fresh) > 1:
+        print(f"fresh rate                     "
+              f"{len(fresh) / max(0.001, fresh[-1] - fresh[0]):.1f} Hz")
+    if gaps:
+        print(f"largest gap between readings   {max(gaps) * 1000:6.0f} ms"
+              f"  (mean {statistics.mean(gaps) * 1000:5.0f} ms)")
+        if max(gaps) > ht.LOSS_SECONDS:
+            print("  NOTE: a gap this long is a dropout; the card will release"
+                  " to the neutral region if it lasts.")
+    print(f"tracker still running          "
+          f"{'yes' if not source.error else 'NO — ' + str(source.error)}")
     if costs:
         print(f"frame cost (read + infer)      mean {statistics.mean(costs) * 1000:6.1f} ms"
               f", worst {max(costs) * 1000:6.1f} ms")
@@ -181,73 +244,60 @@ def main():
 
     # ── Per-phase ────────────────────────────────────────────────────
     print()
-    print(f"{'phase':<12}{'head x':>9}{'head y':>9}{'gaze x':>9}{'gaze y':>9}"
-          f"{'text x':>9}{'text y':>9}")
-    for label, data in results:
+    print(f"{'phase':<18}{'head x':>9}{'head y':>9}{'gaze x':>9}"
+          f"{'yaw':>9}{'pitch':>9}{'region':>8}")
+    for label, data, offsets in phases:
         if not data:
-            print(f"{label:<12}{'—':>9}")
+            print(f"{label:<18}{'—':>9}{'':>9}{'':>9}{'':>9}{'':>9}"
+                  f"{offsets.region:>8}")
             continue
-        print(f"{label:<12}{data['x']:>+9.3f}{data['y']:>+9.3f}"
-              f"{data['gx']:>+9.3f}{data['gy']:>+9.3f}"
-              f"{data['text_x']:>+9.1f}{data['text_y']:>+9.1f}")
+        print(f"{label:<18}{data['x']:>+9.3f}{data['y']:>+9.3f}"
+              f"{data['gx']:>+9.3f}{data['yaw']:>+9.3f}"
+              f"{data['pitch']:>+9.3f}{offsets.region:>8}")
 
-    def find(label):
-        return next((d for name, d in results if name == label and d), None)
+    # ── Region coverage ──────────────────────────────────────────────
+    guided = [(label, offsets) for label, data, offsets in phases
+              if label not in ("still", "continuous")]
+    expected_for = {"top-far left": 0, "top-left": 1, "top-centre": 2,
+                    "top-right": 3, "top-far right": 4,
+                    "bottom-far left": 5, "bottom-left": 6,
+                    "bottom-centre": 7, "bottom-right": 8,
+                    "bottom-far right": 9}
+    hits = 0
+    seen = set()
+    print()
+    print("  Guided region walk:")
+    for label, offsets in guided:
+        expected = expected_for.get(label, -1)
+        seen.add(offsets.region)
+        hit = offsets.region == expected
+        hits += 1 if hit else 0
+        print(f"    {label:<18} asked {expected:2d}  got {offsets.region:2d}"
+              f"  {'ok' if hit else 'MISS'}")
+    print(f"  coverage: {len(seen)}/10 regions seen, "
+          f"{hits}/{len(guided)} asked-for regions matched")
+    if len(seen) < 10:
+        print("  NOTE: the poses are a suggestion; a smaller lean, a different"
+              " distance or a tired neck can land in a neighbouring cell.")
+    if hits < len(guided):
+        print("  NOTE: this is why the full-grid walk is part of the manual"
+              " measure — it says whether the mapping matches a person, not"
+              " just a synthetic pose.")
 
-    still, again = find("still"), find("still again")
+    still = next((data for label, data, _ in phases if label == "still"), None)
     if still:
         print()
-        print(f"while still: head x stdev      {still['sx']:.4f} normalised"
-              f"  ({still['sx'] / ht.RANGE * ht.MAX_TEXT_DX:.1f} DIP if unfiltered)")
-        print(f"             gaze x stdev      {still['sgx']:.3f} of a half-eye")
-    if still and again:
-        print(f"drift between the two stills   "
-              f"x {again['x'] - still['x']:+.4f}  y {again['y'] - still['y']:+.4f}")
-
-    # ── Does a lean move the card? ───────────────────────────────────
-    right, left = find("lean right"), find("lean left")
-    if right and left:
-        travel = right["text_x"] - left["text_x"]
-        print()
-        print(f"lean right → text x            {right['text_x']:+.1f} DIP")
-        print(f"lean left  → text x            {left['text_x']:+.1f} DIP")
-        print(f"travel between the two leans   {travel:+.1f} DIP")
-        if abs(travel) < 10.0:
-            print("  NOTE: a lean this size should cross far more than 10 DIP;"
-                  " either the lean was small or the sign is wrong.")
-        elif travel < 0.0:
-            print("  NOTE: the card moved against the lean. HEAD_X_SIGN is"
-                  " inverted for this camera.")
-        else:
-            print("  the card follows the lean, in the right direction.")
-
-    # ── Does a glance bias it? ───────────────────────────────────────
-    look_r, look_l = find("look right"), find("look left")
-    if look_r and look_l:
-        print()
-        print(f"look right → gaze x            {look_r['gx']:+.3f}"
-              f"   text x {look_r['text_x']:+.1f} DIP")
-        print(f"look left  → gaze x            {look_l['gx']:+.3f}"
-              f"   text x {look_l['text_x']:+.1f} DIP")
-        spit = look_r["gx"] - look_l["gx"]
-        print(f"gaze separation                {spit:+.3f} of an eye half-width")
-        if abs(spit) < 0.10:
-            print("  NOTE: the irises barely moved — at this size the gaze"
-                  " signal is noise, and the card is right to ignore it.")
-        else:
-            # The gaze share is bounded: however far the eyes go, it is
-            # GAZE_GAIN of the travel at most.
-            limit = ht.MAX_TEXT_DX * ht.GAZE_GAIN
-            print(f"  gaze share of the travel is capped at {limit:.1f} DIP")
+        print(f"while still: head x stdev      {still['sx']:.4f} normalised")
+        print(f"             head y stdev      {still['sy']:.4f} normalised")
+        print(f"             eyes usable       {still['eyes']:.1f} of 2")
 
     print()
     print("  Reading the numbers:")
-    print("  * fresh readings are the cadence the smoother actually sees;")
+    print("  * fresh rate and the largest gap are what the smoother actually")
+    print("    sees; a gap near or above 1.2 s is a dropout;")
     print("  * frame cost is latency that cannot be smoothed away;")
-    print("  * lean travel is the card following the head, and its sign is")
-    print("    the one thing only a real person can confirm;")
-    print("  * gaze separation says whether the iris signal is usable at")
-    print("    this distance, which no synthetic face can tell you.")
+    print("  * region coverage and matches are the only check that the grid")
+    print("    makes sense to a person rather than to a synthetic face.")
     print()
     print("Camera closed; nothing was recorded.")
     return 0
