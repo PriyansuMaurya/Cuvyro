@@ -3,16 +3,28 @@
 .agents/
 .claude/
 skills-lock.json
+agent/
 
 # Python
 __pycache__/
 *.py[cod]
+*$py.class
 .venv/
 venv/
+env/
 
 # Build output
 build/
 dist/
+*.spec
+# ...except the hand-written PyInstaller spec, which is build config rather than output
+!packaging/notch.spec
+
+# IDE and OS clutter
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
 
 # Large binaries: speech/face models and installers are rebuilt, not tracked
 model/
@@ -26,6 +38,11 @@ rea-work/installer/
 rea-work/app-js/node_modules/
 rea-work/app-js/dist/
 
-# Recorded sessions and logs
+# Recorded sessions and logs (start-notch.bat writes notch-run.log)
 .sessions/
 *.log
+notch-run*.err
+head-runtime.log
+
+# One-shot patch scripts and scratch captures
+packaging/patch_*.py
