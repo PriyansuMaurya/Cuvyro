@@ -1,12 +1,12 @@
 """
-audio_worker.py — Microphone audio worker running on a QThread.
+notch.audio.worker — Microphone audio worker running on a QThread.
 
 Reads raw PCM from the microphone via sounddevice and emits volume levels
 for voice-activity-driven scrolling. Optionally uses local speech recognition
 for word alignment; volume detection always works independently.
 
 The recogniser and the voice-activity detector both come from
-``speech_engine``, which decodes on this machine only. A Silero VAD segments
+``notch.audio.speech``, which decodes on this machine only. A Silero VAD segments
 utterances, so an utterance is closed when the speaker actually stops and
 silence never reaches the recogniser.
 """
@@ -60,7 +60,7 @@ class AudioWorker(QThread):
 
         But the data is sometimes in a subfolder. If we detect that,
         we automatically use the inner folder. A sherpa-onnx model is found
-        by speech_engine wherever it sits under the same root.
+        by notch.audio.speech wherever it sits under the same root.
         """
         try:
             if not model_path:
@@ -129,8 +129,8 @@ class AudioWorker(QThread):
 
         # Recognition state (assigned in run so a load failure leaves the
         # volume meter working on its own).
-        self._engine = None          # speech_engine.StreamRecognizer
-        self._vad = None             # speech_engine.SpeechDetector
+        self._engine = None          # notch.audio.speech.StreamRecognizer
+        self._vad = None             # notch.audio.speech.SpeechDetector
         self._last_partial = ""
         self._onset_blocks = max(
             1, int(round(self.ONSET_SECONDS / self._block_seconds)))
@@ -261,10 +261,10 @@ class AudioWorker(QThread):
             return
 
         # Optional speech recogniser (use instance attrs so we can reset on
-        # unmute). speech_engine picks sherpa-onnx when its model is present
+        # unmute). notch.audio.speech picks sherpa-onnx when its model is present
         # and falls back to Vosk for an existing model folder.
         try:
-            from speech_engine import create_recognizer, create_vad
+            from notch.audio.speech import create_recognizer, create_vad
 
             model_dir = self._resolve_model_dir(self.model_path)
             # The model load costs seconds on a cold start; say so instead of
@@ -377,7 +377,7 @@ class AudioWorker(QThread):
             stream.stop()
             stream.close()
             try:
-                from speech_engine import release_recognizer
+                from notch.audio.speech import release_recognizer
                 release_recognizer(self._engine)
             except Exception:
                 pass

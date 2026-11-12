@@ -26,6 +26,7 @@ Thumbs.db
 # Run logs (start-notch.bat writes here)
 notch-run*.log
 notch-run*.err
+head-runtime.log
 
 # Local agent/skill tooling, not part of the app
 .agents/

@@ -18,8 +18,8 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen, QTextBlockFormat
 from PyQt5.QtWidgets import QAbstractButton, QMenu, QTextEdit, QWidget
 
-from spring import Spring, system_allows_motion
-from win_capture import exclude_from_capture
+from notch.platform.capture import exclude_from_capture
+from notch.ui.spring import Spring, system_allows_motion
 
 
 class GlyphButton(QAbstractButton):

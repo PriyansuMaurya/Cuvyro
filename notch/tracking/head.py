@@ -947,15 +947,14 @@ MIN_EYE_PX = 18.0
 
 
 def model_dir() -> str:
-    """Where the model lives: beside the exe when frozen, beside this file otherwise.
+    """Where the face model lives. See :func:`notch.paths.model_dir`.
 
     ``model/`` is copied next to Notch.exe by the build, not into the bundle —
-    the same rule the speech model follows — so ``__file__`` inside
-    ``_internal`` would look in the wrong place.
+    the same rule the speech model follows — so looking beside this package
+    file would find nothing in a frozen build.
     """
-    if getattr(sys, "frozen", False):
-        return os.path.join(os.path.dirname(sys.executable), "model")
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "model")
+    from notch import paths
+    return paths.model_dir()
 
 
 def model_path() -> str:

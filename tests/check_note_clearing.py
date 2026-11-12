@@ -48,7 +48,7 @@ def state_file(directory):
 
 def visible_notes():
     """Every note window currently on screen, whoever owns it."""
-    from note_window import NoteWindow
+    from notch.ui.notes import NoteWindow
 
     on_screen = []
     for widget in QApplication.topLevelWidgets():
@@ -63,8 +63,8 @@ def visible_notes():
 
 
 def make_overlay(directory):
-    import ui_overlay
-    from store import Store
+    from notch.ui import overlay as ui_overlay
+    from notch.storage.store import Store
 
     win = ui_overlay.NotchOverlay()
     win._store = Store(directory)

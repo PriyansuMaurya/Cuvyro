@@ -134,8 +134,8 @@ def check_tooltips(win):
 
 def main():
     app = QApplication(sys.argv)
-    import ui_overlay
-    from store import Store
+    from notch.ui import overlay as ui_overlay
+    from notch.storage.store import Store
 
     win = ui_overlay.NotchOverlay()
     win._store = Store(tempfile.mkdtemp(prefix="notch-design-"))
@@ -267,7 +267,7 @@ def main():
     # pixels, so the same button rendered on black and on white has to come
     # back identical. The plate used to be 6% white glass mixed over whatever
     # was behind it, which let the script's words read through the toolbar.
-    import controls
+    from notch.ui import controls
 
     samples = []
     for backdrop in ("#000000", "#FFFFFF"):

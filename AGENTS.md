@@ -15,9 +15,19 @@ diff.
 
 ## Layout
 
-App modules stay at the repository root. `tests/` holds the standalone checks,
-the screenshot harnesses and their fixture; `packaging/` holds only build
-configuration and the icon sources.
+- `notch/` is the application package, split by responsibility: `app.py` (Qt
+  startup), `ui/` (overlay, controls, dialogs, notes, motion), `audio/`
+  (microphone worker, recognition, matching), `tracking/` (camera and grid
+  motion), `platform/` (Windows hotkeys and capture exclusion), and `storage/`
+  (atomic state persistence). Shared filesystem paths live in `paths.py`.
+- `main.py` is the compatibility launcher used by `start-notch.bat` and the
+  PyInstaller spec; the real entry point is `notch.app.main` (or
+  `python -m notch`). `run.py` is the development launcher.
+- `tests/` holds the standalone checks, the screenshot harnesses and their
+  fixture. They run from the repository root and put it on `sys.path` before
+  importing `notch`.
+- `packaging/` holds only build configuration and the icon sources.
+- `assets/` and `docs/` are presentation material, not runtime code.
 
 ## Checks
 

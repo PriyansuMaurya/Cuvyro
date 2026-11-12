@@ -165,10 +165,10 @@ def share_ok(win, above, visible, slack):
 
 def main():
     app = QApplication(sys.argv)
-    import ui_overlay
-    from audio_worker import AudioWorker
-    from matching_engine import MatchingEngine
-    from store import Store
+    from notch.ui import overlay as ui_overlay
+    from notch.audio.worker import AudioWorker
+    from notch.audio.matching import MatchingEngine
+    from notch.storage.store import Store
 
     tmp = tempfile.mkdtemp(prefix="notch-voice-check-")
     win = ui_overlay.NotchOverlay()
