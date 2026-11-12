@@ -64,18 +64,33 @@ overlay with the recordings (`--no-mic --reader` re-scores takes already in
 `%TEMP%\notch-voice`). Recordings stay local WAVs; nothing is uploaded.
 
 `tests/check_head_tracking.py` drives `HeadMotion` with explicit timestamps at
-the camera's cadence and measures latency, jitter, settling, the displacement
-limits and the modelled eye-rotation change, then exercises the reader itself
-(default off, card travel, on-screen clamping, immediate disable,
-camera-failure path).
+the cadence the worker achieves (10 Hz — a 66 ms camera frame plus the search,
+not the 15 fps it asks the camera for) and measures latency, jitter, settling,
+the displacement limits and the modelled eye-rotation change, then exercises
+the reader itself (default off, card travel, on-screen clamping, immediate
+disable, camera-failure path).
+
+Two of its checks exist because the feature failed in the field without any
+test failing. `check_detection_range` holds the frame size to the detector's
+measured floor: the frontal cascade needs a face box around 56 px, so a reader
+80 cm from the lens needs roughly 93 px of head, which 320 px of frame never
+gave them — the detector returned nothing and the card never moved.
+`check_sparse_camera` includes a camera that delivers one reading and then
+stops: calibration used to be advanced only from incoming samples, so that
+state left the tracker calibrating for ever.
 It prints a VERDICT line. It read NOT MEANINGFUL while the words were capped at
 14 DIP of travel; carrying the whole card instead (150 DIP) lifts the modelled
 removal of head-induced eye rotation to ~38%, past the 25% bar, so the verdict
-now reads MEANINGFUL. It still ships off by default: a profile cascade, run also
-on a mirrored frame, keeps a turned head alive for about a second, but a face
-that leaves the frame is still a lost face and the feature has not been watched
-on a second machine. Calibration starts its window at the first face sample and
-takes a median, because a camera can report a face only every second or so.
+now reads MEANINGFUL. It still ships off by default: a profile cascade, run
+only when the frontal pass misses and on a half-size copy, keeps a turned head
+alive for about a second, but a face that leaves the frame is still a lost face
+and the feature has not been watched on a second machine. Calibration starts
+its window at the first face sample and takes a median, because a camera can
+report a face only every second or so; it also resolves on a deadline in
+`poll`, so a stalled window cannot leave the feature inert. The window is
+rolling and only closes on a still head: a lean that fell inside it used to
+become the neutral, after which a 45 mm lean moved the card the full 150 DIP
+in the wrong direction. That is covered by `check_sparse_camera`.
 `tests/measure_head_tracking.py` is the real-device half — sample rate, detector cost, stillness and drift — and SKIPs
 when there is no camera or no face.
 

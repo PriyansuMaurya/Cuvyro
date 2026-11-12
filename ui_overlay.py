@@ -566,6 +566,12 @@ class NotchOverlay(QWidget):
         self._head_last_sample: Optional[float] = None
         self._head_wanted = False
         self._head_trace_at = 0.0
+        # When the feature was switched on, and whether it has already said
+        # that it cannot see a face. Without this the only two states a user
+        # can observe are "switched on" and "switched on and nothing happens",
+        # which look identical.
+        self._head_enabled_at = 0.0
+        self._head_no_face_reported = False
         self._size_before_compact: Optional[QSize] = None
         self._font_size_before_compact = 10
 
@@ -843,6 +849,7 @@ class NotchOverlay(QWidget):
             self._head_motion.disable()
             source, self._head_source = self._head_source, None
             self._head_last_sample = None
+            self._head_no_face_reported = False
             if source is not None:
                 source.stop()
             self._head_offsets = ht.ZERO
@@ -857,6 +864,8 @@ class NotchOverlay(QWidget):
         source.start()
         self._head_source = source
         self._head_last_sample = None
+        self._head_no_face_reported = False
+        self._head_enabled_at = time.monotonic()
         # Enabling is also the moment neutral is measured, so a posture
         # change between sessions does not park the text off-centre.
         self._head_motion.enable(time.monotonic())
@@ -889,6 +898,17 @@ class NotchOverlay(QWidget):
             if self._head_last_sample is None or stamp > self._head_last_sample:
                 self._head_last_sample = stamp
                 self._head_motion.feed(sample[0], sample[1], now)
+        elif (not self._head_no_face_reported
+              and now - self._head_enabled_at >= 4.0):
+            # The camera opened and is delivering frames, but the cascade has
+            # never produced a reading. Say so once: the failure this replaces
+            # was a toggle that looked on and did nothing at all, which is
+            # indistinguishable from a broken feature and leaves the reader no
+            # way to fix it. Turning it off is still one click away.
+            self._head_no_face_reported = True
+            print("[Notch] Head tracking is on but the camera sees no face — "
+                  "sit within about a metre of the lens and face it, "
+                  "or switch head tracking off", flush=True)
         offsets = self._head_motion.poll(now)
         if offsets != self._head_offsets:
             self._head_offsets = offsets

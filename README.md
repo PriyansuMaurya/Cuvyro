@@ -82,11 +82,11 @@ chords with Windows and does nothing else with the keyboard: no key is logged,
 recorded or sent anywhere, and the chords are released when the mode changes to 
 Voice, when the setting is switched off, and when the app exits.
 
-Optional head tracking is **off by default** and experimental. When switched on it reads the webcam through MediaFoundation's shared mode where available, at 320×240 and 15 fps, so a video call can usually keep the camera. Frames are inspected in memory for a face position and then discarded: nothing is recorded, written or sent anywhere. Only two numbers leave that worker. Turning it off releases the camera immediately.
+Optional head tracking is **off by default** and experimental. When switched on it reads the webcam through MediaFoundation's shared mode where available, at 640×480 and 15 fps, so a video call can usually keep the camera. Frames are inspected in memory for a face position and then discarded: nothing is recorded, written or sent anywhere. Only two numbers leave that worker. Turning it off releases the camera immediately. If the camera cannot see a face it says so in the log instead of sitting there looking switched on and inert.
 
 The card itself then travels with your head — up to 150 px sideways and 100 px vertically, and never past the edge of your screen — so the words stay put relative to your eyes instead of leaving them.
 
-Detection runs a frontal cascade and a profile cascade, the latter also on a mirrored copy of each frame, so a face turned either way is still found. A turned head holds your last position for a second rather than sending the card home mid-read; if you really have left, the words return to where they started.
+Detection runs a frontal cascade, and only when that finds nothing a profile cascade on a half-size copy of the frame and on a mirrored copy of that, so a face turned either way is still found while a face looking at the lens costs one search instead of three. A turned head holds your last position for a second rather than sending the card home mid-read; if you really have left, the words return to where they started.
 
 ---
 

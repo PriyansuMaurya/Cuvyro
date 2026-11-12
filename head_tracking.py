@@ -13,10 +13,11 @@ Two layers, deliberately separated:
   own. Every timestamp is passed in, so the harness in
   ``tests/check_head_tracking.py`` can measure latency, jitter and stability
   deterministically instead of guessing from a live session.
-* :class:`CameraHeadSource` owns the webcam. It reads at a small frame size
-  and low rate, is fully local (nothing is written or sent anywhere; only two
-  floats ever leave the worker), and opens the device in MediaFoundation's
-  shared mode first on Windows so a video call can keep the camera.
+* :class:`CameraHeadSource` owns the webcam. It reads at the smallest frame
+  size that still finds a face at reading distance, at a low rate, is fully
+  local (nothing is written or sent anywhere; only two floats ever leave the
+  worker), and tries MediaFoundation's shared mode first on Windows so a video
+  call can keep the camera.
 
 The numbers here are the whole design, so they are named constants rather
 than magic values:
@@ -80,18 +81,30 @@ DEAD_ZONE = 0.03
 RANGE = 0.20
 # Output hysteresis, in DIP. Raised with the travel: at 150 DIP the same
 # smoothed noise would put a 7 DIP tremble on a still head, which reads as the
-# card shivering. Two DIP is 1.3% of the travel — invisible, and still 75
-# positions per side, so a real lean is not quantised into steps you can see.
-MOVE_THRESHOLD = 2.0
+# card shivering. Three DIP is 2% of the travel — 1.2 mm on the glass, below
+# what a reader can see — and still 50 positions a side, so a real lean is not
+# quantised into steps you can see either.
+MOVE_THRESHOLD = 3.0
 # One-Euro smoothing: how much of a *fast* move is let through. The cutoff
 # rises with speed, so a slow drift is filtered hard and a real turn is not.
-# Lowered from 2.2 for the longer travel: the same smoothed noise now covers
-# ten times the distance, so the rest state has to be stiller than it was.
-# Measured: 0.9 leaves a 7 DIP tremble, 0.4 a 3 DIP one, and the 90% latency is
-# 133 ms either way — the speed term, not this, sets the response to a lean.
-SMOOTH_MIN_CUTOFF = 0.4
-SMOOTH_BETA = 0.5
-SMOOTH_D_CUTOFF = 1.0
+#
+# These were 0.4 / 0.5 / 1.0, and the measured consequence was that a real
+# 45 mm lean (0.12 of a half-frame) took 783 ms to reach 90% of its travel on
+# the cadence this machine actually runs — 9.3 Hz, because a frame is
+# 66 ms of camera plus ~47 ms of detection. The old harness reported 167 ms
+# only because it measured a 0.55 step, four times a head lean, which saturates
+# the range and makes the speed term open the filter wide. Nobody moves their
+# head 0.55 of a half-frame.
+#
+# Re-measured over the range of lean sizes at that cadence, with the tremble
+# modelled on the noise the cascade actually shows (0.0125 peak to peak),
+# 0.7 / 3.2 / 6.0 gives 267 ms for a 45 mm lean and 4.5 DIP of tremble against
+# the 6 DIP two-step bar; 0.4 keeps the tremble under 3.5 DIP but puts the lean
+# back at 333 ms. The speed terms are what move; the rest cutoff is what stops
+# the words breathing, and 0.7 is the highest that keeps a still head still.
+SMOOTH_MIN_CUTOFF = 0.7
+SMOOTH_BETA = 3.2
+SMOOTH_D_CUTOFF = 6.0
 
 # How long the render clock takes to walk to a new target, in seconds. This
 # is what turns 15 camera samples a second into motion at the reader's frame
@@ -304,15 +317,33 @@ class HeadMotion:
                 # switch was flipped: the camera takes a second or two to open,
                 # and a window that expired during that would stand no chance.
                 self._calib_started = now
-            self._calib_samples.append((x, y))
+            self._calib_samples.append((now, x, y))
+            # Rolling window: only the last ``calibrate_seconds`` of readings
+            # describe where this reader's head is now. Until this was a
+            # window at all, a lean that happened to fall inside it became the
+            # neutral, and every later reading was measured against it — the
+            # card then sat offset, moved by the wrong amount and pinned itself
+            # against its limit. Measured in a live run: a 45 mm lean captured
+            # as neutral turned the next 45 mm into the full 150 DIP in the
+            # opposite direction.
+            horizon = now - self.calibrate_seconds
+            while (len(self._calib_samples) > 1
+                   and self._calib_samples[0][0] < horizon):
+                self._calib_samples.pop(0)
             elapsed = now - self._calib_started
             enough = len(self._calib_samples) >= CALIBRATE_MIN_SAMPLES
-            if elapsed >= self.calibrate_seconds and enough:
+            # A neutral measured while the head was moving is worse than no
+            # neutral at all, so the window only closes on a still head.
+            if (elapsed >= self.calibrate_seconds and enough
+                    and self._calibration_is_still()):
                 self._finish_calibration()
-            elif elapsed >= self.calibrate_seconds * 3.0 and self._calib_samples:
+            elif (elapsed >= self.calibrate_seconds * 4.0
+                  and self._calib_samples):
                 # A camera that reports a face only every second or so would
-                # otherwise wait for six samples forever, leaving the feature
-                # silently inert — the worst outcome available.
+                # otherwise wait for six samples for ever, leaving the feature
+                # silently inert — the worst outcome available. Bounded so a
+                # reader who will not hold still still gets tracking, on the
+                # best neutral available.
                 self._finish_calibration()
             else:
                 return
@@ -323,6 +354,18 @@ class HeadMotion:
         shaped_y = _through_dead_zone(rel_y, self.dead_zone, self.full_range)
         self._target = (shaped_x * self.max_dx, shaped_y * self.max_dy)
 
+    def _calibration_is_still(self) -> bool:
+        """Whether the window describes a head that is holding still.
+
+        The bar is the dead zone itself: a spread the tracker would not have
+        moved for anyway cannot make the neutral wrong in a way the reader
+        could see.
+        """
+        xs = [sample[1] for sample in self._calib_samples]
+        ys = [sample[2] for sample in self._calib_samples]
+        return (max(xs) - min(xs) <= self.dead_zone
+                and max(ys) - min(ys) <= self.dead_zone)
+
     def _finish_calibration(self) -> None:
         """Take the neutral as the middle sample, not the average.
 
@@ -331,8 +374,8 @@ class HeadMotion:
         difference between a neutral that works and one that leaves the words
         parked against the stop.
         """
-        xs = sorted(sample[0] for sample in self._calib_samples)
-        ys = sorted(sample[1] for sample in self._calib_samples)
+        xs = sorted(sample[1] for sample in self._calib_samples)
+        ys = sorted(sample[2] for sample in self._calib_samples)
         self._neutral_x = xs[len(xs) // 2]
         self._neutral_y = ys[len(ys) // 2]
         self._calibrating = False
@@ -355,6 +398,18 @@ class HeadMotion:
             return self._offsets
         dt = max(0.0, now - self._polled_at)
         self._polled_at = now
+
+        # A calibration window that filled before the samples arrived must
+        # still resolve. It used to be advanced only from ``feed``, so a camera
+        # that delivered a reading and then nothing left the tracker
+        # calibrating for ever — switched on, visibly doing nothing, with no
+        # error to report. Polling is the clock that cannot stop, so the
+        # deadline is enforced here too. The neutral is the median of whatever
+        # did arrive, which is the best available answer when there is one
+        # reading and no way to ask for another.
+        if (self._calibrating and self._calib_samples
+                and now - self._calib_started >= self.calibrate_seconds * 4.0):
+            self._finish_calibration()
 
         if now - self._last_sample > self.loss_seconds:
             # No face: release. Slower than a normal frame, so a blink or a
@@ -503,14 +558,22 @@ class CameraHeadSource:
       pretend to track.
     """
 
-    # 320x240 at 15 fps. The arithmetic that picks it: at ~50 cm a webcam with
-    # a 60° horizontal view sees ~58 cm across, so a 14 cm face is ~77 px wide
-    # here and only ~39 px at 160 px wide — right on the detector's floor, and
-    # a face that misses the floor is a feature that silently never engages.
-    # The whole frame costs about 5 ms to search at this size, against a 67 ms
-    # budget, so the larger frame is not a trade against latency.
-    FRAME_W = 320
-    FRAME_H = 240
+    # 640x480 at 15 fps. This was 320x240, chosen on the arithmetic that a
+    # 14 cm face at 50 cm is ~77 px wide there and that the cascade's floor is
+    # the configured MIN_FACE of 40. Measured against the shipped cascade, the
+    # floor is not 40: it needs a face box around 56 px before it reports
+    # anything with minNeighbors=5. At 320 wide a reader 70-80 cm back gives a
+    # 62-71 px head, which is below that floor, so the detector returned no
+    # face at all — and a feature that never sees a face is a feature that
+    # silently does nothing, which is how this one failed in the field.
+    #
+    # At 640x480 the same reader is 124-142 px, comfortably inside the range:
+    # a sweep of head heights from 84 to 252 px detected in every case, which
+    # covers roughly 40 cm to 1.2 m. The frame costs ~33 ms to search against
+    # a 67 ms budget; the profile cascade is no longer run on frames that
+    # already found a face (see ``_run``), which is what pays for the area.
+    FRAME_W = 640
+    FRAME_H = 480
     FPS = 15
     MIN_FACE = 40
     # How long a profile detection may hold the last known position without a
@@ -675,7 +738,6 @@ class CameraHeadSource:
             # the last position alive, but only for a while: a reader who has
             # genuinely turned away should get their words back.
             last_frontal = 0.0
-            frame_w = int(round(width))
             while not self._stop.is_set():
                 started = time.monotonic()
                 ok, frame = capture.read()
@@ -696,13 +758,34 @@ class CameraHeadSource:
                         grey, scaleFactor=1.2, minNeighbors=5,
                         minSize=(self.MIN_FACE, self.MIN_FACE),
                     )
-                    if profile is not None:
+                    # The profile cascade only matters on a miss: when the
+                    # frontal pass found a face its boxes are discarded below,
+                    # so running it anyway spent ~25 ms of a 67 ms frame on
+                    # two searches whose answer was thrown away — CPU taken
+                    # straight from the speech recogniser. It now runs only
+                    # when the face is actually turned or gone, at half scale,
+                    # which is enough to keep a turned head alive and costs
+                    # nothing on the frames that matter for movement.
+                    if not len(faces) and profile is not None:
+                        half = cv2.resize(
+                            grey,
+                            (max(1, grey.shape[1] // 2),
+                             max(1, grey.shape[0] // 2)),
+                            interpolation=cv2.INTER_AREA,
+                        )
+                        small = max(8, self.MIN_FACE // 2)
                         kwargs = {"scaleFactor": 1.15, "minNeighbors": 4,
-                                  "minSize": (self.MIN_FACE, self.MIN_FACE)}
-                        profiles = list(profile.detectMultiScale(grey, **kwargs))
-                        flipped = cv2.flip(grey, 1)
+                                  "minSize": (small, small)}
+                        profiles = list(
+                            profile.detectMultiScale(half, **kwargs))
+                        flipped = cv2.flip(half, 1)
                         for box in profile.detectMultiScale(flipped, **kwargs):
-                            profiles.append(flip_box(box, frame_w))
+                            profiles.append(flip_box(box, half.shape[1]))
+                        # Back into frame pixels, the units every other box in
+                        # this loop is in.
+                        profiles = [(int(x * 2), int(y * 2),
+                                     int(w * 2), int(h * 2))
+                                    for (x, y, w, h) in profiles]
                 except Exception:
                     faces, profiles = (), ()
                 frame_cost = time.monotonic() - started

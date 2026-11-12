@@ -33,7 +33,11 @@ os.chdir(REPO_ROOT)
 import head_tracking as ht
 
 failures = []
-CAMERA_HZ = 15.0
+# The cadence the worker actually achieves, not the rate it asks the camera
+# for: a frame is 66 ms of camera plus ~47 ms of detection on the machine this
+# was measured on, which is 9-10 samples a second. Driving these checks at the
+# requested 15 Hz made every latency number 30% better than the reader's.
+CAMERA_HZ = 10.0
 FRAME_HZ = 60.0
 
 
@@ -202,7 +206,11 @@ def check_latency():
     # Converge first so the step is measured from rest.
     drive(motion, t, 1.0, (0.0, 0.0))
     t += 1.0
-    step_to = 0.55
+    # A real lean, not a body shift: 0.12 of a half-frame is about 45 mm at a
+    # laptop, and it is the size that decides whether the words feel attached.
+    # This used to be 0.55, which saturates the range and makes the speed term
+    # open the filter wide, so it measured 167 ms while 45 mm took 783 ms.
+    step_to = 0.12
     samples = drive(motion, t, 2.0, (step_to, 0.0))
     final = samples[-1][1].text_dx
     if final <= 0.0:
@@ -212,8 +220,8 @@ def check_latency():
     reached = next((s for s, o in samples if abs(o.text_dx) >= threshold), None)
     latency = (reached - t) if reached is not None else float("inf")
     report("90% latency", latency * 1000.0, " ms")
-    check("a head move reaches the text quickly enough to feel direct",
-          latency <= 0.30, f"{latency * 1000.0:.0f} ms")
+    check("a real 45 mm lean reaches the text quickly enough to feel direct",
+          latency <= 0.35, f"{latency * 1000.0:.0f} ms")
 
     # A big move is allowed to be quicker than a small one: the 1€ filter
     # deliberately opens up for speed.
@@ -221,7 +229,7 @@ def check_latency():
     t = calibrate(motion)
     drive(motion, t, 1.0, (0.0, 0.0))
     t += 1.0
-    samples = drive(motion, t, 2.0, (1.0, 0.0))
+    samples = drive(motion, t, 2.0, (0.55, 0.0))
     final = samples[-1][1].text_dx
     reached = next((s for s, o in samples if abs(o.text_dx) >= 0.9 * final), None)
     fast = (reached - t) if reached is not None else float("inf")
@@ -244,9 +252,10 @@ def check_jitter():
     hold = ht.DEAD_ZONE + (ht.RANGE - ht.DEAD_ZONE) * 0.4
     drive(motion, t, 1.5, (hold, hold * 0.6))
     t += 1.5
-    # ±0.015 normalised is a face box wobbling two or three pixels on the
-    # 160 px frame this app uses — what a Haar detector actually does frame
-    # to frame. Un-smoothed, that would swing the text by 3.5 DIP.
+    # ±0.015 normalised is a face box wobbling five pixels on the half-frame
+    # of the 640 px frame this app uses — measured against the shipped cascade
+    # it wobbles 0.003 stdev over a noisy sensor, and a hold that saturates
+    # the range would not be a test of the smoother at all.
     noise = 0.015
     samples = drive(motion, t, 4.0,
                     lambda now: (hold + noise * math.sin(now * 17.3),
@@ -334,6 +343,34 @@ def check_neutral():
           f"peak {peak:.3f} DIP")
 
 
+def check_detection_range():
+    """The frame must be big enough for the detector to see a reader.
+
+    Measured against the shipped frontal cascade at minNeighbors=5: it needs a
+    face box around 56 px before it reports anything, and the box is roughly
+    0.6 of the head. This check encodes that as arithmetic, because the failure
+    it guards against is invisible — at 320 px wide a reader 70-80 cm back
+    projected to 62-71 px, the cascade found nothing at all, and the feature
+    sat switched on doing nothing with no error to show for it.
+    """
+    face_cm = 14.0          # a narrow adult face, temple to temple
+    distance_cm = 80.0      # a laptop at the far end of a comfortable sit
+    hfov = math.radians(60.0)
+    visible_cm = 2.0 * distance_cm * math.tan(hfov / 2.0)
+    projected = face_cm * ht.CameraHeadSource.FRAME_W / visible_cm
+    report("a 14 cm face at 80 cm projects to", projected, " px")
+    check("a reader at 80 cm is above the detector's measured floor",
+          projected >= 90.0,
+          f"{projected:.0f} px against a ~56 px box floor "
+          f"(head needs ~93 px)")
+    # And the frame it reads must not be so large that the search blows the
+    # frame budget; 640x480 measures ~33 ms against a 67 ms interval.
+    check("the frame is not so large that the search cannot keep up",
+          ht.CameraHeadSource.FRAME_W <= 640
+          and ht.CameraHeadSource.FRAME_H <= 480,
+          f"{ht.CameraHeadSource.FRAME_W}x{ht.CameraHeadSource.FRAME_H}")
+
+
 def check_sparse_camera():
     """A camera that reports a face only now and then must still calibrate.
 
@@ -370,16 +407,54 @@ def check_sparse_camera():
           abs(moved.text_dx) > 1.0, f"text {moved.text_dx:.1f} DIP")
 
     # One bad box must not become the neutral: the median is the middle
-    # sample, the mean would be dragged by the outlier.
+    # sample, the mean would be dragged by the outlier. The stray is fed and
+    # then allowed to age out of the rolling window, which is also what a
+    # single misdetected frame does in a live session.
     median = ht.HeadMotion()
     median.enable(now=0.0)
     readings = [(0.10, 0.10), (0.12, 0.12), (0.11, 0.11),
                 (-0.90, -0.90), (0.11, 0.11), (0.10, 0.10)]
     for index, (x, y) in enumerate(readings):
-        median.feed(x, y, index * 0.28)
+        median.feed(x, y, index * 0.14)
+    check("a stray box alone does not close the window",
+          not median.calibrated, "calibrated on a window containing a 0.9 outlier")
+    for step in range(1, 14):
+        median.feed(0.11, 0.11, 0.84 + step * 0.14)
     check("one stray box does not become the neutral",
-          abs(median._neutral_x - 0.11) < 1e-9,
+          median.calibrated and abs(median._neutral_x - 0.11) < 1e-9,
           f"neutral x {median._neutral_x:+.3f}")
+
+    # And a lean that happens to fall inside the window must not become the
+    # neutral either: that is the failure a live run showed, where a 45 mm lean
+    # captured as neutral turned the next 45 mm into the full travel the other
+    # way. The window only closes once the head is still.
+    moving = ht.HeadMotion()
+    moving.enable(now=0.0)
+    for step in range(20):
+        moving.feed(-0.5 + step * 0.05, 0.0, step / CAMERA_HZ)
+    check("a moving head does not close the calibration window",
+          not moving.calibrated, "calibrated while sweeping")
+    held = 20 / CAMERA_HZ
+    for step in range(1, 40):
+        moving.feed(0.45, 0.0, held + step / CAMERA_HZ)
+    check("and the neutral is where the head actually stopped",
+          moving.calibrated and abs(moving._neutral_x - 0.45) < 1e-9,
+          f"neutral x {moving._neutral_x:+.3f} after stopping at +0.450")
+
+    # A single reading and then silence: the camera delivered one face and
+    # nothing after it. Calibration used to be advanced only from feed(), so
+    # this left the tracker calibrating for ever — switched on, doing
+    # nothing, with no error to report. Polling has to be able to end it.
+    stalled = ht.HeadMotion()
+    stalled.enable(now=0.0)
+    stalled.feed(0.05, 0.02, 0.0)
+    for step in range(int(6.0 * FRAME_HZ)):
+        stalled.poll(step / FRAME_HZ)
+    check("a camera that delivers one reading and stops still stops calibrating",
+          stalled.calibrated, "still calibrating with no further samples")
+    check("and the reading it did get is what it calibrated against",
+          abs(stalled._neutral_x - 0.05) < 1e-9,
+          f"neutral x {stalled._neutral_x:+.3f}")
 
 
 def check_disable():
@@ -729,7 +804,8 @@ def main():
     print()
     for step in (check_stillness, check_dead_zone, check_limits, check_carry,
                  check_latency, check_jitter, check_stability, check_face_loss,
-                 check_neutral, check_sparse_camera, check_disable,
+                 check_neutral, check_detection_range, check_sparse_camera,
+                 check_disable,
                  check_eye_contact,
                  check_turned_heads, check_local_only, check_integration):
         step()
