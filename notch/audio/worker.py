@@ -233,6 +233,68 @@ class AudioWorker(QThread):
             pass  # drop-outs are non-fatal
         self._audio_queue.put(bytes(indata))
 
+    def _process_block(self, data: bytes) -> None:
+        """Meter, segment and decode one block of audio.
+
+        The audio loop calls this for every block the microphone delivers. A
+        replay of a recorded session calls it with blocks from the file, so a
+        recording is measured by exactly the code that hears a live voice —
+        the voice-activity state machine, the onset buffer and the utterance
+        final that the reader's highlight depends on.
+        """
+        # ── Volume metering ──────────────────────────────────────────
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+        rms = np.sqrt(np.mean(samples ** 2)) / 32768.0
+        rms = min(rms * self.input_gain, 1.0)
+        level = min(rms * 5.0, 1.0)  # amplified for UI
+        self.volume_level_signal.emit(level)
+
+        # ── Voice activity ───────────────────────────────────────────
+        # Silero VAD when available: it hears speech through room noise that
+        # an RMS gate mistakes for a voice, and its trailing-silence window is
+        # the utterance boundary.
+        speech: Optional[bool] = None
+        utterance_ended = False
+        if self._vad is not None and not self._muted:
+            try:
+                speech, utterance_ended = self._vad.accept(data)
+            except Exception:
+                speech, utterance_ended = None, False
+
+        if speech is not None:
+            if speech:
+                self._silence_frames = 0
+                if not self._is_speaking:
+                    self._is_speaking = True
+                    self.speaking_signal.emit(True)
+            else:
+                self._silence_frames += 1
+                # The end of the pause, not the first silent block: the glow
+                # stays lit through a breath mid-sentence.
+                if self._is_speaking and (
+                        utterance_ended
+                        or self._silence_frames >= self._silence_threshold):
+                    self._is_speaking = False
+                    self.speaking_signal.emit(False)
+            if utterance_ended and not self._muted:
+                self._close_utterance()
+        elif rms >= self.noise_gate:
+            # No VAD model: the RMS gate stands in for it.
+            self._silence_frames = 0
+            if not self._is_speaking:
+                self._is_speaking = True
+                self.speaking_signal.emit(True)
+        else:
+            self._silence_frames += 1
+            if (self._is_speaking
+                    and self._silence_frames >= self._silence_threshold):
+                self._is_speaking = False
+                self.speaking_signal.emit(False)
+
+        # ── Speech recognition (optional) ────────────────────────────
+        if self._engine is not None and not self._muted:
+            self._feed_recognizer(data, speech)
+
     # ── Main thread loop ─────────────────────────────────────────────
     def run(self):
         self._running = True
@@ -322,57 +384,7 @@ class AudioWorker(QThread):
                         except queue.Empty:
                             break
 
-                # ── Volume metering ──────────────────────────────────
-                samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-                rms = np.sqrt(np.mean(samples ** 2)) / 32768.0
-                rms = min(rms * self.input_gain, 1.0)
-                level = min(rms * 5.0, 1.0)  # amplified for UI
-                self.volume_level_signal.emit(level)
-
-                # ── Voice activity ───────────────────────────────────
-                # Silero VAD when available: it hears speech through room
-                # noise that an RMS gate mistakes for a voice, and its
-                # trailing-silence window is the utterance boundary.
-                speech: Optional[bool] = None
-                utterance_ended = False
-                if self._vad is not None and not self._muted:
-                    try:
-                        speech, utterance_ended = self._vad.accept(data)
-                    except Exception:
-                        speech, utterance_ended = None, False
-
-                if speech is not None:
-                    if speech:
-                        self._silence_frames = 0
-                        if not self._is_speaking:
-                            self._is_speaking = True
-                            self.speaking_signal.emit(True)
-                    else:
-                        self._silence_frames += 1
-                        # The end of the pause, not the first silent block:
-                        # the glow stays lit through a breath mid-sentence.
-                        if self._is_speaking and (
-                                utterance_ended
-                                or self._silence_frames >= self._silence_threshold):
-                            self._is_speaking = False
-                            self.speaking_signal.emit(False)
-                    if utterance_ended and not self._muted:
-                        self._close_utterance()
-                elif rms >= self.noise_gate:
-                    # No VAD model: the RMS gate stands in for it.
-                    self._silence_frames = 0
-                    if not self._is_speaking:
-                        self._is_speaking = True
-                        self.speaking_signal.emit(True)
-                else:
-                    self._silence_frames += 1
-                    if self._is_speaking and self._silence_frames >= self._silence_threshold:
-                        self._is_speaking = False
-                        self.speaking_signal.emit(False)
-
-                # ── Speech recognition (optional) ───────────────────
-                if self._engine is not None and not self._muted:
-                    self._feed_recognizer(data, speech)
+                self._process_block(data)
         finally:
             stream.stop()
             stream.close()
