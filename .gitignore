@@ -39,3 +39,8 @@ packaging/patch_*.py
 
 # Local speech model (downloaded by the installer build)
 model/
+
+# Recorded microphone sessions (tests/check_predictive_speech.py --live)
+# Kept out of git: they are one person's voice, and a replay fixture should be
+# copied somewhere deliberate if it is meant to be shared.
+.sessions/

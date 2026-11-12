@@ -40,6 +40,9 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_note_clearing.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_note_placement.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_head_tracking.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_predictive_highlight.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/bench_predictive_highlight.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_predictive_speech.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/profile_reading.py
 .venv/Scripts/python.exe tests/check_design.py      # needs a real display
 .venv/Scripts/python.exe tests/check_quality.py     # needs a real display
@@ -63,6 +66,20 @@ and pause to `notch.log` beside the executable; nothing is written without it.
 and reports SKIP when `model/` has none. `tests/bench_speech_engines.py` is the
 benchmark that chose the engine; it synthesises its fixtures with the local
 SAPI voices and needs no network.
+
+`tests/check_predictive_highlight.py` scores the anticipatory layer: adaptive
+rate, pause freeze, line bound, anti-flicker, profile persistence, theme
+contrast and update cost. `tests/bench_predictive_highlight.py` runs a known
+speaker timeline through the predictor and reports coverage, lead, precision,
+flicker, pause growth and per-update/paint latency; it is the number the
+tuning constants in `notch/audio/predict.py` are chosen against.
+`tests/check_predictive_speech.py` decodes three SAPI sentences with the real
+model in wall-clock time and drives the real overlay. `--live` uses the
+production microphone worker for a real reading and records it, and
+`--replay <session>` decodes that recording again through the same recogniser,
+which is how one human reading becomes a repeatable real-audio benchmark.
+Sessions land in `.sessions/` (ignored by git). The design and measured
+results are in `docs/predictive-highlight.md`.
 
 `tests/profile_reading.py` drives the real overlay offscreen at recogniser
 cadence and reports frame cadence, result-to-paint latency, CPU and working

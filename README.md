@@ -38,6 +38,7 @@ No cloud. No API keys. No uploading your script or voice.
 | Feature | Description |
 | :--- | :--- |
 | **Voice follow** | Scrolls with your speech so the script moves when you talk and settles when you pause. |
+| **Predictive highlighting** | Anticipates the next word or phrase from your speaking rate, instead of shading only words the recogniser has already confirmed. |
 | **Invisible in capture workflows** | Built to stay out of screen recordings and video calls while you present. |
 | **Smooth reading motion** | Uses tuned spring-based scrolling so movement feels natural and easy to track. |
 | **Offline speech processing** | Runs locally without sending your script or voice to the cloud. |
@@ -76,6 +77,10 @@ No cloud. No API keys. No uploading your script or voice.
 Notch is built for local-first use. Audio processing happens on your machine, and the app is designed around offline teleprompting rather than cloud transcription workflows.
 
 Speech recognition runs from a model on disk (sherpa-onnx with a Silero voice-activity detector, or a local Vosk model as the fallback). There is no network path for microphone audio, transcripts or your script: `tests/check_speech_engine.py` fails if loading or decoding tries to open a socket.
+
+The predictive highlight learns only aggregate timings — words per second, pause length and five duration weights — and keeps them in `speaking-profile.json` beside the reader's state. No audio, transcript or script is stored there, and deleting the file simply resets the estimate to the default pace.
+
+Nothing in the app records audio. The optional measurement `tests/check_predictive_speech.py --live` does: it writes the reading and its numbers into `.sessions/` so the run can be replayed through the same recogniser, and that folder is ignored by git.
 
 Global keys are **off by default** and opt-in. When switched on, Notch registers three 
 chords with Windows and does nothing else with the keyboard: no key is logged, 

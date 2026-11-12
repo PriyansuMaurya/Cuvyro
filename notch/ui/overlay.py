@@ -28,6 +28,9 @@ from PyQt5.QtWidgets import (
 
 from notch import paths
 from notch.audio.matching import MatchingEngine
+from notch.audio.predict import (
+    PredictiveHighlighter, ProfileStore as PredictionProfileStore,
+)
 from notch.audio.worker import AudioWorker
 from notch.platform import hotkeys as hk
 from notch.platform.capture import exclude_from_capture
@@ -542,6 +545,15 @@ class NotchOverlay(QWidget):
     READING_SHARE = 0.30
     # Words given the "being spoken" band behind the line.
     FOCUS_WORDS = 3
+    # Anticipated words carry accent type and a rule under it. They are a
+    # separate tier from the spoken band on purpose: a tinted background on
+    # words that have not been said would compete with the one band that marks
+    # where the voice actually is. Both colours clear 7:1 against the card.
+    PREDICTED_DARK = "#8FB4FF"
+    PREDICTED_LIGHT = "#0B47C4"
+    # The prediction is recomputed at 20 Hz. Faster changes nothing the eye can
+    # follow and would repaint the document for no reason.
+    PREDICTION_INTERVAL = 0.05
 
     def __init__(self):
         super().__init__()
@@ -647,6 +659,11 @@ class NotchOverlay(QWidget):
         self._script_text = ""
         self._notes: list[NoteWindow] = []
         self._store = Store()
+        # Prediction is a paint-only layer. It reads the same recogniser
+        # results as the matcher, learns aggregate timings locally, and never
+        # moves the reading line or the scroll target.
+        self._predictor = PredictiveHighlighter(
+            PredictionProfileStore(self._store.directory))
         self._state_restored = False
         # Kept apart from ``_state_restored``: settings are applied before the
         # script, and one flag for both would make the second restore bail
@@ -685,6 +702,9 @@ class NotchOverlay(QWidget):
         self._highlight_end = None
         self._highlight_key = None
         self._focus_span = None   # character range of the banded words
+        self._predicted_word = None  # last script word to anticipate
+        self._predicted_span = None  # character range of the anticipated run
+        self._prediction_at = 0.0
 
         # ── Scroll motion ────────────────────────────────────────────
         # The script glides on a critically damped spring instead of an
@@ -1117,6 +1137,8 @@ class NotchOverlay(QWidget):
             cleared = bool(script_changed and not new_text.strip())
             self._script_text = new_text
             self._matching.load_script(self._script_text)
+            self._predictor.set_script(self._matching.raw_words)
+            self._predicted_word = None
             if cleared:
                 # The script the notes were written under is gone. Saving
                 # instead would keep them in the file and reopen them over the
@@ -1145,6 +1167,7 @@ class NotchOverlay(QWidget):
             self._apply_read_mode_style()
             self._highlight_key = None  # the editor rewrote the document
             self._focus_span = None
+            self._predicted_span = None
             self._apply_highlight(-1)
             self._refresh_lines()
             if script_changed:
@@ -1516,6 +1539,16 @@ class NotchOverlay(QWidget):
         if self._voice_mode and self._step_reading_line():
             self._apply_highlight(self._display_word())
 
+        # Advance the anticipatory lead on time alone. This is what keeps the
+        # highlight ahead of a speaker whose next recogniser result is late;
+        # a paused reader freezes it (see PredictiveHighlighter.speech_stopped).
+        if self._voice_mode:
+            now = time.monotonic()
+            if now - self._prediction_at >= self.PREDICTION_INTERVAL:
+                self._prediction_at = now
+                if self._update_prediction(now):
+                    self._apply_highlight(self._display_word())
+
         if self._voice_mode:
             # Voice follow owns the scrollbar: a new line is a new target and
             # the spring carries the page there. A manual wheel gets a short
@@ -1619,7 +1652,21 @@ class NotchOverlay(QWidget):
 
     @pyqtSlot(bool)
     def _on_speaking_changed(self, is_speaking):
+        """Voice activity starts and freezes the anticipatory lead.
+
+        The predictor is told on both edges so a breath freezes the painted
+        run instead of letting it advance on elapsed time, and a new utterance
+        starts from a fresh lead instead of inheriting the pause.
+        """
+        was_speaking = self._is_speaking
         self._is_speaking = is_speaking
+        now = time.monotonic()
+        if is_speaking and not was_speaking:
+            self._predictor.speech_started(now)
+        elif not is_speaking and was_speaking:
+            self._predictor.speech_stopped(now)
+        if self._update_prediction(now):
+            self._apply_highlight(self._display_word())
 
     @pyqtSlot(float)
     def _on_volume_level(self, level):
@@ -1850,6 +1897,46 @@ class NotchOverlay(QWidget):
         )
         return aligned.last_word if aligned is not None else None
 
+    def _observe_prediction(self, position: int, is_final: bool):
+        """Feed one confirmed word boundary to the local rate model.
+
+        Every partial advance matters, not just a line's last word: waiting
+        for the end of a line would leave the model blind for the whole line.
+        Observation is ignored unless a speech session is active, so a test
+        that drives the recogniser slot directly never writes a profile.
+        """
+        self._predictor.observe(position, time.monotonic(), is_final)
+        if self._predictor.should_save():
+            self._predictor.save()
+
+    def _update_prediction(self, now: Optional[float] = None) -> bool:
+        """Recalculate the anticipated run; True when the span changed.
+
+        The lead is bounded by the rendered line on screen. That is the whole
+        safety property: prediction may repaint upcoming words, but it cannot
+        make the line advance, change the 30/70 anchor or move the scrollbar.
+        """
+        previous = self._predicted_word
+        if (not self._voice_mode or self._edit_mode or not self._line_spans
+                or not self._script_text):
+            self._predicted_word = None
+            return self._predicted_word != previous
+        moment = time.monotonic() if now is None else now
+        if not self._predictor.active(moment):
+            self._predicted_word = None
+            return self._predicted_word != previous
+        line = self._line_spans[self._current_line]
+        spoken = self._display_word()
+        base = max(spoken, line.first_word - 1)
+        # The word after the line break is already visible below, so it is a
+        # legitimate anticipation even before the line itself steps. Passing
+        # line.last_word + 1 lets the predictor reach exactly that word and
+        # no further; the scroll is still untouched.
+        line_limit = min(self._matching.word_count - 1, line.last_word + 1)
+        self._predicted_word = self._predictor.prediction(
+            base, line_limit, moment, speaking=self._is_speaking)
+        return self._predicted_word != previous
+
     def _display_word(self) -> int:
         """How far to shade the script, never past the line being read.
 
@@ -1885,6 +1972,7 @@ class NotchOverlay(QWidget):
         if last is None or last <= self._confirmed_word:
             return
         self._partial_word = last
+        self._observe_prediction(last, False)
         if last >= line.last_word:
             spoken = text.split()[-1] if text.split() else ""
             if (self._matching.word_score(spoken, line.last_word)
@@ -1895,10 +1983,12 @@ class NotchOverlay(QWidget):
                 self._matching.set_position(self._confirmed_word)
                 self._update_voice_speed(self._confirmed_word, False)
                 moved = self._step_reading_line(force=True)
+                self._update_prediction()
                 self._apply_highlight(self._display_word())
                 if moved:
                     self._speech_active_until = time.monotonic() + 1.0
                 return
+        self._update_prediction()
         self._apply_highlight(min(last, line.last_word))
 
     def _apply_confirmed_speech(self, text: str):
@@ -1933,6 +2023,7 @@ class NotchOverlay(QWidget):
             # The final still replaces any tentative shading from partials.
             self._stalled_finals += 1
             self._partial_word = -1
+            self._update_prediction()
             self._apply_highlight(self._display_word())
             return
 
@@ -1941,10 +2032,12 @@ class NotchOverlay(QWidget):
         self._partial_word = -1
         self._matching.set_position(last)
         self._update_voice_speed(last, True)
+        self._observe_prediction(last, True)
 
         # Step immediately when the line just finished, then let _tick pace
         # any further lines this result also confirmed.
         moved = self._step_reading_line(force=True)
+        self._update_prediction()
         self._apply_highlight(self._display_word())
         if moved:
             self._speech_active_until = time.monotonic() + 1.0
@@ -2749,8 +2842,11 @@ class NotchOverlay(QWidget):
                 # An empty file is a clear, exactly like emptying the editor.
                 self._discard_script_notes()
             self._matching.load_script(text)
+            self._predictor.set_script(self._matching.raw_words)
             self._highlight_key = None  # a new document: old shading is stale
             self._focus_span = None
+            self._predicted_word = None
+            self._predicted_span = None
             self._last_match_time = None
             self._last_match_pos = -1
             self._voice_wpm = 60
@@ -3258,6 +3354,9 @@ class NotchOverlay(QWidget):
         self._current_line = 0
         self._confirmed_word = -1
         self._partial_word = -1
+        self._predictor.reset()
+        self._predicted_word = None
+        self._predicted_span = None
         self._apply_highlight(-1)
         self._refresh_lines()
         if self._voice_mode:
@@ -3334,6 +3433,8 @@ class NotchOverlay(QWidget):
             self._partial_word = -1
             self._last_match_pos = -1
             self._current_line = 0
+            self._predictor.reset()
+            self._predicted_word = None
             self._apply_highlight(-1)
         self._manual_scroll_accum = 0.0
         self._manual_running = True
@@ -3642,6 +3743,8 @@ class NotchOverlay(QWidget):
         self._confirmed_word = word
         self._partial_word = -1
         self._last_match_pos = word
+        self._predictor.jump(word)
+        self._predicted_word = None
         if self._line_spans:
             self._current_line = self._line_index_for_word(word)
         self._apply_highlight(word)
@@ -3797,6 +3900,33 @@ class NotchOverlay(QWidget):
             return 0
         return self._matching.word_span(position)[1]
 
+    def _predicted_range(self, position: int):
+        """Character range of the words that have not been said yet.
+
+        The range starts after the spoken boundary, so the accent tier can
+        never overwrite the band that marks where the voice actually is, and
+        it stops at the rendered line's last word. Prediction is a paint
+        layer: keeping it inside the line is what keeps it from affecting the
+        line-gated scroll in any way.
+        """
+        if self._predicted_word is None or not self._matching.word_count:
+            return None
+        last = min(int(self._predicted_word), self._matching.word_count - 1)
+        first = max(0, position + 1)
+        if self._line_spans:
+            # One word past the current line is allowed: that is the first
+            # word of the line already visible below, and it is the word a
+            # reader most needs while the recogniser catches up at a line
+            # boundary. More than one would start guessing at type that has
+            # not entered the reading view.
+            line_end = self._line_spans[self._current_line].last_word + 1
+            last = min(last, line_end, self._matching.word_count - 1)
+        if last < first:
+            return None
+        start = self._matching.word_span(first)[0]
+        stop = self._matching.word_span(last)[1]
+        return (start, stop) if stop > start else None
+
     def _apply_highlight(self, position: int):
         if not self._script_text:
             return
@@ -3812,10 +3942,20 @@ class NotchOverlay(QWidget):
         # paper the old #a0a0a0 was 2.5:1, which is faint even for text the
         # eye has already left. #767676 keeps it clearly secondary at 4.5:1.
         spoken_hex = "#767676" if not self._dark_theme else "#8a8a8a"
+        # Anticipated words are accent type with a rule under it. They do not
+        # take a background: the one tinted band belongs to the words being
+        # spoken, and a second tinted block would make it ambiguous which
+        # words the voice is actually on.
+        predicted_hex = (self.PREDICTED_LIGHT if not self._dark_theme
+                         else self.PREDICTED_DARK)
         base_format = QTextCharFormat()
         base_format.setForeground(QColor(base_hex))
         spoken_format = QTextCharFormat()
         spoken_format.setForeground(QColor(spoken_hex))
+        predicted_format = QTextCharFormat(base_format)
+        predicted_format.setForeground(QColor(predicted_hex))
+        predicted_format.setFontUnderline(True)
+        predicted_format.setUnderlineColor(QColor(predicted_hex))
         # The words being spoken come back to full brightness on one quiet
         # band, so the eye can find its place without the line moving. The
         # band is the accent pre-blended against the card: QTextEdit paints a
@@ -3831,25 +3971,29 @@ class NotchOverlay(QWidget):
             first = max(0, min(position, self._matching.word_count - 1) - (self.FOCUS_WORDS - 1))
             start = self._matching.word_span(first)[0]
             focus = (start, end)
+        predicted = self._predicted_range(position)
         previous_focus = self._focus_span
+        previous_predicted = self._predicted_span
         # Do not key on id(document()): PyQt hands back a fresh wrapper for
         # the same QTextDocument on every call, so the id changes and every
         # apply would look like a new document. Content changes invalidate
         # this key explicitly (load, restore, editor collapse).
         key = (len(self._script_text), self._font_family,
-               self._font_size, self._dark_theme, base_hex, spoken_hex)
+               self._font_size, self._dark_theme, base_hex, spoken_hex,
+               predicted_hex)
         previous = self._highlight_end
         # A stale key means the document, theme or type changed under the
         # shading; every range has to be repainted from the base.
         full = key != self._highlight_key or previous is None
         self._highlight_key = key
         self._highlight_end = end
-        if not full and end == previous and focus == previous_focus:
+        if (not full and end == previous and focus == previous_focus
+                and predicted == previous_predicted):
             return
 
         cursor = QTextCursor(doc)
         if full:
-            # Rare (load, theme, type change): repaint both tiers in one undo
+            # Rare (load, theme, type change): repaint every tier in one undo
             # step. The reader is read-only, so this grouping is only about
             # making the document settle once.
             cursor.beginEditBlock()
@@ -3859,7 +4003,16 @@ class NotchOverlay(QWidget):
                 cursor.setPosition(0)
                 cursor.setPosition(end, QTextCursor.KeepAnchor)
                 cursor.setCharFormat(spoken_format)
+            if predicted:
+                cursor.setPosition(predicted[0])
+                cursor.setPosition(predicted[1], QTextCursor.KeepAnchor)
+                cursor.setCharFormat(predicted_format)
+            if focus:
+                cursor.setPosition(focus[0])
+                cursor.setPosition(focus[1], QTextCursor.KeepAnchor)
+                cursor.setCharFormat(current_format)
             cursor.endEditBlock()
+            self._predicted_span = predicted
         elif end > previous:
             # The reader moved forward: the run before `previous` is already
             # shaded, so only the new words need the spoken colour. No edit
@@ -3874,6 +4027,24 @@ class NotchOverlay(QWidget):
             cursor.setPosition(end)
             cursor.setPosition(previous, QTextCursor.KeepAnchor)
             cursor.setCharFormat(base_format)
+
+        # An anticipated run that changed is only two small formats: the part
+        # that became spoken is left alone, the old tail returns to the base
+        # colour, and the new tail gets the accent. This is the path every
+        # 20 Hz prediction update takes.
+        if predicted != previous_predicted:
+            if previous_predicted:
+                start = max(end, previous_predicted[0])
+                stop = previous_predicted[1]
+                if stop > start:
+                    cursor.setPosition(start)
+                    cursor.setPosition(stop, QTextCursor.KeepAnchor)
+                    cursor.setCharFormat(base_format)
+            if predicted:
+                cursor.setPosition(predicted[0])
+                cursor.setPosition(predicted[1], QTextCursor.KeepAnchor)
+                cursor.setCharFormat(predicted_format)
+            self._predicted_span = predicted
 
         # Only the words that entered or left the band are touched: moving the
         # band one word is two tiny formats, not a pass over the script.
@@ -4044,6 +4215,8 @@ class NotchOverlay(QWidget):
         match = cp["match"] if cp["match"] is not None else -1
         self._confirmed_word = match
         self._partial_word = -1
+        self._predictor.jump(match)
+        self._predicted_word = None
         if self._line_spans:
             self._current_line = self._line_index_for_word(max(0, match))
         self._apply_highlight(match)
@@ -4678,6 +4851,9 @@ class NotchOverlay(QWidget):
                              self._settings_state(), purge_backup=purge_backup)
         except OSError as exc:
             print(f"[Notch] Could not save state: {exc}", flush=True)
+        # Learned timings are local, aggregate and tiny; the predictor only
+        # writes when speech has taught it something new.
+        self._predictor.save()
 
     def _restore_state(self):
         if self._state_restored:
@@ -4692,8 +4868,11 @@ class NotchOverlay(QWidget):
             self._text_edit.setAlignment(Qt.AlignCenter)
             self._script_text = script
             self._matching.load_script(script)
+            self._predictor.set_script(self._matching.raw_words)
             self._highlight_key = None
             self._focus_span = None
+            self._predicted_word = None
+            self._predicted_span = None
             self._line_spans = []
             self._current_line = 0
             self._confirmed_word = -1

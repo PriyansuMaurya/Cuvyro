@@ -100,6 +100,16 @@ class MatchingEngine:
         """Character offset in the raw script for every word."""
         return self._word_char_offsets
 
+    @property
+    def raw_words(self) -> List[str]:
+        """Every word as written, punctuation included.
+
+        The predictive model reads word length and punctuation to estimate
+        the next word's duration, so it needs the same tokens the offsets
+        were built from rather than a re-split of the text.
+        """
+        return self._raw_words
+
     def raw_word_at(self, word_index: int) -> str:
         """The word as written in the script (punctuation included)."""
         if not self._raw_words:
