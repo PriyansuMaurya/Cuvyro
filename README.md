@@ -8,6 +8,10 @@ Speech recognition and head tracking run on this machine. There is no account, n
 
 ## Screenshots
 
+![A tour of Notch](assets/demo.gif)
+
+One pass through the app: voice follow, manual pace, the right-click panel, the editor, a sticky note, the narrow reader and the resting pill, setup, help, and each surface again in light. The frames come from the running app, not a mock-up.
+
 ![The reader with a script loaded](assets/reader.png)
 
 The reader mid-reading. The confirmed line is dimmed, and the words being spoken carry the accent band.
