@@ -16,8 +16,8 @@ import os
 import sys
 import time
 
-from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
-from PyQt5.QtGui import QMouseEvent
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
+from PyQt5.QtGui import QColor, QMouseEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication
 
@@ -64,6 +64,11 @@ def settle_note(note, limit=240):
         note._presence.step(1 / 60.0)
         note._apply_presence()
         frames += 1
+    if note._presence.settled:
+        # The clock lands a settled spring exactly on its target before the
+        # tick; drive that frame too so a hand-stepped run matches it.
+        note._presence.land()
+        note._apply_presence()
     return frames
 
 
@@ -130,6 +135,12 @@ def main():
           motion.NOTE_RELEASE_SECONDS <= 1.0 / 60.0 + 1e-9
           and motion.NOTE_RELEASE_LIMIT <= 8.0,
           f"{motion.NOTE_RELEASE_SECONDS:.3f} s, {motion.NOTE_RELEASE_LIMIT} px")
+    check("a theme change is a dissolve, not a cut",
+          0.0 < motion.THEME_CROSSFADE <= motion.WINDOW_FADE,
+          f"{motion.THEME_CROSSFADE} s")
+    check("a note leaves smaller than it arrived",
+          motion.NOTE_DISMISS_SCALE < motion.NOTE_APPEAR_SCALE < 1.0,
+          f"{motion.NOTE_DISMISS_SCALE} < {motion.NOTE_APPEAR_SCALE}")
 
     # ── Palette contrast, measured on the roles ─────────────────────────
     for dark, label in ((True, "dark"), (False, "light")):
@@ -149,9 +160,13 @@ def main():
         }
         for name, ok in checks.items():
             check(f"{label}: {name}", ok)
-        check(f"{label}: the note's hairline is visible on its own fill",
+        check(f"{label}: the menu's hairline is visible on its own fill",
               contrast(hex_rgb(theme.HAIRLINE.pick(dark)), surface) >= 1.15,
               f"{contrast(hex_rgb(theme.HAIRLINE.pick(dark)), surface):.2f}:1")
+        # A note is card material, not a second floating surface.
+        check(f"{label}: the note's hairline is visible on the card",
+              contrast(hex_rgb(theme.CARD_HAIRLINE.pick(dark)), card) >= 1.15,
+              f"{contrast(hex_rgb(theme.CARD_HAIRLINE.pick(dark)), card):.2f}:1")
 
     # ── Surfaces read the roles, they do not copy the values ────────────
     from notch.ui import overlay as ui_overlay
@@ -163,6 +178,34 @@ def main():
           and tooltips.PANEL[False][1] == theme.HAIRLINE.light)
     check("the tooltip radius is the surface radius",
           tooltips.RADIUS == theme.RADIUS["surface"])
+
+    # ── A note is the reader's material ─────────────────────────────────
+    from notch.ui import notes as notes_module, themefade
+    check("a note takes the reader's corner radius",
+          notes_module.CORNER_RADIUS == theme.RADIUS["card"],
+          f"{notes_module.CORNER_RADIUS} px")
+    material = NoteWindow(scale=1.0, dark=True)
+    material.move(10, 10)
+    material.show()
+    QApplication.processEvents()
+    settle_note(material)
+    painted = material.grab().toImage()
+    centre = painted.pixelColor(painted.width() // 2, painted.height() // 2)
+    edge = painted.pixelColor(painted.width() // 2, painted.height() - 1)
+    check("a note is filled with the reader's card colour",
+          centre.rgb() == QColor(theme.CARD.dark).rgb(),
+          f"{centre.name()} vs {theme.CARD.dark}")
+    # The 1 px hairline is antialiased, so closeness is the honest test: the
+    # edge pixel must sit nearer the card's border than its fill.
+    def distance(a, b):
+        return sum((x - y) ** 2 for x, y in zip(a.getRgb()[:3], b.getRgb()[:3]))
+
+    hairline = QColor(theme.CARD_HAIRLINE.dark)
+    fill = QColor(theme.CARD.dark)
+    check("a note's edge is the reader's hairline",
+          distance(edge, hairline) < distance(edge, fill),
+          f"{edge.name()}, {theme.CARD_HAIRLINE.dark}")
+    material.close()
 
     # ── The note arrives ────────────────────────────────────────────────
     note = NoteWindow(scale=1.0, dark=True)
@@ -257,6 +300,86 @@ def main():
     check("reduced motion: a note closes at once",
           calm._closed_announced, f"closed {calm._closed_announced}")
     calm.close()
+
+    # ── A note emerges from the reader and returns into it ─────────────
+    # Keep the machine's accessibility setting from deciding whether this
+    # half of the check can run; the reduced-motion path is exercised below.
+    os.environ["NOTCH_REDUCED_MOTION"] = "0"
+    anchor = QRect(100, 100, 300, 120)
+    origin = QPoint(399, 219)  # nearest card point to the note's centre
+    emerged = NoteWindow(scale=1.0, dark=True, anchor=anchor)
+    emerged.move(500, 400)
+    emerged.show()
+    QApplication.processEvents()
+    start_centre = emerged.geometry().center()
+    check("a note begins at the reader's nearest edge",
+          (start_centre - origin).manhattanLength() <= 2,
+          f"{start_centre} vs {origin}")
+    check("a note begins scaled down on its way out of the card",
+          emerged.width() < final_w and emerged.height() < final_h,
+          f"{emerged.width()}x{emerged.height()}")
+    settle_note(emerged)
+    end_centre = emerged.geometry().center()
+    check("a note lands on its own place, not the card's",
+          (end_centre - QPoint(630, 482)).manhattanLength() <= 2,
+          f"{end_centre}")
+    emerged.dismiss()
+    for _ in range(4):
+        emerged._presence.step(1 / 60.0)
+        emerged._apply_presence()
+    leaving = emerged.geometry().center()
+    check("a dismissed note travels back toward the reader",
+          (leaving - origin).manhattanLength()
+          < (end_centre - origin).manhattanLength(),
+          f"{leaving}")
+    closest = (leaving - origin).manhattanLength()
+    for _ in range(240):
+        if emerged._closed_announced:
+            break
+        emerged._presence.step(1 / 60.0)
+        emerged._apply_presence()
+        closest = min(closest, (emerged.geometry().center() - origin).manhattanLength())
+    check("the return reaches the card as the note closes",
+          emerged._closed_announced and closest <= 12,
+          f"closed {emerged._closed_announced}, closest {closest} px")
+    emerged.close()
+
+    # ── A change of appearance is one dissolve ──────────────────────────
+    themed = NoteWindow(scale=1.0, dark=True)
+    themed.move(60, 60)
+    themed.show()
+    QApplication.processEvents()
+    settle_note(themed)
+    themed.apply_theme(False)
+    fade = getattr(themed, "_theme_fade", None)
+    check("a note changing theme holds its previous frame",
+          isinstance(fade, themefade.SnapshotFade),
+          type(fade).__name__ if fade is not None else "none")
+    check("the held frame covers the whole note",
+          fade is not None and fade.geometry() == themed.rect(),
+          f"{fade.geometry() if fade is not None else None}")
+    check("the new palette is already underneath the held frame",
+          themed._dark is False)
+    if fade is not None:
+        fade.finish()
+    check("the held frame is released when the dissolve ends",
+          themed._theme_fade is None)
+    themed.close()
+
+    os.environ["NOTCH_REDUCED_MOTION"] = "1"
+    instant = NoteWindow(scale=1.0, dark=True)
+    instant.move(80, 80)
+    instant.show()
+    QApplication.processEvents()
+    check("reduced motion: an anchored note appears at rest",
+          instant.size().width() == final_w
+          and abs(instant.windowOpacity() - 1.0) < 0.01,
+          f"{instant.width()} px, opacity {instant.windowOpacity():.2f}")
+    instant.apply_theme(False)
+    check("reduced motion: recolouring has no dissolve",
+          getattr(instant, "_theme_fade", None) is None)
+    instant.close()
+    del os.environ["NOTCH_REDUCED_MOTION"]
 
     # ── Dragging and the release coast ──────────────────────────────────
     dragged = NoteWindow(scale=1.0, dark=True)

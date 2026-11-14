@@ -44,7 +44,7 @@ from notch.ui.controls import (
 from notch.ui.note_placement import choose_position
 from notch.ui.notes import NoteWindow
 from notch.ui.settings import SettingsDialog
-from notch.ui import motion, theme
+from notch.ui import motion, theme, themefade
 from notch.ui.spring import Spring, SpringGroup, system_allows_motion
 from notch.ui import tooltips
 
@@ -2561,16 +2561,8 @@ class NotchOverlay(QWidget):
         light_btn.setChecked(not self._dark_theme)
 
         def choose_theme(dark_theme: bool):
-            if dark_theme == self._dark_theme:
+            if not self._set_dark_theme(dark_theme):
                 return
-            self._dark_theme = dark_theme
-            self._apply_read_mode_style()
-            self.update()
-            for note in self._notes:
-                note.apply_theme(self._dark_theme)
-            self._apply_control_theme()
-            self._apply_highlight(self._display_word())
-            self._schedule_save()
             # The popup is a material too: close it rather than leave a dark
             # panel floating over a card that just turned white.
             menu.close()
@@ -3949,6 +3941,29 @@ class NotchOverlay(QWidget):
         if hasattr(self, "_close_btn"):
             self._apply_control_theme()
 
+    def _set_dark_theme(self, dark_theme: bool) -> bool:
+        """Switch the reader and its notes to one appearance, as one gesture.
+
+        The frame on screen is held before anything is recoloured and
+        released after every surface has its new palette, so the fill, the
+        field, the controls and the open notes change together instead of
+        each repaint arriving as its own flash. Returns whether anything
+        changed, so a menu choice for the current theme is still a no-op.
+        """
+        if dark_theme == self._dark_theme:
+            return False
+        snapshot = themefade.capture(self)
+        self._dark_theme = dark_theme
+        self._apply_read_mode_style()
+        self.update()
+        for note in self._notes:
+            note.apply_theme(self._dark_theme)
+        self._apply_control_theme()
+        self._apply_highlight(self._display_word())
+        self._schedule_save()
+        themefade.crossfade(self, snapshot)
+        return True
+
     def _apply_tooltip_theme(self) -> None:
         """Hand every tooltip to the one layer that owns them.
 
@@ -4640,9 +4655,21 @@ class NotchOverlay(QWidget):
     # ═══════════════════════════════════════════════════════════════════
 
 
+    def _reader_card_rect(self) -> QRect:
+        """The reading card in global coordinates.
+
+        Notes are opened from this card and dismissed back into it, so this
+        is the rectangle the note's motion is anchored to.
+        """
+        return QRect(self.mapToGlobal(QPoint(0, 0)),
+                     QSize(self._card_width(), self.height()))
+
     def _open_note(self):
         """Open a sticky note somewhere it covers nothing that matters."""
-        note = NoteWindow(scale=self._scale, dark=self._dark_theme)
+        # The callable, not a copy: the card moves (head tracking, a drag),
+        # and a note that returns to a stale rectangle would miss it.
+        note = NoteWindow(scale=self._scale, dark=self._dark_theme,
+                          anchor=self._reader_card_rect)
         note.move(self._note_home(note.size()))
         note.changed.connect(self._schedule_save)
         note.closed.connect(self._on_note_closed)
@@ -4664,7 +4691,7 @@ class NotchOverlay(QWidget):
             return QPoint(0, 0)
         return choose_position(
             size, areas,
-            notes=[QRect(note.pos(), note.size()) for note in self._notes],
+            notes=[note.resting_geometry() for note in self._notes],
             controls=self._control_rects(),
             avoid=[QRect(self.geometry())],
             preferred=self._reading_area(),

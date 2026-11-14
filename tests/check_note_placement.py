@@ -66,6 +66,10 @@ def settle_note(note):
             break
         note._presence.step(1 / 60)
         note._apply_presence()
+    # Land on the corner placement chose, exactly as the clock would.
+    if note._presence.settled:
+        note._presence.land()
+        note._apply_presence()
 
 
 def drag(note, delta):
@@ -210,6 +214,7 @@ def main():
     win = make_overlay(tmp)
     available = QApplication.primaryScreen().availableGeometry()
     note = win._open_note()
+    settle_note(note)
     check("a new note opens inside the work area",
           available.contains(note.geometry()),
           f"{note.geometry()} in {available}")
@@ -222,6 +227,8 @@ def main():
           f"note {note.geometry()} reader {win.geometry()}")
 
     opened = [win._open_note() for _ in range(3)]
+    for other in opened:
+        settle_note(other)
     every = [note] + opened
     check("notes opened one after another do not overlap",
           not any(overlapping(a.geometry(), b.geometry())
@@ -247,7 +254,7 @@ def main():
 
     still = opened[0]
     still_at = still.pos()
-    win._open_note()
+    settle_note(win._open_note())
     QTest.qWait(30)
     check("opening another note leaves a placed note alone",
           still.pos() == still_at and dragged.pos() == moved,
@@ -311,6 +318,7 @@ def main():
     compact._toggle_compact_mode()
     QTest.qWait(600)
     compact_note = compact._open_note()
+    settle_note(compact_note)
     check("the narrow reader still gets a clear, on-screen note",
           QApplication.primaryScreen().availableGeometry().contains(
               compact_note.geometry())

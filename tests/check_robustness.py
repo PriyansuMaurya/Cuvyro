@@ -232,6 +232,9 @@ def main():
     restored.move(screen.right() - 60, screen.y())
     QTest.qWait(80)
     edge_note = restored._open_note()
+    # Let it finish emerging from the reader, so the check measures the
+    # resting corner rather than the frame it is travelling through.
+    QTest.qWait(500)
     check("a new note does not open past the screen edge",
           on_screen(QRect(edge_note.pos(), edge_note.size())),
           f"at {edge_note.x()},{edge_note.y()}")

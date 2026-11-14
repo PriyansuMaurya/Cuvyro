@@ -90,12 +90,24 @@ SPEED_HINT = 0.10
 # this is a plain fade rather than a spring.
 MENU_APPEAR = 0.12
 
+# A change of appearance (light and dark). The old frame is held over the new
+# one and released over this long, so every surface recolours as one gesture
+# rather than each widget flashing on its own repaint. Long enough to read as
+# a dissolve, short enough that it never delays the next click.
+THEME_CROSSFADE = 0.22
+
 
 # ── Note appearance ──────────────────────────────────────────────────────
 # A note arrives at 94% and settles to full size. The scale is small on
 # purpose: large enough to read as an arrival, small enough that the text
 # does not visibly reflow on the way in.
 NOTE_APPEAR_SCALE = 0.94
+
+# A note leaves at 90%, a little smaller than it arrived, and (when it was
+# opened from the reader) travels back to the card at the same time. The
+# extra few percent is what makes the exit read as returning into the
+# reader rather than as a fade in place.
+NOTE_DISMISS_SCALE = 0.90
 
 # A released note keeps the velocity it was let go with for exactly one
 # frame, capped at six pixels. The pointer already chose where the note

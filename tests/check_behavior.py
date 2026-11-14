@@ -70,6 +70,32 @@ def main():
     win._apply_highlight(-1)
     QTest.qWait(200)
 
+    # ── Appearance changes are one dissolve ──────────────────────────
+    # The machine's own accessibility setting must not decide whether the
+    # dissolve can be observed; the reduced path is covered in check_motion.
+    os.environ["NOTCH_REDUCED_MOTION"] = "0"
+    from notch.ui import themefade
+
+    was_dark = win._dark_theme
+    check("choosing the current appearance is a no-op",
+          win._set_dark_theme(was_dark) is False
+          and getattr(win, "_theme_fade", None) is None)
+    check("a reader theme change is applied",
+          win._set_dark_theme(not was_dark) is True)
+    reader_fade = getattr(win, "_theme_fade", None)
+    check("a reader theme change holds the previous frame",
+          isinstance(reader_fade, themefade.SnapshotFade)
+          and reader_fade.geometry() == win.rect(),
+          f"{reader_fade.geometry() if reader_fade is not None else None}")
+    check("the reader is already on the new palette under the dissolve",
+          win._dark_theme is (not was_dark))
+    if reader_fade is not None:
+        reader_fade.finish()
+    win._set_dark_theme(was_dark)
+    if getattr(win, "_theme_fade", None) is not None:
+        win._theme_fade.finish()
+    del os.environ["NOTCH_REDUCED_MOTION"]
+
     bar = win._text_edit.verticalScrollBar()
     check("long script overflows the viewport", bar.maximum() > 0, f"max={bar.maximum()}")
 

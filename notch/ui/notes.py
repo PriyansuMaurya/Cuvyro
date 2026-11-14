@@ -12,24 +12,18 @@ import time
 import uuid
 
 from PyQt5 import sip
-from PyQt5.QtCore import QPoint, QRect, Qt, pyqtSignal
+from PyQt5.QtCore import QPoint, QPointF, QRect, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import QHBoxLayout, QShortcut, QTextEdit, QVBoxLayout, QWidget
 
-from notch.ui import motion, theme
+from notch.ui import motion, theme, themefade
 from notch.ui.spring import SpringGroup
 
 NOTE_W, NOTE_H = 260, 165
-CORNER_RADIUS = theme.RADIUS["note"]
+# A note is a piece of the reader's card lifted off it, so it takes the
+# card's corner, fill and hairline rather than a second set of each.
+CORNER_RADIUS = theme.RADIUS["card"]
 HEADER_H = 24
-# The note is the same material as the menu and the tooltip, so it borrows
-# their roles rather than carrying a second set of greys a few levels off.
-BODY_COLOR = theme.SURFACE.dark
-TEXT_COLOR = theme.INK.dark
-PLACEHOLDER_COLOR = theme.PLACEHOLDER.dark
-LIGHT_BODY_COLOR = theme.SURFACE.light
-LIGHT_TEXT_COLOR = theme.INK.light
-LIGHT_PLACEHOLDER_COLOR = theme.PLACEHOLDER.light
 
 
 class _CloseGlyph(QWidget):
@@ -105,13 +99,23 @@ class NoteWindow(QWidget):
     closed = pyqtSignal(str)  # note id
 
     def __init__(self, text: str = "", note_id: str | None = None, scale: float = 1.0,
-                 dark: bool = True, parent=None):
+                 dark: bool = True, parent=None, anchor: QRect | None = None):
         super().__init__(parent)
         self.note_id = note_id or uuid.uuid4().hex[:12]
         self._scale = scale
         self._dark = dark
         self._drag_offset = None
         self._suppress_change_signal = False
+        # The reader's card in global coordinates, when the note was opened
+        # from it. The entrance starts at the nearest point of that rectangle
+        # and the dismissal returns there, so the note is visibly part of the
+        # card rather than a window that happened to appear nearby.
+        # A rectangle, or a callable that returns the reader's current card:
+        # a live answer keeps the anchor true when the reader moves.
+        self._anchor_source = anchor
+        self._origin_center: QPointF | None = None
+        self._final_center: QPointF | None = None
+        self._theme_fade = None
 
         # ── Motion ──────────────────────────────────────────────────
         # One spring drives opacity and size together, so a note can never
@@ -133,6 +137,7 @@ class NoteWindow(QWidget):
         self._motion.tick.connect(self._apply_presence)
         self._motion.settled.connect(self._on_presence_settled)
         self._final_geometry = None
+        self._entrance_landed = False
         self._dismissing = False
 
         # A released note coasts on a small spring of its own, so letting go
@@ -205,7 +210,7 @@ class NoteWindow(QWidget):
 
     def _style_editor(self) -> None:
         """Theme-dependent field styling; re-run when the reader's theme flips."""
-        text_color = TEXT_COLOR if self._dark else LIGHT_TEXT_COLOR
+        text_color = theme.INK.pick(self._dark)
         handle_color = "rgba(255,255,255,0.18)" if self._dark else "rgba(0,0,0,0.18)"
         self._edit.setStyleSheet(
             f"""
@@ -232,18 +237,36 @@ class NoteWindow(QWidget):
         # Placeholder colour is not settable via stylesheet on QTextEdit.
         palette = self._edit.palette()
         palette.setColor(palette.PlaceholderText,
-                         QColor(PLACEHOLDER_COLOR if self._dark else LIGHT_PLACEHOLDER_COLOR))
+                         QColor(theme.PLACEHOLDER.pick(self._dark)))
         self._edit.setPalette(palette)
 
+    def set_anchor(self, anchor) -> None:
+        """Point later arrivals and dismissals at the reader's current card.
+
+        The reader moves (head tracking, a drag, a screen change), so the
+        rectangle is read when the motion starts rather than captured once
+        when the note was created. ``anchor`` may be a rectangle or a
+        callable that answers with one.
+        """
+        self._anchor_source = anchor
+
     def apply_theme(self, dark: bool) -> None:
-        """Follow the reader when its theme changes while a note is open."""
+        """Follow the reader when its theme changes while a note is open.
+
+        The frame already on screen is held over the recoloured note, so the
+        fill, hairline and field change together instead of each repaint
+        landing as its own flash. Reduced motion still switches at once; the
+        snapshot returns ``None`` and there is nothing to hold.
+        """
         if dark == self._dark:
             return
+        snapshot = themefade.capture(self)
         self._dark = dark
         self._close._dark = dark
         self._close.update()
         self._style_editor()
         self.update()
+        themefade.crossfade(self, snapshot)
 
     def _on_text_changed(self) -> None:
         if not self._suppress_change_signal:
@@ -255,12 +278,18 @@ class NoteWindow(QWidget):
 
         ``showEvent`` runs before the first paint, so the note never flashes
         at its resting size for one frame. The geometry it was given is kept:
-        every frame of the entrance is that rect scaled about its own corner,
-        which is what makes the card grow in place rather than slide.
+        every frame of the entrance is that rect scaled about its own centre
+        and, when it has an anchor, drawn out of the reader's nearest edge.
+        Without an anchor it grows about its corner, exactly as before.
         """
         super().showEvent(event)
         if self._final_geometry is None:
             self._final_geometry = QRect(self.geometry())
+            self._final_center = QPointF(self._final_geometry.center())
+        if self._final_center is None:
+            self._final_center = QPointF(self._final_geometry.center())
+        if self._origin_center is None and not self._dismissing:
+            self._origin_center = self._anchor_origin()
         # The keyboard belongs in the field, not on the close glyph. Qt hands
         # focus to the first tab-focusable child, which is the corner: the
         # note then opened with a focus ring on its × and typing went nowhere
@@ -275,18 +304,52 @@ class NoteWindow(QWidget):
             self._motion.set_target("presence", 1.0)
         elif self._presence.value >= 0.999:
             self._presence.jump_to(0.0)
+            self._entrance_landed = False
             self._presence.set_target(1.0)
             self._apply_presence()
             self._motion.start()
         else:
             self._motion.set_target("presence", 1.0)
 
+    def _anchor_origin(self) -> QPointF | None:
+        """The point on the reader's card the note grows out of.
+
+        The nearest point of the card to where the note is going, not its
+        centre: a note opening below the card should emerge from its lower
+        edge, and one opening beside it from the nearest corner. That is what
+        keeps the note and the card in the same spatial relationship through
+        the whole transition.
+        """
+        anchor = self._anchor_source
+        if callable(anchor):
+            try:
+                anchor = anchor()
+            except (RuntimeError, TypeError):
+                return None  # the surface that owned the anchor is gone
+        if not isinstance(anchor, QRect) or not anchor.isValid():
+            return None
+        centre = self._final_center or QPointF(self.geometry().center())
+        x = min(max(centre.x(), anchor.left()), anchor.right())
+        y = min(max(centre.y(), anchor.top()), anchor.bottom())
+        return QPointF(x, y)
+
+    def _hold_at_current(self) -> None:
+        """Make the note's current place its resting place.
+
+        Used when the pointer takes hold of a note mid-flight: the note is
+        already there, so it should finish arriving where the hand found it
+        instead of jumping back to the position it was first opened at.
+        """
+        self._final_geometry = QRect(self.geometry())
+        self._final_center = QPointF(self._final_geometry.center())
+
     def _apply_presence(self) -> None:
         """One frame of the entrance or the exit.
 
-        Opacity and size share the spring, so the two always finish together.
-        A frameless note has no resize handle, so its minimum size only has to
-        hold the entrance: lowering it here is what lets the card grow from 94%
+        Opacity, size and (when the note belongs to the reader) position share
+        the same spring, so all three always finish together. A frameless note
+        has no resize handle, so its minimum size only has to hold the
+        entrance: lowering it here is what lets the card grow from 94%
         instead of snapping to its resting size on the first frame.
         """
         if sip.isdeleted(self):
@@ -300,21 +363,42 @@ class NoteWindow(QWidget):
             # not depend on a second signal arriving after the last tick.
             self._finish_close()
             return
-        # Only the size is animated. The position belongs to whoever dragged
-        # the note last, so asking a settled note to paint itself must never
-        # put it back where it was first opened.
         if progress >= 0.999:
             self.setMinimumSize(self._dim(NOTE_W), self._dim(NOTE_H))
+            if not self._entrance_landed and not self._dismissing:
+                # The interpolated last frame can be a pixel short of the aim;
+                # land exactly once. Doing it only on the landing frame keeps
+                # a later drag from being undone by a still-armed clock.
+                self._entrance_landed = True
+                self.setGeometry(self._final_geometry)
+                return
             self.setGeometry(self.x(), self.y(),
                              self._final_geometry.width(),
                              self._final_geometry.height())
             return
-        factor = (motion.NOTE_APPEAR_SCALE
-                  + (1.0 - motion.NOTE_APPEAR_SCALE) * progress)
+        # The exit starts from a slightly smaller scale than the entrance so
+        # the note reads as going back into the card rather than as fading.
+        base = (motion.NOTE_DISMISS_SCALE if self._dismissing
+                else motion.NOTE_APPEAR_SCALE)
+        factor = base + (1.0 - base) * progress
         width = max(1, int(round(self._final_geometry.width() * factor)))
         height = max(1, int(round(self._final_geometry.height() * factor)))
         self.setMinimumSize(width, height)
-        self.setGeometry(self.x(), self.y(), width, height)
+        if self._origin_center is not None and self._final_center is not None:
+            # Travel and scaling are one gesture: the note's centre moves from
+            # the card to its resting place while it grows, and the reverse on
+            # the way out.
+            centre_x = (self._origin_center.x()
+                        + (self._final_center.x() - self._origin_center.x()) * progress)
+            centre_y = (self._origin_center.y()
+                        + (self._final_center.y() - self._origin_center.y()) * progress)
+            x = int(round(centre_x - width / 2.0))
+            y = int(round(centre_y - height / 2.0))
+        else:
+            # No parent to come from: grow about the top-left corner it was
+            # given, which is the same in-place arrival as before.
+            x, y = self.x(), self.y()
+        self.setGeometry(x, y, width, height)
 
     def _on_presence_settled(self) -> None:
         if self._dismissing:
@@ -331,6 +415,13 @@ class NoteWindow(QWidget):
         if sip.isdeleted(self) or self._dismissing:
             return
         self._dismissing = True
+        # Leave from where the note is now, and return to the card as it is
+        # now: the reader can have moved since the note was opened.
+        if self._final_geometry is not None:
+            self._hold_at_current()
+            origin = self._anchor_origin()
+            if origin is not None:
+                self._origin_center = origin
         if not self.isVisible() or self._motion.reduced_motion:
             self._finish_close()
             return
@@ -409,11 +500,24 @@ class NoteWindow(QWidget):
         fill = QPainterPath()
         fill.addRoundedRect(0, 0, self.width(), self.height(), radius, radius)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(BODY_COLOR if self._dark else LIGHT_BODY_COLOR))
+        # The reader's own fill, not a second surface grey: the note is a piece
+        # of that card, and two near-blacks three levels apart read as a
+        # mismatch rather than as depth.
+        painter.setBrush(QColor(theme.CARD.pick(self._dark)))
         painter.drawPath(fill)
 
+        # The same light catching the top edge as the reader's card, so the
+        # lifted note still carries the card's material in dark mode.
+        if self._dark:
+            painter.save()
+            painter.setClipPath(fill)
+            painter.setPen(QPen(QColor(255, 255, 255, theme.CARD_EDGE_ALPHA), 1.0))
+            painter.drawLine(QPointF(radius, 1.0),
+                             QPointF(self.width() - radius, 1.0))
+            painter.restore()
+
         # Hairline border, inset half a pixel so the stroke is fully inside.
-        pen = QPen(QColor(theme.HAIRLINE.pick(self._dark)))
+        pen = QPen(QColor(theme.CARD_HAIRLINE.pick(self._dark)))
         pen.setWidthF(1.0)
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
@@ -431,6 +535,7 @@ class NoteWindow(QWidget):
         if self._dismissing:
             self.present()
         if not self._presence.settled:
+            self._hold_at_current()
             self._presence.jump_to(1.0)
             self._apply_presence()
         if event.button() == Qt.LeftButton and event.pos().y() <= self._dim(HEADER_H):
@@ -466,12 +571,25 @@ class NoteWindow(QWidget):
     def text(self) -> str:
         return self._edit.toPlainText()
 
+    def resting_geometry(self) -> QRect:
+        """Where the note belongs, even while it is still travelling there.
+
+        Placement and saving ask this rather than the live geometry: during
+        the entrance the window is on its way out of the reader, and a note
+        saved at that temporary position would restore halfway across the
+        screen.
+        """
+        if self._final_geometry is not None and self._motion.running:
+            return QRect(self._final_geometry)
+        return QRect(self.geometry())
+
     def to_state(self) -> dict:
+        resting = self.resting_geometry()
         return {
             "id": self.note_id,
             "text": self.text(),
-            "x": self.x(),
-            "y": self.y(),
+            "x": resting.x(),
+            "y": resting.y(),
         }
 
     def _apply_capture_exclusion(self) -> None:

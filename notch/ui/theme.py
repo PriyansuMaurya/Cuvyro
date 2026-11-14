@@ -60,10 +60,20 @@ PREDICTED = Role("#9FB3DC", "#3F5382")
 BAND = Role("#0A1940", "#E1EFFF")
 
 # ── Floating surfaces ────────────────────────────────────────────────────
-# Menu, tooltip and sticky note are one material: same fill, same hairline,
-# same shadow weight. The reader is the page; these are the things on it.
+# Menu and tooltip are one material: same fill, same hairline, same shadow
+# weight. A sticky note is not chrome, though: it is a piece of the reader
+# that was lifted off it, so it uses the card's own fill and hairline below.
 SURFACE = Role("#1E1E1E", "#F7F7F8")
 HAIRLINE = Role("#343436", "#E4E4E6")
+
+# The card's edge, shared by the reader and any surface that leaves it (a
+# sticky note). Two separate greys for the same border was the drift this
+# module exists to stop.
+CARD_HAIRLINE = Role("#2A2C2A", "#E2E2E2")
+
+# Light catching the top edge of a dark card, in alpha. The note repeats it
+# so a lifted surface still reads as the same piece of material.
+CARD_EDGE_ALPHA = 16
 INK = Role("#F2F2F7", "#1C1C1E")
 INK_MUTED = Role("#8E8E93", "#7A7A80")
 # The placeholder is a hint, not a label, but it still has to be readable: the
@@ -79,13 +89,14 @@ SHADOW_ALPHA = {True: 26, False: 200}
 
 # ── Shape ────────────────────────────────────────────────────────────────
 # One radius per family, largest surface to smallest. A control is never
-# rounder than the sheet it sits on.
+# rounder than the sheet it sits on. A sticky note deliberately has no entry
+# of its own: it is card material, so it takes the card radius rather than
+# inventing a second corner for the same surface.
 RADIUS = {
-    "card": 24,       # the reading pill
+    "card": 24,       # the reading pill, and the note lifted from it
     "compact": 20,    # the narrow reader, one step tighter
     "dialog": 16,     # setup and help
     "menu": 14,
-    "note": 12,
     "surface": 8,     # tooltip, and the control that opened it
 }
 
