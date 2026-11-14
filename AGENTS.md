@@ -54,7 +54,9 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_speech_engine.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_note_clearing.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_note_placement.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_upgrades.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_head_tracking.py
+.venv/Scripts/python.exe tests/check_storage.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_predictive_highlight.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/bench_predictive_highlight.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_predictive_speech.py
@@ -76,6 +78,27 @@ It backs up and restores the reader's saved state around the run. Because the
 reader excludes itself from screen capture, the scroll offset comes from
 `NOTCH_MANUAL_TRACE=1`, which makes the app append one line per Manual start
 and pause to `notch.log` beside the executable; nothing is written without it.
+
+`tests/check_upgrades.py` writes the state and speaking-profile formats an
+older build produced, loads them through the current code and launches the
+real overlay against them. It checks that the script, notes, preferences,
+placement and learned profile all survive, that the old file is kept as
+`*.v<schema>.bak` before its first rewrite, that a corrupt profile recovers
+its `.bak`, and that a file from a newer schema is snapshotted rather than
+silently discarded. A change to `notch/storage/store.py`, the profile fields
+or the settings keys belongs here. The v1-to-v2 step that adds `saved_at` is
+the worked template: raise `SCHEMA`, add one function to `MIGRATIONS` that
+copies the payload and gives the new field a safe default, and extend this
+check with a file written at the old version.
+
+`tests/check_storage.py` is the read-only report for a reader's data folder. It
+lists every `state.json*` and `speaking-profile.json*` file with its role,
+schema and size, says which copy the app would load, names the script, notes
+and learned profile that are recoverable, counts the timestamped session
+copies and migration snapshots, and flags a pending migration or a newer
+schema. It never writes, so it is safe to run against the real
+`%APPDATA%\NotchFree`; `--dir` points it at a fixture instead. It exits
+non-zero only when neither the primary nor the backup of a store can be read.
 
 `tests/check_speech_engine.py` decodes real audio through the installed model
 and reports SKIP when `model/` has none. `tests/bench_speech_engines.py` is the

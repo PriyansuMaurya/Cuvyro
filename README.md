@@ -136,8 +136,12 @@ Turning tracking off releases the camera. Turning it back on reuses the loaded m
 
 The app stores its own state under `%APPDATA%\NotchFree`:
 
-- `state.json` holds the script, the notes, the settings and the reader's position. `state.json.bak` is the previous good copy; the primary file is replaced atomically.
-- `speaking-profile.json` holds aggregate speech timings for the predictive shading: words per second, pause length and five duration weights. It contains no audio, transcript or script. Deleting it resets the estimate to the default pace.
+- `state.json` holds the script, the notes, the settings, the reader's position and the time it was last written. `state.json.bak` is the previous good copy; the primary file is replaced atomically.
+- `speaking-profile.json` holds aggregate speech timings for the predictive shading: words per second, pause length and five duration weights. It contains no audio, transcript or script. `speaking-profile.json.bak` is its previous good copy. Deleting both resets the estimate to the default pace.
+
+An update never starts from an empty state. A file written by an older build is upgraded on load, with the original kept as `state.json.v<schema>.bak` or `speaking-profile.json.v<schema>.bak` before the first rewrite. A file from a newer build is read for the fields this build understands and snapshotted the same way, so downgrading or reinstalling does not erase the newer data on disk.
+
+Each launch also keeps one timestamped copy of the state and speaking profile it found, named like `state.json.2026-11-14T16-47-03-123456.bak`. The newest ten are kept, so a session opened by mistake can be recovered after the next one has started. `tests/check_storage.py` lists them; they are never loaded automatically.
 
 Audio is captured at 16 kHz mono and decoded by a local model. `tests/check_speech_engine.py` patches socket calls to raise, then loads the model and decodes a sentence, so a network path in the recognition stack fails the check rather than passing unnoticed. Nothing records audio. The optional `tests/check_predictive_speech.py --live` does write a reading and its measurements into `.sessions/`, which git ignores; `--replay` decodes that recording again through the same recogniser.
 
@@ -169,7 +173,9 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_speech_engine.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_note_clearing.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_note_placement.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_upgrades.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_head_tracking.py
+.venv/Scripts/python.exe tests/check_storage.py        # read-only data report
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_predictive_highlight.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/bench_predictive_highlight.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_predictive_speech.py
