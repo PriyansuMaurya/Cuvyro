@@ -9,20 +9,45 @@ highlight now anticipates the next words instead.
 
 There are three tiers, all inside the existing line-gated reader:
 
-| Tier | Treatment | Purpose |
-| :--- | :--- | :--- |
-| Already spoken | dimmed `#8a8a8a` (dark) / `#767676` (light), 4.5:1 or better | shows what has been read |
-| Being spoken | full-brightness type on one accent band | the eye's anchor; the scroll still waits for this line |
-| Anticipated | accent `#8FB4FF` (dark, 10.1:1) / `#0B47C4` (light, 7.7:1), with an underline | the next word or phrase, before it is said |
+| Tier | Treatment | Contrast | Purpose |
+| :--- | :--- | :--- | :--- |
+| Already spoken | dimmed `#8a8a8a` (dark) / `#767676` (light) | 6.1:1 / 4.5:1 | shows what has been read |
+| Being spoken | brighter accent `#A9CCFF` (dark) / `#0A3A8F` (light), on one band (`#0A1940` / `#E1EFFF`), with a hairline stroke | 12.8:1 on the card, 10.4:1 on the band / 10.4:1 and 8.9:1 | the eye's anchor; the scroll still waits for this line |
+| Anticipated | quieter accent `#9FB3DC` (dark) / `#3F5382` (light), with an underline, two to four words | 10.0:1 / 7.6:1 | the next words, before they are said |
 
-Anticipated words deliberately do **not** take a background. The one tinted
-band belongs to the words the voice is actually on; a second band would make
-it ambiguous which words are current.
+Both accents clear 7:1 against the card, the current words clear 7:1 against
+their own band, and spoken words stay at 4.5:1 or better, so a state change
+is a change of ink and weight rather than a change of legibility. The
+anticipated accent is deliberately lower-chroma than the current one: it has
+to read as a hint, not as a second confirmation of what the voice is doing.
+
+Anticipated words do **not** take a background. The one tinted band belongs
+to the words the voice is actually on; a second band would make it ambiguous
+which words are current.
+
+"Slightly heavier" is a hairline stroke around the glyph (`CURRENT_STROKE`,
+0.6 px scaled), not a font weight. Raising the weight would change every
+advance width, re-wrap the line and move the type the reader is following;
+a stroke thickens the same glyphs without touching the layout. Segoe UI has
+no weight above Bold, so a weight step would fall back silently anyway.
+
+A state change fades over 120 ms rather than snapping, driven from the
+reader's own 60 Hz clock: ink and band alpha interpolate on an ease-out
+curve, the rule switches at the halfway point, and the font always comes
+from the target, so a word can never change metrics mid-transition. The
+origin is read back out of the document, so a change that interrupts another
+fade continues from the colour on screen; a pending fade that is only partly
+overlapped is split around the new one instead of being dropped. Theme and
+type changes paint at once: a theme is a new surface, not a state change.
 
 Prediction is a paint-only layer. It never changes the reading line, the
-30/70 word anchor, the checkpoints or the scrollbar. Its result is bounded by
-the rendered line on screen, with one extra word allowed because that is the
-first word of the next visible line.
+30/70 word anchor, the checkpoints or the scrollbar. Its result is bounded
+above the spoken boundary, so the hint can never overwrite the band, and to
+two to four words: two are the words the voice reaches next whatever the
+timing model says, four is where a hint stops clarifying and starts
+competing with the type already on screen. At a line boundary those words
+may run into the first words of the next visible line rather than stopping
+at one; painting is not scrolling, so none of this can move the reader.
 
 ## How the estimate works
 
@@ -44,8 +69,9 @@ first word of the next visible line.
 
 The target is the words that fit in the recogniser's own delay
 (`0.45 s`), a reaction window (`0.30 s`) and the time since the last result.
-It is capped at 8 words. A clause that ends within two words extends the
-anticipated phrase to its punctuation.
+The estimate is capped at 8 words and the paint at `PREDICTED_WORDS_MAX`
+(4). A clause that ends within two words extends the anticipated phrase to
+its punctuation.
 
 An earlier version also learned a position-error bias, comparing each spoken
 word with the painted boundary. The benchmark showed it pegging at its floor:
@@ -177,11 +203,12 @@ script is not inside it.
 
 ## Known limits
 
-- The paint cannot pass the end of the rendered line, and the line steps only
-  when a word is confirmed. At the card's current width that is three words per
-  line, so a fluent reader gets at most one line of lead and most words are
-  confirmed before the line reaches them. Widening the card and stepping the
-  line on partial evidence are the two levers; neither is implemented.
+- The paint stops four words past the boundary and the line steps only when
+  a word is confirmed. At the card's current width that is three words per
+  line, so at most the first words of the next visible line are within reach
+  and most words are confirmed before the line arrives at them. Widening the
+  card and stepping the line on partial evidence are the two levers; neither
+  is implemented.
 - The learned rate is an aggregate for the speaker, not per script or per
   word. A deliberately theatrical change mid-sentence is followed over the
   next few words, not anticipated in the first one.

@@ -55,11 +55,17 @@ Surface treatment, also measured from the captures:
   within **0.2 px** of the anchor, and the topmost line's top edge never rises
   above **−0.2 px** across every resting position in the script.
 - **Typographic hierarchy**: the reader does not fade its edges. Hierarchy is
-  word-level: script type is `#fafafa` (dark) / `#111111` (light), already-
-  spoken words are `#8a8a8a` / `#767676`, and the active line is the brightest
-  unspoken run. Every glyph is fully opaque, so a line near the top edge is
-  never half-faded. Measured: body contrast **20.1:1** / **18.9:1**, spoken
-  contrast **6.1:1** / **4.5:1**.
+  word-level and has exactly three states. Resting script is `#fafafa` (dark)
+  / `#111111` (light). Words already spoken recede to `#8a8a8a` / `#767676`
+  (**6.1:1** / **4.5:1**). The two or three words under the voice take the
+  brighter accent `#A9CCFF` / `#0A3A8F` on one band (`#0A1940` / `#E1EFFF`)
+  with a hairline stroke (**12.8:1** on the card and **10.4:1** on the band /
+  **10.4:1** and **8.9:1**). The next two to four words take the quieter
+  accent `#9FB3DC` / `#3F5382` with an underline (**10.0:1** / **7.6:1**),
+  never the band. Body contrast is **20.1:1** / **18.9:1**. Every glyph is
+  fully opaque, so a line near the top edge is never half-faded, and no state
+  changes the font weight or advance width: the stroke thickens the glyph
+  without re-wrapping a line.
 - **Controls on a three-second leash**: while the reader is reading, the
   rail dissolves 3 s after the last movement and comes back the moment the
   pointer moves — over the script or over a control. Measured: opacity

@@ -499,21 +499,31 @@ def main():
 
     spoken = (0x8A, 0x8A, 0x8A)
     base = (0xFA, 0xFA, 0xFA)
+    current = tuple(int(shade_win.CURRENT_DARK.lstrip("#")[index:index + 2], 16)
+                    for index in (0, 2, 4))
+
+    def settle_shade():
+        """Finish the tier crossfade, so the assertion reads the resting ink."""
+        shade_win._advance_tier_fades(time.monotonic() + 1.0)
+
     shade_win._apply_highlight(10)
+    settle_shade()
     check("speech shading marks the spoken run",
           shade_at(4) == spoken and shade_at(40) == base,
           f"word 4 {shade_at(4)}, word 40 {shade_at(40)}")
-    check("the words being spoken are the bright tier on one band",
-          shade_at(10) == base and band_at(9) and band_at(10)
+    check("the words being spoken are the accent tier on one band",
+          shade_at(10) == current and band_at(9) and band_at(10)
           and not band_at(4),
           f"word 10 {shade_at(10)}, banded={band_at(10)}")
     shade_win._apply_highlight(5)
+    settle_shade()
     check("stepping back un-shades the words the reader returned to",
           shade_at(10) == base and shade_at(2) == spoken,
           f"word 10 {shade_at(10)}, word 2 {shade_at(2)}")
     check("the band follows the reader back",
           band_at(5) and not band_at(10))
     shade_win._apply_highlight(30)
+    settle_shade()
     check("stepping forward re-shades correctly after a backward jump",
           shade_at(10) == spoken and shade_at(40) == base,
           f"word 10 {shade_at(10)}, word 40 {shade_at(40)}")

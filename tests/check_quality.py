@@ -30,6 +30,7 @@ import io
 import os
 import sys
 import tempfile
+import time
 
 
 from PyQt5.QtCore import Qt
@@ -69,6 +70,11 @@ def contrast(fg, bg):
 def speech(win, text, final):
     with contextlib.redirect_stdout(io.StringIO()):
         win._on_speech_text(text, final)
+
+
+def settle_tiers(win):
+    """Finish a tier crossfade, so the pixels read are the resting state."""
+    win._advance_tier_fades(time.monotonic() + 1.0)
 
 
 def settle(win, timeout_ms=2500):
@@ -201,9 +207,11 @@ def main():
         win._dark_theme = dark
         win._apply_read_mode_style()
         win._apply_highlight(-1)
+        settle_tiers(win)
         # Far enough in that the document shows all three tiers: spoken, the
         # banded words being spoken, and the text still to come.
         win._apply_highlight(min(20, win._matching.word_count - 1))
+        settle_tiers(win)
         colours = fragment_colours(win)
         fill = (0, 0, 0) if dark else (255, 255, 255)
         base = max(colours, key=lambda c: contrast(c, fill))
@@ -219,7 +227,9 @@ def main():
     # The words being spoken keep one quiet band so the eye keeps its place
     # while the page is gliding; nothing else carries a background.
     win._apply_highlight(-1)
+    settle_tiers(win)
     win._apply_highlight(min(20, win._matching.word_count - 1))
+    settle_tiers(win)
     check("only the words being spoken carry the highlight band",
           banded_words(win) == win.FOCUS_WORDS,
           f"{banded_words(win)} banded words of {win._matching.word_count}")
@@ -227,6 +237,7 @@ def main():
           bool(win._text_edit.alignment() & Qt.AlignHCenter),
           f"alignment {int(win._text_edit.alignment())}")
     win._apply_highlight(-1)
+    settle_tiers(win)
 
     win._dark_theme = True
     win._apply_read_mode_style()

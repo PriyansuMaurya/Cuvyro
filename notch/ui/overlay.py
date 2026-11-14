@@ -545,14 +545,38 @@ class NotchOverlay(QWidget):
     # fixed height: one line can hold two words and the next twelve, so a
     # pixel anchor cannot hold a 30/70 split for long.
     READING_SHARE = 0.30
-    # Words given the "being spoken" band behind the line.
+    # ── Reading tiers ────────────────────────────────────────────────
+    # The script has three states, and only three. A word is either behind
+    # the voice (spoken), under it (current), or ahead of it (predicted).
+    #
+    # Words given the "being spoken" band behind the line: two or three, so
+    # the eye has a phrase rather than a single letter to hold on to.
     FOCUS_WORDS = 3
-    # Anticipated words carry accent type and a rule under it. They are a
-    # separate tier from the spoken band on purpose: a tinted background on
-    # words that have not been said would compete with the one band that marks
-    # where the voice actually is. Both colours clear 7:1 against the card.
-    PREDICTED_DARK = "#8FB4FF"
-    PREDICTED_LIGHT = "#0B47C4"
+    # The next words a reader is about to say. Two is the floor: those words
+    # are the ones the voice is guaranteed to reach next, so marking them is
+    # not a guess. Four is the ceiling, where the tier stops clarifying and
+    # starts competing with the type that is already on screen.
+    PREDICTED_WORDS_MIN = 2
+    PREDICTED_WORDS_MAX = 4
+    # The palette, mirrored across themes. Every tier clears 7:1 against the
+    # card (AAA for body text), the current words clear 7:1 against their own
+    # band, and the predicted accent is a quieter, less saturated blue so it
+    # reads as a hint rather than as confirmation.
+    CURRENT_DARK = "#A9CCFF"      # 12.8:1 on the dark card
+    CURRENT_LIGHT = "#0A3A8F"     # 10.4:1 on the light card
+    PREDICTED_DARK = "#9FB3DC"    # 10.0:1, low chroma: a hint, not a state
+    PREDICTED_LIGHT = "#3F5382"   # 7.6:1, the same quiet register on paper
+    BAND_DARK = "#0A1940"
+    BAND_LIGHT = "#E1EFFF"
+    # "Slightly heavier" is a hairline stroke around the glyphs, not a font
+    # weight. A heavier face changes every advance width, which re-wraps the
+    # line and moves the words the reader is looking at; a stroke thickens the
+    # same glyphs without touching the layout at all. Segoe UI has no weight
+    # above Bold, so a weight step would fall back silently anyway.
+    CURRENT_STROKE = 0.6
+    # A state change fades instead of snapping. Long enough to read as a
+    # transition, short enough that the paint is never behind the voice.
+    TIER_FADE_SECONDS = 0.12
     # The prediction is recomputed at 20 Hz. Faster changes nothing the eye can
     # follow and would repaint the document for no reason.
     PREDICTION_INTERVAL = 0.05
@@ -707,6 +731,10 @@ class NotchOverlay(QWidget):
         self._predicted_word = None  # last script word to anticipate
         self._predicted_span = None  # character range of the anticipated run
         self._prediction_at = 0.0
+        # Crossfades in flight for a tier that just changed. Each entry is a
+        # character range, the format it had, the format it is heading for,
+        # and when it started; see _advance_tier_fades.
+        self._tier_fades: List[dict] = []
 
         # ── Scroll motion ────────────────────────────────────────────
         # The script glides on a critically damped spring instead of an
@@ -1576,6 +1604,11 @@ class NotchOverlay(QWidget):
             else:
                 # End of script: stop the clock so replay is explicit.
                 self._manual_running = False
+
+        # 3. Finish any tier crossfade. This runs after the highlight has had
+        #    its chance to change, so the frame painted here is the frame the
+        #    new state asked for. An idle reader pays one empty check.
+        self._advance_tier_fades()
 
     # ═══════════════════════════════════════════════════════════════════
     #  Audio Integration
@@ -3927,31 +3960,203 @@ class NotchOverlay(QWidget):
         return self._matching.word_span(position)[1]
 
     def _predicted_range(self, position: int):
-        """Character range of the words that have not been said yet.
+        """Character range of the next words, never of words already said.
 
-        The range starts after the spoken boundary, so the accent tier can
-        never overwrite the band that marks where the voice actually is, and
-        it stops at the rendered line's last word. Prediction is a paint
-        layer: keeping it inside the line is what keeps it from affecting the
-        line-gated scroll in any way.
+        The run starts after the spoken boundary, so the hint tier can never
+        overwrite the band that marks where the voice actually is. Two words
+        are the floor, since they are the words the voice reaches next
+        whatever the timing model says; four is the ceiling, where a hint
+        stops clarifying and starts competing with the type that is already
+        on screen. At a line boundary the floor may reach into the next line,
+        which is already visible below the reading line, but no further than
+        the ceiling: painting is not scrolling, so none of this can move the
+        reader.
         """
         if self._predicted_word is None or not self._matching.word_count:
             return None
-        last = min(int(self._predicted_word), self._matching.word_count - 1)
         first = max(0, position + 1)
+        last = max(int(self._predicted_word),
+                   first + self.PREDICTED_WORDS_MIN - 1)
+        last = min(last, first + self.PREDICTED_WORDS_MAX - 1,
+                   self._matching.word_count - 1)
         if self._line_spans:
-            # One word past the current line is allowed: that is the first
-            # word of the line already visible below, and it is the word a
-            # reader most needs while the recogniser catches up at a line
-            # boundary. More than one would start guessing at type that has
-            # not entered the reading view.
-            line_end = self._line_spans[self._current_line].last_word + 1
+            line_end = (self._line_spans[self._current_line].last_word
+                        + self.PREDICTED_WORDS_MAX)
             last = min(last, line_end, self._matching.word_count - 1)
         if last < first:
             return None
         start = self._matching.word_span(first)[0]
         stop = self._matching.word_span(last)[1]
         return (start, stop) if stop > start else None
+
+    def _tier_formats(self):
+        """The formats the reading line is painted from: base, spoken,
+        current and predicted.
+
+        They differ only in ink, band and rule. Family, size and weight are
+        deliberately left alone: a glyph advance must never depend on which
+        tier a word is in, or every word the voice reached would re-wrap the
+        line and move the type the reader is looking at.
+        """
+        base = QTextCharFormat()
+        base.setForeground(QColor("#fafafa" if self._dark_theme else "#111111"))
+        # Already-spoken type recedes, but not below reading contrast: on
+        # paper the old #a0a0a0 was 2.5:1, which is faint even for text the
+        # eye has already left. #767676 keeps it clearly secondary at 4.5:1.
+        spoken = QTextCharFormat(base)
+        spoken.setForeground(QColor("#8a8a8a" if self._dark_theme
+                                    else "#767676"))
+        # Anticipated words carry a quieter accent and a hairline rule. They
+        # never take the band: the one tinted block belongs to the words the
+        # voice is actually on, and a second block would make it ambiguous
+        # which words have been said.
+        predicted = QTextCharFormat(base)
+        predicted.setForeground(QColor(
+            self.PREDICTED_DARK if self._dark_theme else self.PREDICTED_LIGHT))
+        predicted.setFontUnderline(True)
+        predicted.setUnderlineColor(predicted.foreground().color())
+        # The words being spoken come forward on one quiet band, in the
+        # brighter accent of the two, with a hairline stroke that reads as a
+        # slightly heavier weight without changing a single advance width.
+        current = QTextCharFormat(base)
+        current.setForeground(QColor(
+            self.CURRENT_DARK if self._dark_theme else self.CURRENT_LIGHT))
+        current.setBackground(QColor(self.BAND_DARK if self._dark_theme
+                                     else self.BAND_LIGHT))
+        pen = QPen(current.foreground().color(),
+                   max(0.4, self.CURRENT_STROKE * self._scale))
+        pen.setJoinStyle(Qt.RoundJoin)
+        current.setTextOutline(pen)
+        return base, spoken, current, predicted
+
+    @staticmethod
+    def _runs_outside(span, other):
+        """The parts of one character range that another does not cover."""
+        if span is None or span[1] <= span[0]:
+            return []
+        if other is None:
+            return [span]
+        start, stop = span
+        other_start, other_stop = other
+        runs = []
+        if start < min(stop, other_start):
+            runs.append((start, min(stop, other_start)))
+        if max(start, other_stop) < stop:
+            runs.append((max(start, other_stop), stop))
+        return runs
+
+    def _paint_range(self, cursor, start: int, stop: int, fmt, fade: bool):
+        """Format one run, either at once or through a crossfade."""
+        if stop <= start:
+            return
+        cursor.setPosition(start)
+        cursor.setPosition(stop, QTextCursor.KeepAnchor)
+        if fade and self.TIER_FADE_SECONDS > 0:
+            self._fade_range(cursor, start, stop, fmt)
+        else:
+            cursor.setCharFormat(fmt)
+
+    def _fade_range(self, cursor, start: int, stop: int, target):
+        """Start a crossfade for one run, from whatever it displays now.
+
+        The origin is read back out of the document, so a fade interrupted by
+        the next word continues from the mixed colour on screen rather than
+        jumping to the old endpoint first. A pending fade over the same run is
+        replaced by this one, and split around it rather than dropped: the
+        words either side still need their own transition, and losing their
+        fade would leave them painted as a tier they have already left.
+        """
+        origin = QTextCharFormat(cursor.charFormat())
+        kept = []
+        for fade in self._tier_fades:
+            fade_start, fade_end = fade["start"], fade["stop"]
+            if fade_end <= start or fade_start >= stop:
+                kept.append(fade)
+                continue
+            for part_start, part_stop in ((fade_start, min(fade_end, start)),
+                                          (max(fade_start, stop), fade_end)):
+                if part_stop > part_start:
+                    kept.append({**fade, "start": part_start,
+                                 "stop": part_stop})
+        kept.append({
+            "start": start,
+            "stop": stop,
+            "origin": origin,
+            "target": QTextCharFormat(target),
+            "started": time.monotonic(),
+        })
+        self._tier_fades = kept
+
+    def _advance_tier_fades(self, now: Optional[float] = None) -> bool:
+        """Paint one frame of every crossfade; True when anything moved.
+
+        Driven from the reader's own 60 Hz clock, so an idle reader costs one
+        empty check per tick and a state change costs about seven small
+        formats. The final frame writes the target exactly, which is what
+        makes the resting state independent of the animation.
+        """
+        if not self._tier_fades or not self._script_text:
+            return False
+        moment = time.monotonic() if now is None else now
+        document = self._text_edit.document()
+        # A script can be replaced between two ticks. A fade that points past
+        # the new document is dropped rather than clamping onto other words.
+        self._tier_fades = [fade for fade in self._tier_fades
+                            if 0 <= fade["start"] < fade["stop"]
+                            <= document.characterCount() - 1]
+        if not self._tier_fades:
+            return False
+        cursor = QTextCursor(document)
+        pending = []
+        for fade in self._tier_fades:
+            progress = ((moment - fade["started"]) / self.TIER_FADE_SECONDS
+                        if self.TIER_FADE_SECONDS > 0 else 1.0)
+            cursor.setPosition(fade["start"])
+            cursor.setPosition(fade["stop"], QTextCursor.KeepAnchor)
+            if progress >= 1.0:
+                cursor.setCharFormat(fade["target"])
+                continue
+            cursor.setCharFormat(self._blend_formats(fade["origin"],
+                                                     fade["target"], progress))
+            pending.append(fade)
+        self._tier_fades = pending
+        return True
+
+    @staticmethod
+    def _blend_formats(origin, target, progress: float):
+        """A format partway between two tiers.
+
+        Only ink, band alpha and the rule are interpolated; the font is always
+        the target's, so a word can never change metrics halfway through a
+        transition. The curve is ease-out: most of the change lands in the
+        first half, which is what makes 120 ms read as a settle rather than a
+        delay.
+        """
+        eased = 1.0 - (1.0 - max(0.0, min(1.0, float(progress)))) ** 3
+        blended = QTextCharFormat(target)
+        here = origin.foreground().color()
+        there = target.foreground().color()
+        blended.setForeground(QColor(
+            int(round(here.red() + (there.red() - here.red()) * eased)),
+            int(round(here.green() + (there.green() - here.green()) * eased)),
+            int(round(here.blue() + (there.blue() - here.blue()) * eased))))
+        band = target.background()
+        band_colour = band.color()
+        to_alpha = band_colour.alpha() if band.style() != Qt.NoBrush else 0
+        from_alpha = (origin.background().color().alpha()
+                      if origin.background().style() != Qt.NoBrush else 0)
+        alpha = int(round(from_alpha + (to_alpha - from_alpha) * eased))
+        if alpha <= 0:
+            blended.setBackground(QBrush(Qt.NoBrush))
+        else:
+            blended.setBackground(QColor(band_colour.red(),
+                                         band_colour.green(),
+                                         band_colour.blue(), alpha))
+        # A rule cannot be faded; it is on for the second half of the change,
+        # so an anticipated word does not gain it before its ink has settled.
+        blended.setFontUnderline(target.fontUnderline() if eased >= 0.5
+                                 else origin.fontUnderline())
+        return blended
 
     def _apply_highlight(self, position: int):
         if not self._script_text:
@@ -3960,41 +4165,14 @@ class NotchOverlay(QWidget):
             # Line spacing is part of the layout: measure the lines again.
             self._refresh_lines()
         doc = self._text_edit.document()
-
-        # Resting text is the reference's near-white. Text already spoken
-        # recedes, so the words still to come stay the brightest thing.
-        base_hex = "#111111" if not self._dark_theme else "#fafafa"
-        # Already-spoken type recedes, but not below reading contrast: on
-        # paper the old #a0a0a0 was 2.5:1, which is faint even for text the
-        # eye has already left. #767676 keeps it clearly secondary at 4.5:1.
-        spoken_hex = "#767676" if not self._dark_theme else "#8a8a8a"
-        # Anticipated words are accent type with a rule under it. They do not
-        # take a background: the one tinted band belongs to the words being
-        # spoken, and a second tinted block would make it ambiguous which
-        # words the voice is actually on.
-        predicted_hex = (self.PREDICTED_LIGHT if not self._dark_theme
-                         else self.PREDICTED_DARK)
-        base_format = QTextCharFormat()
-        base_format.setForeground(QColor(base_hex))
-        spoken_format = QTextCharFormat()
-        spoken_format.setForeground(QColor(spoken_hex))
-        predicted_format = QTextCharFormat(base_format)
-        predicted_format.setForeground(QColor(predicted_hex))
-        predicted_format.setFontUnderline(True)
-        predicted_format.setUnderlineColor(QColor(predicted_hex))
-        # The words being spoken come back to full brightness on one quiet
-        # band, so the eye can find its place without the line moving. The
-        # band is the accent pre-blended against the card: QTextEdit paints a
-        # character background opaquely, so a translucent colour would land
-        # as a solid block of accent.
-        current_format = QTextCharFormat(base_format)
-        current_format.setBackground(QColor("#0A1940") if self._dark_theme
-                                     else QColor("#E1EFFF"))
+        base_format, spoken_format, current_format, predicted_format = \
+            self._tier_formats()
 
         end = self._apply_highlight_end(position)
         focus = None
         if position >= 0 and end > 0:
-            first = max(0, min(position, self._matching.word_count - 1) - (self.FOCUS_WORDS - 1))
+            first = max(0, min(position, self._matching.word_count - 1)
+                        - (self.FOCUS_WORDS - 1))
             start = self._matching.word_span(first)[0]
             focus = (start, end)
         predicted = self._predicted_range(position)
@@ -4005,8 +4183,11 @@ class NotchOverlay(QWidget):
         # apply would look like a new document. Content changes invalidate
         # this key explicitly (load, restore, editor collapse).
         key = (len(self._script_text), self._font_family,
-               self._font_size, self._dark_theme, base_hex, spoken_hex,
-               predicted_hex)
+               self._font_size, self._dark_theme,
+               base_format.foreground().color().name(),
+               spoken_format.foreground().color().name(),
+               current_format.foreground().color().name(),
+               predicted_format.foreground().color().name())
         previous = self._highlight_end
         # A stale key means the document, theme or type changed under the
         # shading; every range has to be repainted from the base.
@@ -4020,8 +4201,9 @@ class NotchOverlay(QWidget):
         cursor = QTextCursor(doc)
         if full:
             # Rare (load, theme, type change): repaint every tier in one undo
-            # step. The reader is read-only, so this grouping is only about
-            # making the document settle once.
+            # step, with no crossfade. A theme is a new surface, not a state
+            # change, and easing one into the other would look like a mistake.
+            self._tier_fades = []
             cursor.beginEditBlock()
             cursor.select(QTextCursor.Document)
             cursor.setCharFormat(base_format)
@@ -4039,51 +4221,46 @@ class NotchOverlay(QWidget):
                 cursor.setCharFormat(current_format)
             cursor.endEditBlock()
             self._predicted_span = predicted
-        elif end > previous:
+            self._focus_span = focus
+            return
+
+        # Every path below paints only what changed, and each run fades from
+        # the format the document holds now, so a word that arrives while an
+        # earlier transition is still in flight continues from the mix on
+        # screen.
+        if end > previous:
             # The reader moved forward: the run before `previous` is already
-            # shaded, so only the new words need the spoken colour. No edit
-            # block here: grouping a single commit cost more than the commit
-            # itself, and there is no undo history to protect in a reader.
-            cursor.setPosition(previous)
-            cursor.setPosition(end, QTextCursor.KeepAnchor)
-            cursor.setCharFormat(spoken_format)
-        else:
+            # shaded, so only the new words need the spoken colour.
+            self._paint_range(cursor, previous, end, spoken_format, fade=True)
+        elif end < previous:
             # It moved back (wheel, checkpoint, reset): un-shade the run the
             # reader has returned to.
-            cursor.setPosition(end)
-            cursor.setPosition(previous, QTextCursor.KeepAnchor)
-            cursor.setCharFormat(base_format)
+            self._paint_range(cursor, end, previous, base_format, fade=True)
 
-        # An anticipated run that changed is only two small formats: the part
-        # that became spoken is left alone, the old tail returns to the base
-        # colour, and the new tail gets the accent. This is the path every
-        # 20 Hz prediction update takes.
+        # An anticipated run that changed is at most four small runs: the
+        # words that stopped being anticipated return to the base colour, the
+        # words that were not anticipated before take the accent. Anything at
+        # or before the spoken boundary is left to the spoken tier.
         if predicted != previous_predicted:
-            if previous_predicted:
-                start = max(end, previous_predicted[0])
-                stop = previous_predicted[1]
-                if stop > start:
-                    cursor.setPosition(start)
-                    cursor.setPosition(stop, QTextCursor.KeepAnchor)
-                    cursor.setCharFormat(base_format)
-            if predicted:
-                cursor.setPosition(predicted[0])
-                cursor.setPosition(predicted[1], QTextCursor.KeepAnchor)
-                cursor.setCharFormat(predicted_format)
+            for start, stop in self._runs_outside(previous_predicted, predicted):
+                start = max(start, end)
+                self._paint_range(cursor, start, stop, base_format, fade=True)
+            for start, stop in self._runs_outside(predicted, previous_predicted):
+                self._paint_range(cursor, start, stop, predicted_format,
+                                  fade=True)
             self._predicted_span = predicted
 
-        # Only the words that entered or left the band are touched: moving the
-        # band one word is two tiny formats, not a pass over the script.
+        # Only the words that entered or left the band are touched. The words
+        # the two states share keep their band, which is what makes the band
+        # move by one word instead of pulsing on and off.
         if focus != previous_focus:
-            if previous_focus:
-                start, stop = previous_focus
-                cursor.setPosition(start)
-                cursor.setPosition(stop, QTextCursor.KeepAnchor)
-                cursor.setCharFormat(spoken_format if stop <= end else base_format)
-            if focus:
-                cursor.setPosition(focus[0])
-                cursor.setPosition(focus[1], QTextCursor.KeepAnchor)
-                cursor.setCharFormat(current_format)
+            for start, stop in self._runs_outside(previous_focus, focus):
+                self._paint_range(cursor, start, stop,
+                                  spoken_format if stop <= end else base_format,
+                                  fade=True)
+            for start, stop in self._runs_outside(focus, previous_focus):
+                self._paint_range(cursor, start, stop, current_format,
+                                  fade=True)
             self._focus_span = focus
 
     def _apply_line_spacing(self) -> bool:

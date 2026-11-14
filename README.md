@@ -26,7 +26,7 @@ A sticky note, opened with `Ctrl+N`.
 
 ## What it does
 
-The reader shows a few words per line at its default size and keeps the line being read at a fixed anchor. Words already spoken are dimmed, the active line is full brightness, and the next words are shaded before the recogniser confirms them. A small waveform at the foot of the card follows the microphone level, and the four floating controls (minimize, new note, mute, narrow/wide) sit outside the text column so no glyph covers a word. While reading, the controls recede after three seconds of stillness and return when the pointer moves.
+The reader shows a few words per line at its default size and keeps the line being read at a fixed anchor. Words already spoken are dimmed, the words under the voice carry the brighter accent on a quiet band, and the next two to four words take a quieter accent before the recogniser confirms them. A small waveform at the foot of the card follows the microphone level, and the four floating controls (minimize, new note, mute, narrow/wide) sit outside the text column so no glyph covers a word. While reading, the controls recede after three seconds of stillness and return when the pointer moves.
 
 Double-clicking the script opens an editor for it. A `.txt` file can also be dropped onto the window or opened from the right-click menu. The editor takes a space bar for a space and keeps the reader's shortcuts out of the way while it has the keyboard.
 
