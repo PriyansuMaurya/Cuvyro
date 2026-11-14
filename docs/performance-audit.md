@@ -20,9 +20,9 @@ names the harness that produced it.
 | Animations ≥ 60 FPS | glide frame interval **16.0 – 16.2 ms** mean over 12,448 frames (3 × 180 s and 1 × 480 s of continuous reading); p95 **17.3 ms** idle box, **26 ms** shared box | passes on cadence; the p95 tail is host scheduling, see below |
 | Speech follow ≤ 200 ms | the app's own work is **2.45 ms** from result to paint. End to end is set by the recogniser's endpointing, and the predictive layer paints *ahead* of the voice (1.05 s mean lead, `bench_predictive_highlight`) | app passes; the end-to-end figure is not the metric this design uses |
 | Idle CPU ≤ 2 % | **1.5 %** for the overlay alone over 30 s; **6.1 – 6.2 %** with the microphone pipeline listening in a quiet room, of which the 60 Hz clock is ~2.5 points and the voice pipeline ~3.6 | **unmet** in the default Voice mode |
-| Idle RAM ≤ 150 MB | **60 MB** for the overlay; **202 – 214 MB** once the acoustic model is resident | **unmet** with voice mode live |
+| Idle RAM ≤ 150 MB | **60 MB** for the overlay; **89 MB** in Manual mode; **202 – 216 MB** once the acoustic model is resident | passes in Manual mode; **unmet** while Voice is listening |
 | Memory growth ≤ 5 %/h | 15 min of continuous reading: 201.5 MB at t=30 s, 206.4 MB at t=900 s; **+0.3 MB** over the last 7 min and **+24 Python objects** over the last 12 min | passes |
-| Camera tracking ≤ 100 ms | not measured: no camera on this machine (`measure_head_tracking.py` SKIPs). The worker's documented 14.7 Hz is 68 ms per reading | unverified |
+| Camera tracking ≤ 100 ms | one 640×480 pass costs **92 – 115 ms** (median ~98) on this machine, so a fresh reading arrives at ~10 Hz at best. No face was in frame, so the landmark path itself is unexercised | **at the edge**; end to end unverified |
 | Zero crashes over 8 h | not run. The 15 min soak above is the only endurance evidence | unverified |
 | Zero functional regressions | 11/11 offscreen checks pass, before and after (identical list, identical results) | passes |
 
@@ -62,13 +62,33 @@ a coarse 16 ms timer averaging 16.3 ms, not the 31.25 ms bucket the theory
 predicted. The apparent gain was the box being idle during the first three
 runs. The line was removed: an unverified one-liner is worse than no change.
 
+## What changed, and what did not
+
+The speech model is now freed when Voice mode is left. `_toggle_mode` to
+Manual, and a checkpoint jump out of Voice, call
+`speech.request_drop_recognizer()`; the worker finishes, the overlay's sweep
+clears the stopped worker and collects. Measured over three Voice/Manual
+cycles: **208 → 89 MB** on the switch, back to 212, 216, 214 MB on return, with
+no accumulation across cycles. The reload costs **3.0 – 4.2 s**, paid behind
+the existing "Preparing voice match..." status. The collect itself is 8 – 11 ms
+and runs 300 ms after the switch, never during a reading. Mute does not free
+the model: it is a pause, not a change of mode, and paying the load on every
+mute would be a worse trade than the memory.
+
+Slowing the VAD during silence was measured and **not** done. Silero costs
+0.459 ms per 100 ms block, 0.46 % of one core; feeding three blocks per call
+costs 1.388 ms, the same per audio second, because sherpa runs the model on
+fixed 512-sample windows no matter how the audio is batched. The call count
+is not where the time goes, so the batching would add first-word latency and
+save nothing. The idle CPU that is left is the recogniser decoding whatever
+the room gives it, which is the feature working.
+
 ## Ceilings that are product decisions, not bugs
 
 - **The engine cache.** `speech.create_recognizer` keeps the loaded recogniser
-  after a worker stops, so switching to the editor and back does not pay the
-  4.2 s load again. It also means a Manual-mode session still holds ~150 MB it
-  never uses. Releasing it when the mode changes would put Manual mode inside
-  the 150 MB target and cost a 4.2 s stall on the next switch to Voice.
+  after a worker stops, so opening the editor and coming back does not pay the
+  load again. That reuse is why mute and the editor keep the model; only a
+  change of mode frees it.
 - **The voice pipeline's idle cost.** The VAD runs on every 100 ms block so a
   reading can start the moment a word is spoken. Halving the rate would cut
   that cost and add latency to the first word.

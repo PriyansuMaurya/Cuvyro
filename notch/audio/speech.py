@@ -41,6 +41,7 @@ _cache_lock = threading.Lock()
 _cached_key: Optional[Tuple[str, int]] = None
 _cached_engine: Optional["StreamRecognizer"] = None
 _cached_busy = False
+_drop_requested = False
 
 
 def _log(message: str):
@@ -326,14 +327,38 @@ def create_recognizer(model_dir: str,
     return engine
 
 
+def request_drop_recognizer() -> None:
+    """Free the loaded model once the worker holding it has exited.
+
+    Switching to Manual mode is not a pause: nothing is going to decode
+    until the reader goes back to Voice, and the resident model is ~150 MB.
+    Dropping it costs the next Voice start its load again (~4 s), which is
+    the trade this exists to make explicit. A worker that is still running
+    finishes first; dropping the reference underneath it would free nothing
+    (the worker holds its own) and only lose the reuse it was counting on.
+    """
+    global _drop_requested, _cached_engine, _cached_key
+    with _cache_lock:
+        if _cached_busy:
+            _drop_requested = True
+            return
+        _drop_requested = False
+        _cached_engine = None
+        _cached_key = None
+
+
 def release_recognizer(engine: Optional[StreamRecognizer]):
     """Let a finished worker's engine be reused by the next one."""
-    global _cached_busy
+    global _cached_busy, _cached_engine, _cached_key, _drop_requested
     if engine is None:
         return
     with _cache_lock:
         if engine is _cached_engine:
             _cached_busy = False
+            if _drop_requested:
+                _drop_requested = False
+                _cached_engine = None
+                _cached_key = None
 
 
 def _build_recognizer(model_dir: str, num_threads: int

@@ -1,3 +1,4 @@
+import gc
 import os
 import sys
 import time
@@ -1635,6 +1636,37 @@ class NotchOverlay(QWidget):
             w.wait(50)
         self._stopping_worker = None
 
+    def _release_speech_model(self) -> None:
+        """Free the acoustic model when Voice mode is left.
+
+        Manual mode never decodes anything, and the loaded model is ~150 MB
+        resident. The next switch back to Voice pays the load again (~3 s),
+        which is what the menu's "Preparing voice match..." status is for.
+        The sweep waits for the worker thread to exit, because the worker
+        holds the model until then, and the QThread cycle around it keeps the
+        memory until a collect runs.
+        """
+        try:
+            from notch.audio.speech import request_drop_recognizer
+        except Exception:
+            return
+        request_drop_recognizer()
+        # The stopped worker is blocked from emitting, so its `finished` never
+        # arrives; poll for the thread instead, and give up rather than spin.
+        QTimer.singleShot(300, self._sweep_released_model)
+
+    def _sweep_released_model(self, attempt: int = 0) -> None:
+        """Collect the model the stopped worker was holding."""
+        worker = getattr(self, "_stopping_worker", None)
+        if worker is not None and worker.isRunning():
+            if attempt < 20:            # ≤ 6 s, then leave it to the next start
+                QTimer.singleShot(
+                    300, lambda: self._sweep_released_model(attempt + 1))
+            return
+        if worker is not None:
+            self._stopping_worker = None
+        gc.collect()
+
     def _log_install_paths(self):
         """When running as installed exe, write data path and existence to a log for debugging."""
         try:
@@ -2884,6 +2916,7 @@ class NotchOverlay(QWidget):
             self._start_listening()
         else:
             self._stop_listening()
+            self._release_speech_model()
             self._target_glow_alpha = 28  # Dim glow in manual mode
             self._smoothed_volume_level = 0.0
             self._manual_running = False
@@ -4198,6 +4231,7 @@ class NotchOverlay(QWidget):
         if self._voice_mode:
             self._voice_mode = False
             self._stop_listening()
+            self._release_speech_model()
             self._target_glow_alpha = 28
             self._smoothed_volume_level = 0.0
             self._schedule_save()
