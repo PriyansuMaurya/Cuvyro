@@ -43,6 +43,16 @@ jobs:
           Move-Item (Join-Path $env:RUNNER_TEMP 'vosk-model-small-en-us-0.15') 'model'
           Write-Host "Model ready: $(Get-ChildItem model | Measure-Object | Select-Object -ExpandProperty Count) entries"
 
+      # Head tracking ships the MediaPipe landmarker beside the speech model,
+      # and model/ is not tracked, so the runner has to fetch it as well.
+      - name: Fetch face landmark model
+        run: |
+          $dest = Join-Path 'model' 'face_landmarker.task'
+          Invoke-WebRequest -Uri 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task' -OutFile $dest
+          $size = (Get-Item $dest).Length
+          if ($size -lt 1MB) { throw "face landmarker is truncated: $size bytes" }
+          Write-Host "Face landmarker ready: $size bytes"
+
       # Same one-command flow used locally; version comes from the tag.
       - name: Build installer
         shell: cmd

@@ -74,7 +74,7 @@ The first Voice session loads the acoustic model before it can hear anything. Th
 ## Building a Windows installer
 
 ```
-build-installer.bat 1.6.0
+build-installer.bat 1.6.1
 ```
 
 The script creates or reuses `.venv`, installs the requirements plus PyInstaller, checks for the model files, freezes the app with `packaging/notch.spec`, copies `model/` beside `Notch.exe`, and compiles the installer with Inno Setup 6. The result is `dist\NotchSetup-<version>.exe`. Inno Setup can be installed with `winget install JRSoftware.InnoSetup`.

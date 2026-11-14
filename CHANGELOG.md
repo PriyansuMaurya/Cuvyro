@@ -6,6 +6,22 @@ saved state or a workflow. Each release is a `vX.Y.Z` tag on `main`; this file
 starts at 1.6.0, and earlier releases are described by their tags and commit
 messages.
 
+## 1.6.1 — 2026-11-14
+
+A patch release for the installer pipeline; no application code changed. The
+installer builder, the Inno script, the frozen exe's version resource and the
+README's build command all name 1.6.1.
+
+### Fixed
+
+- The release workflow now fetches `model/face_landmarker.task`. Its only model
+  step unpacked the Vosk speech model, and `model/` is not tracked by git, so a
+  fresh runner had the fallback recogniser and nothing for head tracking. The
+  build script has required the landmarker since head tracking moved to the
+  MediaPipe detector; the v1.6.0 tag build stopped on that check before
+  PyInstaller ran, so the tag published no installer and no release. The step
+  also rejects a file under 1 MB, which is the size a saved error page would be.
+
 ## 1.6.0 — 2026-11-14
 
 Ten commits landed after 1.5.0 without a release of their own, plus a new
