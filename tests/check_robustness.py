@@ -64,6 +64,22 @@ def hex_rgb(value):
     return tuple(int(value[index:index + 2], 16) for index in (0, 2, 4))
 
 
+def settle_closing(window, note, label=""):
+    """Finish a note's exit animation.
+
+    The corner and Escape now leave through the note's dismissal, which fades
+    and shrinks the card before closing it, so the window is still listed for
+    a moment after the key. Stepping the spring directly keeps the check
+    deterministic instead of guessing at a wait.
+    """
+    for _ in range(240):
+        if note not in window._notes:
+            return
+        note._presence.step(1 / 60)
+        note._apply_presence()
+    raise AssertionError(f"{note.note_id} never finished closing ({label})")
+
+
 def saved_note(directory, index=0):
     notes = state_file(directory).get("notes") or []
     if index >= len(notes) or not isinstance(notes[index], dict):
@@ -811,14 +827,14 @@ def main():
     QTest.qWait(100)
     first_id = note_window.note_id
     QTest.keyClick(note_window._close, Qt.Key_Space)
-    QTest.qWait(150)
+    settle_closing(import_win, note_window, "space on the corner")
     check("a note closes from the keyboard",
           first_id not in [note.note_id for note in import_win._notes])
 
     second = import_win._open_note()
     second_id = second.note_id
     second._escape.activated.emit()
-    QTest.qWait(150)
+    settle_closing(import_win, second, "escape")
     check("Escape closes a note",
           second_id not in [note.note_id for note in import_win._notes])
 

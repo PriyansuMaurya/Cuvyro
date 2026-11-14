@@ -44,6 +44,7 @@ from notch.ui.controls import (
 from notch.ui.note_placement import choose_position
 from notch.ui.notes import NoteWindow
 from notch.ui.settings import SettingsDialog
+from notch.ui import motion, theme
 from notch.ui.spring import Spring, SpringGroup, system_allows_motion
 from notch.ui import tooltips
 
@@ -112,15 +113,16 @@ class HelpDialog(QDialog):
         self._dark = dark
         self._drag_pos = None
         self._close_pending = None
+        self._closing = False
+        window_fade = int(motion.WINDOW_FADE * 1000)
         self._opacity_anim = QPropertyAnimation(self, b"windowOpacity")
-        self._opacity_anim.setDuration(300)
+        self._opacity_anim.setDuration(window_fade)
         self._opacity_anim.setEasingCurve(QEasingCurve.OutCubic)
         self._opacity_anim.setStartValue(0.0)
         self._opacity_anim.setEndValue(1.0)
         self._fade_out_anim = QPropertyAnimation(self, b"windowOpacity")
-        self._fade_out_anim.setDuration(300)
+        self._fade_out_anim.setDuration(window_fade)
         self._fade_out_anim.setEasingCurve(QEasingCurve.InCubic)
-        self._fade_out_anim.setStartValue(1.0)
         self._fade_out_anim.setEndValue(0.0)
         self._fade_out_anim.finished.connect(self._on_fade_out_finished)
 
@@ -301,34 +303,45 @@ class HelpDialog(QDialog):
     def _on_fade_out_finished(self):
         pending = self._close_pending
         self._close_pending = None
+        # The fade has run: the dialog is allowed to close for real now, or
+        # its own closeEvent would start another fade and never finish.
+        self._closing = True
         if pending == "accept":
             super(HelpDialog, self).accept()
         elif pending == "reject":
             super(HelpDialog, self).reject()
 
-    def closeEvent(self, event):
-        if self._close_pending is not None or self._fade_out_anim.state() == QAbstractAnimation.Running:
-            event.ignore()
-            return
-        self._close_pending = "reject"
+    def _start_fade_out(self, pending: str):
+        """Leave from whatever opacity the window has right now.
+
+        The old exit always started at 1.0, so dismissing the guide while it
+        was still arriving snapped it to full opacity and then faded. Reading
+        the live value is what lets the dismissal interrupt the arrival
+        instead of restarting from a frame that was never on screen.
+        """
+        self._close_pending = pending
+        self._fade_out_anim.stop()
+        self._fade_out_anim.setStartValue(self.windowOpacity())
         self._fade_out_anim.start()
+
+    def closeEvent(self, event):
+        if self._closing:
+            event.accept()
+            return
+        self._start_fade_out("reject")
         event.ignore()
 
     def reject(self):
-        if self._fade_out_anim.state() == QAbstractAnimation.Running:
+        if self._closing:
+            super(HelpDialog, self).reject()
             return
-        if self._close_pending is not None:
-            return
-        self._close_pending = "reject"
-        self._fade_out_anim.start()
+        self._start_fade_out("reject")
 
     def accept(self):
-        if self._fade_out_anim.state() == QAbstractAnimation.Running:
+        if self._closing:
+            super(HelpDialog, self).accept()
             return
-        if self._close_pending is not None:
-            return
-        self._close_pending = "accept"
-        self._fade_out_anim.start()
+        self._start_fade_out("accept")
 
     # ── Custom rounded painting (matches pill / settings) ──────────
     def paintEvent(self, event):
@@ -562,12 +575,15 @@ class NotchOverlay(QWidget):
     # card (AAA for body text), the current words clear 7:1 against their own
     # band, and the predicted accent is a quieter, less saturated blue so it
     # reads as a hint rather than as confirmation.
-    CURRENT_DARK = "#A9CCFF"      # 12.8:1 on the dark card
-    CURRENT_LIGHT = "#0A3A8F"     # 10.4:1 on the light card
-    PREDICTED_DARK = "#9FB3DC"    # 10.0:1, low chroma: a hint, not a state
-    PREDICTED_LIGHT = "#3F5382"   # 7.6:1, the same quiet register on paper
-    BAND_DARK = "#0A1940"
-    BAND_LIGHT = "#E1EFFF"
+    # The values live in ``notch/ui/theme.py`` with the rest of the palette so
+    # a note, a tooltip and the reading line cannot drift apart; these names
+    # stay because the checks read them off the window.
+    CURRENT_DARK = theme.CURRENT.dark        # 12.8:1 on the dark card
+    CURRENT_LIGHT = theme.CURRENT.light      # 10.4:1 on the light card
+    PREDICTED_DARK = theme.PREDICTED.dark    # 10.0:1, low chroma: a hint
+    PREDICTED_LIGHT = theme.PREDICTED.light  # 7.6:1, quiet on paper
+    BAND_DARK = theme.BAND.dark
+    BAND_LIGHT = theme.BAND.light
     # "Slightly heavier" is a hairline stroke around the glyphs, not a font
     # weight. A heavier face changes every advance width, which re-wraps the
     # line and moves the words the reader is looking at; a stroke thickens the
@@ -576,7 +592,7 @@ class NotchOverlay(QWidget):
     CURRENT_STROKE = 0.6
     # A state change fades instead of snapping. Long enough to read as a
     # transition, short enough that the paint is never behind the voice.
-    TIER_FADE_SECONDS = 0.12
+    TIER_FADE_SECONDS = motion.TIER_FADE
     # The prediction is recomputed at 20 Hz. Faster changes nothing the eye can
     # follow and would repaint the document for no reason.
     PREDICTION_INTERVAL = 0.05
@@ -790,7 +806,7 @@ class NotchOverlay(QWidget):
         # ── Fade-in animation ─────────────────────────────────────────
         self.setWindowOpacity(0.0)
         self._fade_anim = QPropertyAnimation(self, b"windowOpacity")
-        self._fade_anim.setDuration(400)  # 0.4s
+        self._fade_anim.setDuration(int(motion.WINDOW_FADE * 1000))
         self._fade_anim.setStartValue(0.0)
         self._fade_anim.setEndValue(1.0)
         self._fade_anim.setEasingCurve(QEasingCurve.OutCubic)
@@ -1275,7 +1291,7 @@ class NotchOverlay(QWidget):
         self._chrome.setGraphicsEffect(self._chrome_opacity)
         self._chrome_opacity.setOpacity(1.0)
         self._chrome_fade = QPropertyAnimation(self._chrome_opacity, b"opacity", self)
-        self._chrome_fade.setDuration(240)
+        self._chrome_fade.setDuration(int(motion.CHROME_RECEDE * 1000))
         self._chrome_fade.setEasingCurve(QEasingCurve.OutCubic)
         self.setMouseTracking(True)
         self._idle_timer = QTimer(self)
@@ -1323,13 +1339,13 @@ class NotchOverlay(QWidget):
         self._text_edit.setGraphicsEffect(self._text_opacity)
         self._text_opacity.setOpacity(1.0)
         self._text_fade_out = QPropertyAnimation(self._text_opacity, b"opacity")
-        self._text_fade_out.setDuration(150)
+        self._text_fade_out.setDuration(int(motion.TEXT_SWAP * 1000))
         self._text_fade_out.setStartValue(1.0)
         self._text_fade_out.setEndValue(0.0)
         self._text_fade_out.setEasingCurve(QEasingCurve.InCubic)
         self._text_fade_out.finished.connect(self._on_text_fade_out_finished)
         self._text_fade_in = QPropertyAnimation(self._text_opacity, b"opacity")
-        self._text_fade_in.setDuration(150)
+        self._text_fade_in.setDuration(int(motion.TEXT_SWAP * 1000))
         self._text_fade_in.setStartValue(0.0)
         self._text_fade_in.setEndValue(1.0)
         self._text_fade_in.setEasingCurve(QEasingCurve.OutCubic)
@@ -1349,12 +1365,12 @@ class NotchOverlay(QWidget):
         self._speed_feedback_opacity = QGraphicsOpacityEffect(self._speed_feedback_lbl)
         self._speed_feedback_lbl.setGraphicsEffect(self._speed_feedback_opacity)
         self._speed_feedback_fade_in = QPropertyAnimation(self._speed_feedback_opacity, b"opacity")
-        self._speed_feedback_fade_in.setDuration(100)
+        self._speed_feedback_fade_in.setDuration(int(motion.SPEED_HINT * 1000))
         self._speed_feedback_fade_in.setStartValue(0.0)
         self._speed_feedback_fade_in.setEndValue(1.0)
         self._speed_feedback_fade_in.setEasingCurve(QEasingCurve.OutCubic)
         self._speed_feedback_fade_out = QPropertyAnimation(self._speed_feedback_opacity, b"opacity")
-        self._speed_feedback_fade_out.setDuration(100)
+        self._speed_feedback_fade_out.setDuration(int(motion.SPEED_HINT * 1000))
         self._speed_feedback_fade_out.setStartValue(1.0)
         self._speed_feedback_fade_out.setEndValue(0.0)
         self._speed_feedback_fade_out.setEasingCurve(QEasingCurve.InCubic)
@@ -2763,7 +2779,7 @@ class NotchOverlay(QWidget):
 
             def fade_in():
                 anim = QPropertyAnimation(menu, b"windowOpacity", menu)
-                anim.setDuration(120)
+                anim.setDuration(int(motion.MENU_APPEAR * 1000))
                 anim.setStartValue(0.0)
                 anim.setEndValue(1.0)
                 anim.setEasingCurve(QEasingCurve.OutCubic)
@@ -3138,7 +3154,8 @@ class NotchOverlay(QWidget):
         self._chrome_fade.stop()
         self._chrome_fade.setStartValue(self._chrome_opacity.opacity())
         self._chrome_fade.setEndValue(target)
-        self._chrome_fade.setDuration(170 if target < 1.0 else 150)
+        self._chrome_fade.setDuration(int(
+            (motion.CHROME_RECEDE if target < 1.0 else motion.CHROME_RETURN) * 1000))
         if not system_allows_motion():
             self._chrome_opacity.setOpacity(target)
             return
@@ -3999,13 +4016,13 @@ class NotchOverlay(QWidget):
         line and move the type the reader is looking at.
         """
         base = QTextCharFormat()
-        base.setForeground(QColor("#fafafa" if self._dark_theme else "#111111"))
+        base.setForeground(QColor(theme.SCRIPT.pick(self._dark_theme)))
         # Already-spoken type recedes, but not below reading contrast: on
         # paper the old #a0a0a0 was 2.5:1, which is faint even for text the
-        # eye has already left. #767676 keeps it clearly secondary at 4.5:1.
+        # eye has already left. The theme's spoken role keeps it clearly
+        # secondary at 4.5:1.
         spoken = QTextCharFormat(base)
-        spoken.setForeground(QColor("#8a8a8a" if self._dark_theme
-                                    else "#767676"))
+        spoken.setForeground(QColor(theme.SPOKEN.pick(self._dark_theme)))
         # Anticipated words carry a quieter accent and a hairline rule. They
         # never take the band: the one tinted block belongs to the words the
         # voice is actually on, and a second block would make it ambiguous

@@ -51,6 +51,7 @@ from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette, QPen
 from PyQt5.QtWidgets import QApplication, QLabel, QMenu, QWidget
 
 from notch.platform.capture import exclude_from_capture
+from notch.ui import motion, theme
 from notch.ui.spring import Spring, system_allows_motion
 
 HOVER_DELAY_MS = 650
@@ -59,18 +60,21 @@ LEAVE_GRACE_MS = 90
 AUTO_HIDE_MS = 9000
 
 PAD_X, PAD_Y = 10.0, 7.0
-RADIUS = 8.0
+RADIUS = float(theme.RADIUS["surface"])
 SHADOW = 10.0          # room inside the window for the rings
 GAP = 8.0              # between the control and the panel
 SCREEN_MARGIN = 8.0
 MAX_TEXT_W = 260.0
-TYPE_PX = 12.0
+TYPE_PX = float(theme.TYPE["field"])
 TRACKING_PX = 0.2
 
-# (fill, hairline, bright top edge alpha), one per theme.
-PANEL = {True: ("#1E1E1E", "#343436", 26),
-         False: ("#F7F7F8", "#E4E4E6", 200)}
-INK = {True: "#EDEDEF", False: "#151517"}
+# (fill, hairline, bright top edge alpha), one per theme. The panel is the
+# same material as the menu and the note, so the roles come from the theme.
+PANEL = {True: (theme.SURFACE.dark, theme.HAIRLINE.dark,
+                theme.SHADOW_ALPHA[True]),
+         False: (theme.SURFACE.light, theme.HAIRLINE.light,
+                 theme.SHADOW_ALPHA[False])}
+INK = {True: theme.INK.dark, False: theme.INK.light}
 
 
 # ── reading a widget ─────────────────────────────────────────────────
@@ -176,7 +180,8 @@ class Tooltip(QWidget):
         # Rest thresholds are set to where the eye stops seeing the fade, not
         # to a mathematically settled value: an opacity within 2% is gone, and
         # waiting for the last 0.4% made every dismissal feel a beat too slow.
-        self._presence = Spring(0.0, damping=1.0, response=0.16,
+        self._presence = Spring(0.0, damping=motion.TOOLTIP.damping,
+                                response=motion.TOOLTIP.response,
                                 rest_value=0.02, rest_velocity=0.6)
         self._clock = QTimer(self)
         self._clock.setInterval(16)

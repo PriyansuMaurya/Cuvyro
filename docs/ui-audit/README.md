@@ -335,6 +335,111 @@ Known limits of this pass:
   rather than partials during it, and the reader steps on partials. A
   benchmark would only have confirmed a latency the design cannot use.
 
+## Motion and one palette (fifth pass)
+
+The surfaces used to carry their own copies of the same greys and their own
+literals for the same durations: the note was `#1C1C1C` beside the menu's
+`#1E1E1E`, a hover faded in 150 ms in one place and 170 in another. Two
+values a few levels or a few milliseconds apart do not read as a hierarchy,
+they read as drift. Both now come from one module each:
+`notch/ui/theme.py` for colour and shape, `notch/ui/motion.py` for timing.
+
+### Palette
+
+| Role | Dark | Light | Measured on its surface |
+| :--- | :--- | :--- | ---: |
+| card | `#000000` | `#FFFFFF` | the page the words sit on |
+| script | `#FAFAFA` | `#111111` | 20.1:1 / 18.9:1 |
+| spoken | `#8A8A8A` | `#767676` | 6.1:1 / 4.5:1 |
+| current | `#A9CCFF` | `#0A3A8F` | 12.8:1 / 10.4:1 (10.4:1 and 8.9:1 on the band) |
+| predicted | `#9FB3DC` | `#3F5382` | 10.0:1 / 7.6:1 |
+| surface (menu, tooltip, note) | `#1E1E1E` | `#F7F7F8` | the floating material |
+| hairline | `#343436` | `#E4E4E6` | 1.34:1 / 1.19:1 against its own fill |
+| ink | `#F2F2F7` | `#1C1C1E` | 14.9:1 / 15.9:1 |
+| placeholder | `#8E8E93` | `#6E6E73` | 5.9:1 / 5.4:1 |
+
+The placeholder was the one value that had to change: `#777777` on the note's
+old `#1C1C1C` was 3.6:1 and `#8A8A8A` on its light fill was 3.2:1, both under
+the 4.5:1 a line of hint text needs. The note itself moved onto the menu's
+material, so all three floating surfaces are now the same fill, hairline and
+shadow weight.
+
+Radius and space are roles too: card 24, compact 20, dialog 16, menu 14,
+note 12, tooltip and control 8, on a 4 px spacing rhythm.
+
+### Tokens
+
+| Token | Value | Used by |
+| :--- | :--- | :--- |
+| `CARD` | damping 1.0, response 0.4 | the reader's own geometry |
+| `SHEET` | 1.0 / 0.3 | a dialog or surface arriving over the card |
+| `NOTE_APPEAR` | 0.92 / 0.26 | a note arriving after a click |
+| `NOTE_DISMISS` | 1.0 / 0.18 | a note leaving |
+| `TOOLTIP` | 1.0 / 0.16 | a hint fading in under a still pointer |
+| `CONTROL` | 0.82 / 0.24 | hover lift and press |
+| `NOTE_RELEASE` | 1.0 / 0.22 | a released drag settling |
+| `TIER_FADE` | 120 ms | the reading highlight changing state |
+| `WINDOW_FADE` | 300 ms | the card at launch, help, setup |
+| `CHROME_RECEDE` / `CHROME_RETURN` | 240 / 160 ms | the floating controls |
+| `TEXT_SWAP` | 150 ms | the text swap during a resize |
+| `SPEED_HINT` | 100 ms | the speed readout after the wheel |
+| `MENU_APPEAR` | 120 ms | the menu under the pointer |
+
+Only `NOTE_APPEAR` is under-damped. Bounce is reserved for motion the user's
+hand started: a note created by a click carries that momentum. A dialog, a
+hint or a menu appears because of a timer or a hover, so an overshoot there
+would have no cause the eye can see.
+
+An appearance is always slower than its dismissal (0.26 s against 0.18 s for
+a note; 300 ms against 160 ms for the controls' return). Arriving has to be
+read; leaving must not hold anybody up.
+
+### Sticky notes
+
+A note used to appear and vanish in one frame. It now:
+
+- **arrives** from 94% on `NOTE_APPEAR`, fading and growing about its own
+  top-left corner. `showEvent` captures the rect before the first paint, so
+  no frame ever flashes at full size. Measured: 18 frames (0.30 s) to rest,
+  landing on exactly 260×165 and opacity 1.0.
+- **leaves** on `NOTE_DISMISS` (20 frames), shrinking back to 94% and fading
+  to zero before the window closes. The overlay hears `closed` once, from
+  `closeEvent`, even if something else closes the note in the same moment.
+- **reverses.** A dismissal in flight can be grabbed: pressing the note calls
+  `present()`, which retargets the same spring from the opacity on screen.
+- **drags 1:1** with the pointer and keeps a two-sample history. On release it
+  coasts on `NOTE_RELEASE` for **one frame of its own velocity**, capped at
+  6 px: the pointer already chose where the note belongs, so this absorbs the
+  gap between the last move and the release rather than throwing the card.
+  Taking hold of it again stops the coast immediately.
+- **closes immediately** when the app asks. `dismiss()` is the animated path,
+  used by the corner and by Escape; `close()` stays synchronous for shutdown
+  and for a script being replaced, so no exit animation can hold up a quit.
+
+Reduced motion is honoured per note: the `SpringGroup` reads the Windows
+animation setting, and when it is off the note appears at its resting size and
+closes in the same frame.
+
+The field takes focus when the note opens. Qt gives focus to the first
+tab-focusable child, which is the corner, so a new note used to open with a
+focus ring on its × and typing went nowhere until the field was clicked. The
+ring is only for the keyboard path now (Tab reaches the corner).
+
+### Dismissal of dialogs
+
+The help and setup dialogs faded their exit from a hard-coded 1.0, so closing
+one while it was still arriving snapped it to full opacity and then faded.
+The exit now starts from `windowOpacity()`, which is what lets it interrupt
+the arrival instead of restarting from a frame that was never on screen.
+
+### Known limit
+
+The reader's menu is a `QMenu` shown with `exec_()`. Its entrance fades on
+`MENU_APPEAR`, but its dismissal cannot: `exec_()` returns and the popup is
+destroyed by the same call, and there is no supported way to keep it on screen
+for a fade. Mirroring the exit would mean replacing `QMenu` with a custom
+popup widget, which is a different piece of work from a timing change.
+
 ## Reproducing
 
 ```bash
@@ -367,6 +472,9 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/calibrate_voice.py --no
 
 # debounced saves, menu lifecycle, screen clamping, import, shortcuts, access
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py
+
+# note motion, drag coast, reduced motion, palette roles and dialog exit
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_motion.py
 
 # design invariants, asserted against rendered pixels (needs a real display)
 .venv/Scripts/python.exe tests/check_design.py

@@ -260,7 +260,10 @@ def main():
     closing._edit.setPlainText("closes on click")
     QTest.qWait(50)
     QTest.mouseClick(closing._close, Qt.LeftButton)
-    QTest.qWait(200)
+    # The corner dismisses through the note's exit animation (fade and shrink,
+    # about a quarter second), so the window is gone a moment after the click
+    # rather than inside it.
+    QTest.qWait(600)
     check("a note closes from its own ×", len(win2._notes) == before_close,
           f"{len(win2._notes)} of {before_close} open")
     survivor = win2._open_note()

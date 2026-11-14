@@ -20,6 +20,8 @@ from PyQt5.QtWidgets import (
     QSlider, QProgressBar, QPushButton, QGroupBox, QMessageBox,
 )
 
+from notch.ui import motion
+
 
 from notch.platform import hotkeys as hk
 from notch.platform.capture import exclude_from_capture
@@ -77,12 +79,12 @@ class SettingsDialog(QDialog):
         self._drag_pos = None
         self._close_pending = None
         self._opacity_anim = QPropertyAnimation(self, b"windowOpacity")
-        self._opacity_anim.setDuration(300)
+        self._opacity_anim.setDuration(int(motion.WINDOW_FADE * 1000))
         self._opacity_anim.setEasingCurve(QEasingCurve.OutCubic)
         self._opacity_anim.setStartValue(0.0)
         self._opacity_anim.setEndValue(1.0)
         self._fade_out_anim = QPropertyAnimation(self, b"windowOpacity")
-        self._fade_out_anim.setDuration(300)
+        self._fade_out_anim.setDuration(int(motion.WINDOW_FADE * 1000))
         self._fade_out_anim.setEasingCurve(QEasingCurve.InCubic)
         self._fade_out_anim.setStartValue(1.0)
         self._fade_out_anim.setEndValue(0.0)

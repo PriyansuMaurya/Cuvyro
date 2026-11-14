@@ -31,7 +31,9 @@ diff.
 ## Layout
 
 - `notch/` is the application package, split by responsibility: `app.py` (Qt
-  startup), `ui/` (overlay, controls, dialogs, notes, tooltips, motion), `audio/`
+  startup), `ui/` (overlay, controls, dialogs, notes, tooltips, and the two
+  shared modules every surface reads: `theme.py` for the palette, radii and
+  spacing, `motion.py` for spring presets and crossfade durations), `audio/`
   (microphone worker, recognition, matching), `tracking/` (camera and grid
   motion), `platform/` (Windows hotkeys and capture exclusion), and `storage/`
   (atomic state persistence). Shared filesystem paths live in `paths.py`.
@@ -54,6 +56,7 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_speech_engine.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_note_clearing.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_note_placement.py
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_motion.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_upgrades.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_head_tracking.py
 .venv/Scripts/python.exe tests/check_storage.py
@@ -78,6 +81,20 @@ It backs up and restores the reader's saved state around the run. Because the
 reader excludes itself from screen capture, the scroll offset comes from
 `NOTCH_MANUAL_TRACE=1`, which makes the app append one line per Manual start
 and pause to `notch.log` beside the executable; nothing is written without it.
+
+`tests/check_motion.py` covers the floating surfaces' motion and the two
+shared token modules. A note is created and driven frame by frame: it starts
+at 94% and transparent, grows about its own corner without moving, lands on
+exactly 260×165, leaves on a quicker spring, announces `closed` once, and
+reverses when it is grabbed mid-dismissal. It also checks that a drag stays
+1:1, that the release coast is bounded by `NOTE_RELEASE_LIMIT` and stops when
+the note is taken hold of, and that reduced motion turns the whole thing into
+an instant appearance and close. The palette half measures every role against
+its own surface in both themes (body 15:1, accents 7:1, spoken 4.5:1,
+hairline visible) and asserts that the reading tiers and the tooltip panel
+resolve to the `theme` roles rather than to private copies. Add a token here
+when a new surface needs a duration, and read it from `motion` in the code:
+the check is the only thing stopping the next literal from becoming drift.
 
 `tests/check_upgrades.py` writes the state and speaking-profile formats an
 older build produced, loads them through the current code and launches the

@@ -112,6 +112,15 @@ def main():
         note = win._open_note()
         note._edit.setPlainText("Board block reads\nHarbour plan changed\nFriday: sign-off")
         app.processEvents()
+        # A note arrives on a spring, so it is 94% of its size for the first
+        # few frames. The capture and the geometry report are about the
+        # resting surface, so let the entrance land before grabbing it.
+        for _ in range(120):
+            if note._presence.settled:
+                break
+            note._presence.step(1 / 60.0)
+            note._apply_presence()
+        app.processEvents()
         shot(note, f"{prefix}-note.png")
 
     def finish():

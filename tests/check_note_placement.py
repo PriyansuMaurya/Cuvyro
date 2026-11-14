@@ -54,6 +54,20 @@ def place(notes, controls=(), avoid=(), areas=None, preferred=None, seed=1):
                            rng=random.Random(seed))
 
 
+def settle_note(note):
+    """Finish a note's entrance, so a check measures a resting card.
+
+    A note arrives from 94% over a spring; taking hold of one mid-arrival
+    finishes the arrival first, which is correct but would make a drag look
+    like a resize if the entrance were still running under the check.
+    """
+    for _ in range(120):
+        if note._presence.settled:
+            break
+        note._presence.step(1 / 60)
+        note._apply_presence()
+
+
 def drag(note, delta):
     """Drive the note's own drag handlers with the events a mouse produces."""
     start = QPoint(20, 10)  # inside the header strip
@@ -218,6 +232,7 @@ def main():
 
     # ── Dragging is preserved ────────────────────────────────────────
     dragged = opened[-1]
+    settle_note(dragged)
     size_before = dragged.size()
     dragged.move(QPoint(60, 60))
     QTest.qWait(30)
