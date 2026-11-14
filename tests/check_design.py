@@ -16,7 +16,10 @@ surface drifts back:
   * the editor reserves a strip so its last line never runs under Done,
   * the menu is one panel with one mode control, its three commands share a
     single row instead of a stack, and its secondary rows stay legible in
-    both themes.
+    both themes,
+  * every control's hint is one themed material, opened by hover or by
+    keyboard focus, placed clear of its control, and dismissed by the next
+    thing the user does; its wording describes an outcome, not a gesture.
 
 Run it on a real display, not offscreen: the text-ink checks need the
 platform's font database, which the offscreen plugin does not provide.
@@ -24,16 +27,18 @@ platform's font database, which the offscreen plugin does not provide.
     .venv/Scripts/python.exe tests/check_design.py
 """
 
+import ast
 import os
 import re
 import sys
 import tempfile
 
 
-from PyQt5.QtCore import QPoint, QRect
+from PyQt5.QtCore import QEvent, QPoint, QRect, Qt
+from PyQt5.QtGui import QColor, QFocusEvent, QKeyEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
-    QAbstractButton, QApplication, QLabel, QToolTip, QWidget, QWidgetAction,
+    QAbstractButton, QApplication, QLabel, QWidget, QWidgetAction,
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -89,47 +94,313 @@ def ink_count(image, box, background, tolerance=12):
     return count
 
 
-TOOLTIP_TEXT = "tooltip probe"
 # The panel colour each theme gives a tooltip, as the app applies it.
 TOOLTIP_BODY = {True: (30, 30, 30), False: (247, 247, 248)}
+TOOLTIP_MAX_CHARS = 72
+
+
+def tooltip_wording_problems(text):
+    """Reasons a description breaks the tooltip rules, or [] when it does not.
+
+    A hint states what the control does, in the smallest number of words that
+    is still true: a sentence fragment, no full stop, no description of the
+    physical gesture (the pointer already made that gesture), and no wrapping
+    beyond two lines, which is what the character budget really guards.
+    """
+    reasons = []
+    if len(text) > TOOLTIP_MAX_CHARS:
+        reasons.append(f"{len(text)} chars")
+    if text.endswith("."):
+        reasons.append("full stop")
+    if any(word in text.lower() for word in ("click", "hover", "tap")):
+        reasons.append("describes the gesture")
+    if text != " ".join(text.split()):
+        reasons.append("wrapped literal")
+    return reasons
+
+
+def declared_tooltips(path):
+    """The constant descriptions a module hands to a control.
+
+    Only literals are returned: a description built from a hotkey name is
+    covered by the runtime checks instead, because its value depends on the
+    saved state and not on the source.
+    """
+    texts = []
+
+    def constants(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return [node.value]
+        if isinstance(node, ast.IfExp):
+            return constants(node.body) + constants(node.orelse)
+        return []
+
+    with open(path, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "setToolTip" and node.args):
+            texts.extend(constants(node.args[0]))
+    return texts
+
+
+def check_declared_tooltips():
+    """Every description in the package obeys the wording rules.
+
+    The reader and its menu are exercised at runtime above. Setup and the
+    notes are separate windows whose construction would start a microphone
+    and a timer, so their declared strings are read from the source: the
+    rules are about the words, not about which window shows them.
+    """
+    broken = {}
+    total = 0
+    for name in ("overlay.py", "settings.py", "notes.py", "tooltips.py"):
+        path = os.path.join(REPO_ROOT, "notch", "ui", name)
+        for text in declared_tooltips(path):
+            text = " ".join(text.split())
+            total += 1
+            reasons = tooltip_wording_problems(text)
+            if reasons:
+                broken[text] = reasons
+    check("every declared tooltip follows the wording rules",
+          not broken and total >= 14,
+          f"{broken}" if broken else f"{total} descriptions")
+
+
+def tooltip_service():
+    from notch.ui import tooltips
+    return tooltips.install(QApplication.instance())
+
+
+def wait_until(predicate, timeout_ms):
+    """Wait for an asynchronous UI effect, then report whether it came."""
+    waited = 0
+    while waited < timeout_ms and not predicate():
+        QTest.qWait(40)
+        waited += 40
+    return predicate()
 
 
 def check_tooltips(win):
-    """A tooltip is its own window and has to carry the theme by itself.
+    """One material, both themes, both inputs, and a quick way out.
 
-    Qt builds it with a copy of the palette of the widget it belongs to, so
-    the transparent control rail left it with an alpha-0 background: a dark,
-    unreadable slab over the light card, which is exactly what a light-mode
-    hover showed. Both the opacity and the colour are asserted, because a
-    tooltip can be opaque and still be the wrong theme.
+    A tooltip is a top-level window, so it carries no inherited palette and
+    no stylesheet from the surface it hangs off: the old system tooltip
+    painted an alpha-0 slab over the light card, then needed an application
+    stylesheet to be readable at all. The replacement builds its own panel,
+    so the assertions are the design: opaque, the right theme, rounded, on a
+    shadow, clear of its control, inside the work area, opened by a hover or
+    by Tab, and gone the moment the user does anything else.
     """
+    from notch.ui import tooltips
+
+    service = tooltip_service()
+    tip = service.tooltip()
+
+    def open_by_hover(widget):
+        service.dismiss(immediate=True)
+        QApplication.sendEvent(widget, QEvent(QEvent.Enter))
+        wait_until(tip.isVisible, tooltips.HOVER_DELAY_MS + 400)
+
+    def close_by_leave(widget):
+        QApplication.sendEvent(widget, QEvent(QEvent.Leave))
+        # The panel fades before it hides, so the wait is for the window to
+        # go, not for a guessed duration.
+        wait_until(lambda: not tip.isVisible(),
+                   tooltips.LEAVE_GRACE_MS + 500)
+
     for dark in (True, False):
         name = "dark" if dark else "light"
         win._dark_theme = dark
         win._apply_read_mode_style()
+        win._apply_control_theme()
         QTest.qWait(140)
-        QToolTip.showText(win._mic_btn.mapToGlobal(win._mic_btn.rect().center()),
-                          TOOLTIP_TEXT, win._mic_btn)
-        QTest.qWait(340)
-        tips = [w for w in QApplication.allWidgets()
-                if isinstance(w, QLabel) and w.text() == TOOLTIP_TEXT
-                and w.isVisible()]
-        if not tips:
-            check(f"a control's tooltip opens in {name} mode", False,
-                  "no tooltip window")
+
+        # Hover, exactly as a resting pointer asks for it. Nothing is tapped
+        # or clicked: the hint belongs to the rest, not to a decision.
+        open_by_hover(win._mic_btn)
+        opened = tip.isVisible() and tip.text() == win._mic_btn.toolTip()
+        check(f"a control's tooltip opens after a rest in {name} mode",
+              opened, f"visible {tip.isVisible()}, {tip.text()!r}")
+        if not opened:
+            close_by_leave(win._mic_btn)
             continue
-        body = tips[-1].grab().toImage().pixelColor(3, 3)
-        check(f"a control's tooltip is opaque in {name} mode",
-              body.alpha() == 255, f"alpha {body.alpha()}")
+
+        body = tip.grab().toImage()
+        inset = int(round(tooltips.SHADOW))
+        sample = body.pixelColor(inset + 3, inset + 3)
+        check(f"the tooltip is opaque in {name} mode", sample.alpha() == 255,
+              f"alpha {sample.alpha()}")
         want = TOOLTIP_BODY[dark]
-        check(f"a control's tooltip follows the {name} theme",
-              (body.red(), body.green(), body.blue()) == want,
-              f"{(body.red(), body.green(), body.blue())} vs {want}")
-        QToolTip.hideText()
-        QTest.qWait(180)
+        got = (sample.red(), sample.green(), sample.blue())
+        check(f"the tooltip follows the {name} theme", got == want,
+              f"{got} vs {want}")
+
+        # The hint is type, so it owes the same contrast the menu's type does.
+        ink = QColor(tooltips.INK[dark])
+        ratio = contrast((ink.red(), ink.green(), ink.blue()), want)
+        check(f"the tooltip's type clears 7:1 in {name} mode",
+              ratio >= 7.0, f"{ratio:.1f}:1")
+
+        # Rounded, not a rectangle: the pixel outside the corner curve keeps
+        # the desktop, while the body a few pixels in is the panel.
+        corner = body.pixelColor(inset, inset)
+        check(f"the tooltip has rounded corners in {name} mode",
+              corner.alpha() <= 90, f"corner alpha {corner.alpha()}")
+
+        # And the panel floats: a soft ring sits outside the body, faint but
+        # never a hard border.
+        shadow = body.pixelColor(body.width() // 2,
+                                 body.height() - inset + 2).alpha()
+        check(f"the tooltip carries a soft shadow in {name} mode",
+              8 <= shadow <= 160, f"shadow alpha {shadow}")
+
+        # One type size on the app's scale, regular weight, with the positive
+        # tracking small type needs.
+        label = tip.label()
+        font = label.font()
+        check(f"the tooltip sets one size of type in {name} mode",
+              font.pixelSize() == int(round(tooltips.TYPE_PX * win._scale))
+              and font.weight() == font.Normal
+              and font.letterSpacing() > 0,
+              f"{font.pixelSize()} px, weight {font.weight()}, "
+              f"tracking {font.letterSpacing():.2f}")
+
+        # Clear of the control it describes, and of the screen edges.
+        control = QRect(win._mic_btn.mapToGlobal(QPoint(0, 0)),
+                        win._mic_btn.size())
+        frame = QRect(tip.pos(), tip.size())
+        check(f"the tooltip sits clear of its control in {name} mode",
+              not frame.intersects(control.adjusted(-1, -1, 1, 1)),
+              f"tip {frame.getRect()}, control {control.getRect()}")
+        screen = (QApplication.screenAt(control.center())
+                  or QApplication.primaryScreen()).availableGeometry()
+        check(f"the tooltip stays inside the work area in {name} mode",
+              screen.contains(frame),
+              f"{frame.getRect()} in {screen.getRect()}")
+
+        # And it is out of the reading area: the rail lives in the gap to the
+        # right of the card, so its hint goes there rather than over the type.
+        card_right = win.mapToGlobal(QPoint(win._card_width(), 0)).x()
+        check(f"the rail's hint stays out of the reading area in {name} mode",
+              frame.left() >= card_right,
+              f"tip left {frame.left()}, card right {card_right}")
+
+        close_by_leave(win._mic_btn)
+        check(f"the tooltip leaves when the pointer does in {name} mode",
+              not tip.isVisible(), f"visible {tip.isVisible()}")
+
     win._dark_theme = True
     win._apply_read_mode_style()
+    win._apply_control_theme()
     QTest.qWait(100)
+
+    # ── The keyboard gets the same hint, sooner ─────────────────────
+    # A control you can reach with Tab but cannot identify is a control with
+    # no description at all for a keyboard user.
+    service.dismiss(immediate=True)
+    QApplication.sendEvent(win._close_btn,
+                           QFocusEvent(QEvent.FocusIn, Qt.TabFocusReason))
+    wait_until(tip.isVisible, tooltips.FOCUS_DELAY_MS + 400)
+    check("a control reached with Tab shows its tooltip",
+          tip.isVisible() and tip.text() == win._close_btn.toolTip(),
+          f"visible {tip.isVisible()}, {tip.text()!r}")
+    check("the keyboard hint still waits less than the pointer's",
+          tooltips.FOCUS_DELAY_MS < tooltips.HOVER_DELAY_MS,
+          f"focus {tooltips.FOCUS_DELAY_MS} ms, hover "
+          f"{tooltips.HOVER_DELAY_MS} ms")
+
+    # A hint has a deadline, and the next action ends it early. Asserted on
+    # the deadline itself, because waiting nine seconds would only prove the
+    # clock works.
+    check("a shown tooltip has an automatic dismissal",
+          service._auto.isActive()
+          and service._auto.interval() == tooltips.AUTO_HIDE_MS,
+          f"active {service._auto.isActive()}, "
+          f"after {service._auto.interval()} ms")
+    QApplication.sendEvent(win._close_btn,
+                           QKeyEvent(QEvent.KeyPress, Qt.Key_Tab,
+                                     Qt.NoModifier))
+    wait_until(lambda: not tip.isVisible(), 500)
+    check("any key dismisses the tooltip", not tip.isVisible(),
+          f"visible {tip.isVisible()}")
+
+    # ── One description per control, in the terms the design uses ────
+    def describe(widget):
+        return " ".join(widget.toolTip().split())
+
+    expected = {
+        "minimize": win._close_btn, "note": win._note_btn,
+        "microphone": win._mic_btn, "width": win._compact_btn,
+    }
+    missing = [name for name, widget in expected.items()
+               if not describe(widget)]
+    check("every rail control describes itself", not missing,
+          f"missing {missing}")
+
+    broken = {}
+    for widget in win.findChildren(QWidget):
+        text = describe(widget)
+        if text:
+            reasons = tooltip_wording_problems(text)
+            if reasons:
+                broken[text] = reasons
+    check("every tooltip describes an outcome, not a gesture",
+          not broken, f"{broken}")
+    check_declared_tooltips()
+
+
+def check_menu_tooltips(win, menu):
+    """A hint inside a panel has to leave the panel to be readable.
+
+    The head-tracking description is 60-odd characters. Placed beside the
+    label that owns it, it would hang over the field the same row holds, so
+    the panel is anchored to the menu's own edge at the control's height.
+    """
+    from notch.ui import tooltips
+
+    service = tooltip_service()
+    tip = service.tooltip()
+    service.dismiss(immediate=True)
+    target = None
+    for widget in menu.findChildren(QLabel):
+        if widget.toolTip().startswith("Move the card"):
+            target = widget
+            break
+    check("the head-tracking row explains itself", target is not None,
+          f"{len(menu.findChildren(QLabel))} labels, "
+          f"{sum(1 for w in menu.findChildren(QLabel) if w.toolTip())} described")
+    if target is None or not menu.isVisible():
+        return
+    QApplication.sendEvent(target, QEvent(QEvent.Enter))
+    wait_until(tip.isVisible, tooltips.HOVER_DELAY_MS + 400)
+    opened = tip.isVisible() and tip.text() == target.toolTip()
+    check("a hint inside the menu opens", opened,
+          f"visible {tip.isVisible()}, {tip.text()!r}")
+    if opened:
+        panel = QRect(menu.mapToGlobal(QPoint(0, 0)), menu.size())
+        frame = QRect(tip.pos(), tip.size())
+        check("a menu hint does not cover the row it belongs to",
+              not frame.intersects(panel),
+              f"tip {frame.getRect()}, menu {panel.getRect()}")
+    service.dismiss(immediate=True)
+
+    broken = {}
+    seen = []
+    for widget in menu.findChildren(QWidget):
+        text = " ".join(widget.toolTip().split())
+        if not text:
+            continue
+        seen.append(text)
+        reasons = tooltip_wording_problems(text)
+        if reasons:
+            broken[text] = reasons
+    check("the menu's tooltips follow the same wording", not broken,
+          f"{broken}" if broken else f"{len(seen)} descriptions")
+    missing = "Larger text" not in seen or "Next typeface" not in seen
+    check("the menu's controls each carry a description", not missing,
+          f"{seen}")
 
 
 def main():
@@ -482,6 +753,11 @@ def main():
           and menu.sizeHint().height() <= PANEL_HEIGHT_BUDGET,
           f"row {plates[0].height()} vs item {item_height}, "
           f"panel {menu.sizeHint().height()} px of {PANEL_HEIGHT_BUDGET}")
+
+    # A hint inside the panel is placed beside the panel, not over the row
+    # that owns it. The menu is still open here, which is when a row can be
+    # hovered at all.
+    check_menu_tooltips(win, menu)
 
     # ── The value rows share one right edge ───────────────────────
     # Speed, size and typeface all end their control on the panel's inner

@@ -31,7 +31,7 @@ diff.
 ## Layout
 
 - `notch/` is the application package, split by responsibility: `app.py` (Qt
-  startup), `ui/` (overlay, controls, dialogs, notes, motion), `audio/`
+  startup), `ui/` (overlay, controls, dialogs, notes, tooltips, motion), `audio/`
   (microphone worker, recognition, matching), `tracking/` (camera and grid
   motion), `platform/` (Windows hotkeys and capture exclusion), and `storage/`
   (atomic state persistence). Shared filesystem paths live in `paths.py`.

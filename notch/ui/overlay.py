@@ -44,6 +44,7 @@ from notch.ui.note_placement import choose_position
 from notch.ui.notes import NoteWindow
 from notch.ui.settings import SettingsDialog
 from notch.ui.spring import Spring, SpringGroup, system_allows_motion
+from notch.ui import tooltips
 
 
 class _RenderedLine(NamedTuple):
@@ -1209,7 +1210,7 @@ class NotchOverlay(QWidget):
 
         self._muted = False
         self._close_btn = MinimizeButton()
-        self._close_btn.setToolTip("Minimize (or Esc)")
+        self._close_btn.setToolTip("Minimize to the pill")
         self._close_btn.setAccessibleName("Minimize")
         self._close_btn.clicked.connect(self._minimize)
         rail.addWidget(self._close_btn)
@@ -1220,12 +1221,12 @@ class NotchOverlay(QWidget):
         self._note_btn.clicked.connect(self._open_note)
         rail.addWidget(self._note_btn)
         self._mic_btn = MicButton()
-        self._mic_btn.setToolTip("Mute mic (stop voice from advancing script)")
+        self._mic_btn.setToolTip("Mute microphone")
         self._mic_btn.setAccessibleName("Mute microphone")
         self._mic_btn.clicked.connect(self._toggle_mic_mute)
         rail.addWidget(self._mic_btn)
         self._compact_btn = CompactButton()
-        self._compact_btn.setToolTip("Narrow reader (about two words per line)")
+        self._compact_btn.setToolTip("Narrow the reader to two words per line")
         self._compact_btn.setAccessibleName("Switch to narrow reader")
         self._compact_btn.clicked.connect(self._toggle_compact_mode)
         rail.addWidget(self._compact_btn)
@@ -1836,7 +1837,8 @@ class NotchOverlay(QWidget):
         # A muted microphone is not silence someone chose to read through:
         # the ribbon goes flat instead of holding the last thing it heard.
         self._reset_waveform()
-        self._mic_btn.setToolTip("Unmute mic" if self._muted else "Mute mic (stop voice from advancing script)")
+        self._mic_btn.setToolTip("Unmute microphone" if self._muted
+                                 else "Mute microphone")
         self._mic_btn.setAccessibleName("Unmute microphone" if self._muted else "Mute microphone")
 
     # Filler words often recognised from ambient noise when nothing is said
@@ -2155,8 +2157,9 @@ class NotchOverlay(QWidget):
             }}
         """)
         # Tooltips are not styled here on purpose: they are separate
-        # top-level windows and do not inherit a widget's stylesheet. The one
-        # rule that reaches them lives in _apply_tooltip_theme.
+        # top-level windows and inherit neither this stylesheet nor the
+        # index card's. ``notch.ui.tooltips`` paints them itself, from the
+        # theme of the surface the control belongs to.
 
         def label(text, size=13, color=fg, weight=400):
             w = QLabel(text)
@@ -2222,7 +2225,7 @@ class NotchOverlay(QWidget):
         manual_btn = segment("Manual")
         voice_btn.setChecked(self._voice_mode)
         manual_btn.setChecked(not self._voice_mode)
-        voice_btn.setToolTip("Follow your speech")
+        voice_btn.setToolTip("Advance as you speak")
         manual_btn.setToolTip("Scroll at a fixed pace")
         voice_btn.setAccessibleName("Voice mode")
         manual_btn.setAccessibleName("Manual mode")
@@ -2370,9 +2373,9 @@ class NotchOverlay(QWidget):
                 self._font_increase()
             size_value.setText(str(self._font_size))
 
-        step_down = step_button("−", lambda: bump_size(-1), "Smaller script")
+        step_down = step_button("−", lambda: bump_size(-1), "Smaller text")
         stepper_layout.addWidget(size_value)
-        step_up = step_button("+", lambda: bump_size(1), "Larger script")
+        step_up = step_button("+", lambda: bump_size(1), "Larger text")
         size_layout.addWidget(stepper)
         size_action = add_widget(size_row, top=row_gap, bottom=row_gap)
 
@@ -2386,7 +2389,7 @@ class NotchOverlay(QWidget):
         family_btn.setCursor(Qt.PointingHandCursor)
         family_btn.setFixedHeight(field_height)
         family_btn.setMinimumWidth(px(104))
-        family_btn.setToolTip("Click to try the next typeface")
+        family_btn.setToolTip("Next typeface")
         family_btn.setAccessibleName("Typeface")
 
         def style_family_btn():
@@ -2505,9 +2508,7 @@ class NotchOverlay(QWidget):
         head_layout.setSpacing(px(8))
         head_label = label("Head tracking", size=13)
         head_label.setToolTip(
-            "Moves the card between ten zones in the top half of your screen, "
-            "following your head and eyes. Experimental; the camera is read "
-            "locally and never recorded.")
+            "Move the card with your head and eyes; the camera stays local")
         head_layout.addWidget(head_label)
         head_layout.addStretch(1)
         head_seg = QWidget(menu)
@@ -2523,8 +2524,8 @@ class NotchOverlay(QWidget):
         head_on = segment_button(head_group, "On", 34)
         head_off.setAccessibleName("Head tracking off")
         head_on.setAccessibleName("Head tracking on")
-        head_off.setToolTip("Head tracking off (Ctrl+Shift+H)")
-        head_on.setToolTip("Head tracking on (Ctrl+Shift+H)")
+        head_off.setToolTip("Keep the card in place (Ctrl+Shift+H)")
+        head_on.setToolTip("Follow your head and eyes (Ctrl+Shift+H)")
         live = self._head_track_enabled
         head_off.setChecked(not live)
         head_on.setChecked(live)
@@ -2556,8 +2557,8 @@ class NotchOverlay(QWidget):
         global_layout.setSpacing(px(8))
         global_label = label("Global keys", size=13)
         global_label.setToolTip(
-            f"{self._hotkey_toggle} starts or pauses Manual, even while "
-            "another app is focused. Ctrl+Alt+Left / Right adjust speed.")
+            f"{self._hotkey_toggle} starts or pauses; "
+            "Ctrl+Alt+Left/Right set the speed")
         global_layout.addWidget(global_label)
         global_layout.addStretch(1)
         global_seg = QWidget(menu)
@@ -2573,9 +2574,9 @@ class NotchOverlay(QWidget):
         global_on = segment_button(global_group, "On", 34)
         global_off.setAccessibleName("Global keys off")
         global_on.setAccessibleName("Global keys on")
-        global_off.setToolTip("Global keys off; Space works while Notch is focused")
+        global_off.setToolTip("Keys work only while Notch is focused")
         global_on.setToolTip(
-            f"Global keys on: {self._hotkey_toggle} anywhere")
+            f"{self._hotkey_toggle} and Ctrl+Alt+Left/Right work in any app")
         on_now = (self._hotkeys_enabled
                   and self._hotkey_consent == "granted")
         global_off.setChecked(not on_now)
@@ -3304,7 +3305,7 @@ class NotchOverlay(QWidget):
             self._motion_intent = "wide"
             self._set_top_bar_icon_size(int(18 * s))
             self._compact_btn.set_compact(False)
-            self._compact_btn.setToolTip("Narrow reader (about two words per line)")
+            self._compact_btn.setToolTip("Narrow the reader to two words per line")
             self._compact_btn.setAccessibleName("Switch to narrow reader")
             if self._size_before_compact is None:
                 return
@@ -3323,7 +3324,7 @@ class NotchOverlay(QWidget):
             # 100 px card.
             self._set_top_bar_icon_size(int(16 * s))
             self._compact_btn.set_compact(True)
-            self._compact_btn.setToolTip("Wide reader")
+            self._compact_btn.setToolTip("Widen the reader")
             self._compact_btn.setAccessibleName("Switch to wide reader")
             self._size_before_compact = self.size()
             self._font_size_before_compact = self._font_size
@@ -3866,33 +3867,25 @@ class NotchOverlay(QWidget):
             self._apply_control_theme()
 
     def _apply_tooltip_theme(self) -> None:
-        """Put the reader's theme on every tooltip, from one place.
+        """Hand every tooltip to the one layer that owns them.
 
-        A tooltip is a top-level window, so it inherits neither the card's
-        stylesheet nor the menu's: Qt builds it with a copy of the palette of
-        the widget it is shown for. The card's chrome is styled
-        ``background: transparent``, which makes that palette fully
-        transparent, so a tooltip hanging off a card control painted an
-        unpainted - dark - slab over the light card instead of a panel.
+        They used to be Qt's: a system rectangle dressed by an application
+        stylesheet, because a tooltip is a top-level window and inherits
+        neither the card's stylesheet nor the menu's. That rule could only
+        set colours on a frame Qt drew; it could not round the corners, lift
+        the panel off its surface, fade it, or show it for a control reached
+        with Tab. ``notch.ui.tooltips`` builds the panel itself and is
+        installed here, so the reader, its menu, the notes and Setup all
+        share one material.
 
-        Only a rule on the application reaches all of them: the card's
-        controls, the menu's, the notes' and the settings dialog's.
+        A visible hint is dismissed rather than recoloured: it describes a
+        control the pointer has already left, and the next one is built from
+        the surface it belongs to.
         """
         app = QApplication.instance()
         if app is None:
             return
-        dark = self._dark_theme
-        panel = "#1E1E1E" if dark else "#F7F7F8"
-        fg = "#EDEDEF" if dark else "#151517"
-        line = "#343436" if dark else "#E4E4E6"
-        app.setStyleSheet(
-            "QToolTip {"
-            f" background: {panel};"
-            f" color: {fg};"
-            f" border: 1px solid {line};"
-            " padding: 4px 7px;"
-            " }"
-        )
+        tooltips.install(app).dismiss(immediate=True)
 
     def _apply_highlight_end(self, position: int) -> int:
         """Character boundary of the spoken run for a word position."""

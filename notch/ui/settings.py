@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
 
 from notch.platform import hotkeys as hk
 from notch.platform.capture import exclude_from_capture
+from notch.ui import tooltips
 
 class SettingsDialog(QDialog):
     """Modal dialog for microphone and audio settings."""
@@ -51,6 +52,9 @@ class SettingsDialog(QDialog):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setStyleSheet(self._stylesheet(dark))
+        # Setup can be built on its own (the robustness checks do), so this
+        # surface installs the tooltip layer too; ``install`` is idempotent.
+        tooltips.install().dismiss(immediate=True)
 
         self._selected_device: Optional[int] = current_device
         self._noise_gate = current_noise_gate
@@ -161,7 +165,8 @@ class SettingsDialog(QDialog):
         self._gate_slider.setAccessibleName("Noise gate")
         gate_lbl.setBuddy(self._gate_slider)
         self._gate_slider.valueChanged.connect(self._on_gate_changed)
-        self._gate_slider.setToolTip("Recommended: 0.01–0.02 (reduces background noise)")
+        self._gate_slider.setToolTip(
+            "Recommended 0.01–0.02; filters background noise")
         gate_row.addWidget(self._gate_slider)
 
         self._gate_value_lbl = QLabel(f"{self._noise_gate:.2f}")
@@ -181,7 +186,8 @@ class SettingsDialog(QDialog):
         self._gain_slider.setAccessibleName("Input gain")
         gain_lbl.setBuddy(self._gain_slider)
         self._gain_slider.valueChanged.connect(self._on_gain_changed)
-        self._gain_slider.setToolTip("Recommended: 2.0x (good for most mics)")
+        self._gain_slider.setToolTip(
+            "Recommended 2.0x; suits most microphones")
         gain_row.addWidget(self._gain_slider)
 
         self._gain_value_lbl = QLabel(f"{self._input_gain:.2f}x")
