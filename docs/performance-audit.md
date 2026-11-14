@@ -22,7 +22,7 @@ names the harness that produced it.
 | Idle CPU ≤ 2 % | **1.5 %** for the overlay alone over 30 s; **6.1 – 6.2 %** with the microphone pipeline listening in a quiet room, of which the 60 Hz clock is ~2.5 points and the voice pipeline ~3.6 | **unmet** in the default Voice mode |
 | Idle RAM ≤ 150 MB | **60 MB** for the overlay; **89 MB** in Manual mode; **202 – 216 MB** once the acoustic model is resident | passes in Manual mode; **unmet** while Voice is listening |
 | Memory growth ≤ 5 %/h | 15 min of continuous reading: 201.5 MB at t=30 s, 206.4 MB at t=900 s; **+0.3 MB** over the last 7 min and **+24 Python objects** over the last 12 min | passes |
-| Camera tracking ≤ 100 ms | one 640×480 pass costs **92 – 115 ms** (median ~98) on this machine, so a fresh reading arrives at ~10 Hz at best. No face was in frame, so the landmark path itself is unexercised | **at the edge**; end to end unverified |
+| Camera tracking ≤ 100 ms | real face, real device: fresh readings **8.7 Hz** with frame cost **75.0 ms** mean / **124.7 ms** worst, and one **1757 ms** gap during the run | **unmet** on this machine |
 | Zero crashes over 8 h | not run. The 15 min soak above is the only endurance evidence | unverified |
 | Zero functional regressions | 11/11 offscreen checks pass, before and after (identical list, identical results) | passes |
 
@@ -97,11 +97,43 @@ Both are deliberate trades recorded in the code. Neither was changed here.
 
 ## Not measurable on this machine
 
-- The camera path: `tests/measure_head_tracking.py` needs a face in front of a
-  lens.
+- Nothing: the camera half was run with a person in front of the lens, and the
+  results are in the section below.
 - An 8-hour run, and anything about a real display: `tests/check_design.py` and
   `tests/check_quality.py` need the platform's font database and fail offscreen
   even on unchanged code.
+
+## Camera, with a face in front of it
+
+`tests/measure_head_tracking.py` against the real device, DSHOW, 640×480 at a
+requested 15 fps, one person seated at their usual distance:
+
+| Metric | Measured |
+| :--- | ---: |
+| fresh readings | 393 of 4173 polls (9 %) |
+| fresh rate | **8.7 Hz** (the documented figure was 14.7 Hz) |
+| largest gap between readings | **1757 ms** |
+| frame cost, read + infer | **75.0 ms** mean, **124.7 ms** worst, against a 67 ms interval at 15 fps |
+| region walk | 6/10 regions reached, **2/10** asked-for regions matched |
+| still head, 6 s | x stdev 0.112, y stdev 0.093 normalised; 1.9 of 2 eyes usable |
+
+The 100 ms target is missed on the stated metric. One reading costs 75 ms of
+work on average and arrives every 115 ms, so a movement reaches the card about
+one frame period plus smoothing later; the worst frame is 125 ms on its own.
+That is the processor, not the code: the same detector took ~98 ms per frame
+in an earlier run with no face to find.
+
+The 1757 ms gap is the more interesting number. The harness calls anything near
+1.2 s a dropout, and the card releases to neutral when the readings stop, so a
+reader would see the words drop back to the middle of the screen and return.
+That happened once in about six minutes of tracking.
+
+The region walk matched 2 of 10. The mapping asks for a lean and a look and
+compares with what the grid selected; a smaller lean, a different distance or
+a tired neck lands in a neighbouring cell, and the harness says so. Read it as
+"the grid did not match this person at this distance", not as a code defect —
+but it is the number that says the feature is still experimental for a real
+reader, which the README already claims.
 
 ## Reproducing
 
