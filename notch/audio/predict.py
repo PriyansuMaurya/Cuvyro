@@ -30,13 +30,15 @@ The learned profile is one small JSON file beside the reader's state. It never
 contains audio, transcripts or the script: only aggregate timings.
 """
 
-import json
 import math
 import os
 import re
-import tempfile
 import time
 from typing import List, Optional, Sequence
+
+from notch.storage.store import (LEGACY_SCHEMA, copy_atomic, migrate_payload,
+                                 read_json, rolling_backup, version_of,
+                                 write_json_atomic)
 
 SCHEMA = 1
 
@@ -194,39 +196,81 @@ class SpeakerProfile:
         }
 
 
+def _v0_to_v1(data: dict) -> dict:
+    """Give a pre-schema profile the current schema number.
+
+    The fields were already named the same; only the declared version is
+    missing, and ``SpeakerProfile`` validates every value it reads.
+    """
+    return {**data, "schema": 1}
+
+
+# One step per old version, as in the state store. A missing step means a
+# profile this build cannot read safely and the backup is tried instead.
+PROFILE_MIGRATIONS = {LEGACY_SCHEMA: _v0_to_v1}
+
+
 class ProfileStore:
-    """Atomic persistence for one aggregate speaking profile."""
+    """Atomic persistence for one aggregate speaking profile.
+
+    The learned timings are the only thing that makes the predictive shading
+    adapt to a speaker, so an update must not reset them. Older files are
+    migrated, a previous copy is kept as ``speaking-profile.json.bak``, and a
+    file written by a newer build is snapshotted before this build replaces
+    it.
+    """
 
     def __init__(self, directory: str):
         self.directory = directory
         self.path = os.path.join(directory, "speaking-profile.json")
+        self.backup_path = self.path + ".bak"
+        self._rolled_this_session = False
+
+    def snapshot_path(self, version: int) -> str:
+        return f"{self.path}.v{version}.bak"
+
+    def _snapshot(self, source: str, version: int, overwrite: bool = False) -> None:
+        destination = self.snapshot_path(version)
+        if not overwrite and os.path.exists(destination):
+            return
+        copy_atomic(source, destination, self.directory)
 
     def load(self) -> SpeakerProfile:
-        try:
-            with open(self.path, encoding="utf-8") as handle:
-                data = json.load(handle)
-        except (OSError, ValueError):
-            return SpeakerProfile()
-        if not isinstance(data, dict) or data.get("schema") != SCHEMA:
-            return SpeakerProfile()
-        return SpeakerProfile(**data)
+        for candidate in (self.path, self.backup_path):
+            data = read_json(candidate)
+            if data is None:
+                continue
+            source = version_of(data)
+            if source is None:
+                source = LEGACY_SCHEMA
+            upgraded = migrate_payload(data, SCHEMA, PROFILE_MIGRATIONS)
+            if upgraded is None:
+                continue
+            if source != SCHEMA:
+                self._snapshot(candidate, source)
+            return SpeakerProfile(**upgraded)
+        return SpeakerProfile()
+
+    def _preserve_newer(self) -> None:
+        data = read_json(self.path)
+        version = version_of(data)
+        if version is not None and version > SCHEMA:
+            self._snapshot(self.path, version, overwrite=True)
+
+    def _backup_current(self) -> None:
+        if os.path.exists(self.path) and read_json(self.path) is not None:
+            copy_atomic(self.path, self.backup_path, self.directory)
 
     def save(self, profile: SpeakerProfile) -> None:
-        os.makedirs(self.directory, exist_ok=True)
-        handle, temp_path = tempfile.mkstemp(
-            dir=self.directory, suffix=".profile.tmp")
-        try:
-            with os.fdopen(handle, "w", encoding="utf-8") as out:
-                json.dump(profile.to_dict(), out, ensure_ascii=False, indent=2)
-                out.flush()
-                os.fsync(out.fileno())
-            os.replace(temp_path, self.path)
-        except OSError:
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
-            raise
+        self._preserve_newer()
+        if not self._rolled_this_session:
+            # Keep the profile as it was before this launch started learning,
+            # not the updated copy about to be written over it.
+            rolling_backup(self.path, self.directory)
+            self._rolled_this_session = True
+        self._backup_current()
+        write_json_atomic(self.directory, self.path, profile.to_dict(),
+                          suffix=".profile.tmp")
 
 
 class PredictiveHighlighter:

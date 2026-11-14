@@ -100,6 +100,7 @@ def write_script(directory, name, text):
 def main():
     QSettings("Notch", "Notch").setValue("guide_seen", True)
     app = QApplication(sys.argv)
+    from notch.storage.store import SCHEMA
 
     # ── Clearing the script takes its notes with it ───────────────────
     tmp = tempfile.mkdtemp(prefix="notch-clear-")
@@ -128,7 +129,7 @@ def main():
     check("clearing the script drops the notes from storage",
           cleared.get("notes") == [], repr(cleared.get("notes")))
     check("clearing the script empties the script itself",
-          cleared.get("script") == "" and cleared.get("schema") == 1,
+          cleared.get("script") == "" and cleared.get("schema") == SCHEMA,
           f"script={cleared.get('script')!r}")
     check("clearing the script leaves the preferences alone",
           cleared.get("settings", {}).get("dark_theme") is False,

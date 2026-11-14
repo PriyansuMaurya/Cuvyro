@@ -93,7 +93,7 @@ def main():
     app = QApplication(sys.argv)
     from notch.ui import overlay as ui_overlay
     from notch.ui import settings as settings_dialog
-    from notch.storage.store import Store
+    from notch.storage.store import SCHEMA, Store
 
     # ── Persistence is debounced, and every close path flushes ────────
     tmp = tempfile.mkdtemp(prefix="notch-robust-save-")
@@ -427,7 +427,7 @@ def main():
 
     fresh = Store(tempfile.mkdtemp(prefix="notch-robust-fresh-")).load()
     check("a first launch loads empty state",
-          fresh.get("schema") == 1 and fresh.get("script") == ""
+          fresh.get("schema") == SCHEMA and fresh.get("script") == ""
           and fresh.get("notes") == [])
     fresh["notes"].append({"id": "leak"})
     check("a failed load cannot pollute the shared defaults",
