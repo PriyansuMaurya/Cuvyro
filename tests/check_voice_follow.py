@@ -551,6 +551,8 @@ def main():
     balance = []
     balance_ok = True
     balance_detail = ""
+    measured = 0
+    too_small = []
     for size in (8, 10, 12, 16, 24):
         for width, height in ((340, 122), (480, 200), (260, 150)):
             win.resize(width + win.RAIL_W, height)
@@ -567,6 +569,14 @@ def main():
             # reader steps on to the next one. Measure where it actually is.
             index = win._current_line
             above, visible, slack = word_split(win, index)
+            # A share needs a screenful to be a share. At the largest sizes a
+            # short card can hold a single word on a machine whose line height
+            # is a little taller than this one's, and two visible words do not
+            # describe a 30/70 split of anything.
+            if visible < 4:
+                too_small.append(f"{size}pt {width}x{height}={visible}w")
+                continue
+            measured += 1
             balance.append(round(above / visible, 2) if visible else 0.0)
             # A short card fits only a few lines, so a whole-line anchor can
             # only land within one line's words of the exact 30/70 split.
@@ -577,8 +587,11 @@ def main():
                 break
         if not balance_ok:
             break
+    detail = balance_detail or f"{measured} layouts {balance}"
+    if too_small:
+        detail += f"; too few visible words to measure: {', '.join(too_small)}"
     check("about 30% of the visible words sit behind the reading line",
-          balance_ok, balance_detail or f"{len(balance)} layouts {balance}")
+          balance_ok and measured >= 8, detail)
 
     # A different speaking rhythm must not move the balance: the anchor only
     # depends on the words, never on how fast they arrive.
