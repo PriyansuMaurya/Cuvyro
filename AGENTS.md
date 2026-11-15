@@ -120,13 +120,16 @@ non-zero only when neither the primary nor the backup of a store can be read.
 
 `tests/check_diagnostics.py` pins the support evidence a windowed build
 leaves behind. It starts fresh interpreters with stdout and stderr set to
-`None` — the state a frozen windowed build runs in — and checks that printed
-output reaches the process log, that a main-thread and a worker-thread
-exception are both recorded, and that an unwritable install directory falls
-back to `%LOCALAPPDATA%\NotchFree\logs`. It patches `notch.paths.app_dir` in
-the child process, so it never writes beside the repository. A build that
-cannot write a log is a build nobody can support, which is why the release
-workflow runs it before the installer step.
+`None` — the state a frozen windowed build runs in — and checks that
+printed output reaches the process log, that a main-thread and a
+worker-thread exception are both recorded, and that an unwritable install
+directory falls back to `%LOCALAPPDATA%\NotchFree\logs`. It patches
+`notch.paths.app_dir` in the child process, so it never writes beside the
+repository. It also holds startup to the retention rule: the five newest
+sessions are kept and older ones deleted, because one file per launch
+otherwise accumulates for ever. A build that cannot write a log is a build
+nobody can support, which is why the release workflow runs it before the
+installer step.
 
 `tests/soak_packaged.py` is the eight-hour endurance monitor. It hashes the
 packaged tree, launches the exe with an isolated `APPDATA` and

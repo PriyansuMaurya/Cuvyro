@@ -46,6 +46,11 @@ Pre-launch hardening found by an independent read of the shipping paths.
 - The microphone ribbon drains on a time constant instead of a fixed fraction
   per frame, so an unplugged or muted mic clears in the same wall-clock time on
   a busy host as on an idle one.
+- Launch logs no longer accumulate. Every launch writes its own
+  `notch-<pid>.log` and `notch-fault-<pid>.log`, and nothing removed the
+  previous ones, so a reader started daily kept one session per launch for
+  ever. Startup now keeps the five newest sessions and deletes the rest,
+  never the running process's own files.
 
 ### Changed
 

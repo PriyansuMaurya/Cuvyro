@@ -8,8 +8,9 @@ have been completed. Preparing a harness is not a completed soak.
 Startup and Python exceptions go to `notch-<pid>.log` beside the executable.
 Each file rotates at 2 MiB, retaining two previous parts. Native fault traces
 go to `notch-fault-<pid>.log`. If the installation directory is not writable,
-the fallback is `%LOCALAPPDATA%\NotchFree\logs`. Logs from previous processes
-are retained for support; remove old sessions after collecting the evidence.
+the fallback is `%LOCALAPPDATA%\NotchFree\logs`. Each launch writes its own
+session files, so startup keeps the five newest sessions and deletes older
+ones; the running process never deletes its own.
 If both directories are unwritable, logging cannot be guaranteed.
 
 Windowed builds route stdout and stderr to the process log. Transcript tracing
