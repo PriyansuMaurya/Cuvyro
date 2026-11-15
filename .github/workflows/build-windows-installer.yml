@@ -118,6 +118,7 @@ jobs:
             'check_predictive_highlight', 'check_predictive_speech',
             'check_signing'
           )
+          $failed = @()
           foreach ($check in $checks) {
             Write-Host "::group::$check"
             $proc = Start-Process -FilePath 'python' -NoNewWindow -PassThru `
@@ -125,12 +126,22 @@ jobs:
             if (-not $proc.WaitForExit(300000)) {
               & taskkill.exe /PID $proc.Id /T /F | Out-Null
               Write-Host '::endgroup::'
-              throw "$check did not finish within 300 seconds"
+              Write-Host "::error::$check did not finish within 300 seconds"
+              $failed += "$check (hang)"
+              continue
             }
             $proc.WaitForExit()
             $code = $proc.ExitCode
             Write-Host '::endgroup::'
-            if ($code -ne 0) { throw "$check failed with exit code $code" }
+            if ($code -ne 0) {
+              Write-Host "::error::$check failed with exit code $code"
+              $failed += $check
+            }
+          }
+          # One run reports every broken check, so a fix does not have to wait
+          # for a runner to discover the next one.
+          if ($failed.Count -gt 0) {
+            throw "checks failed: $($failed -join ', ')"
           }
 
       # Signing material never goes into the repository. A tag build restores
