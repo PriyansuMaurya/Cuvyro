@@ -34,7 +34,7 @@ Manual mode has a speed control from 1 to 400 words per minute. The left and rig
 
 Sticky notes are separate windows. New notes are placed clear of the reader's controls and of each other, and their text survives a restart. Empty notes are dropped rather than saved.
 
-Head tracking is optional and starts off. When it is on, the card moves to follow where you look, using the camera. It never places the card in the lower half of the screen.
+Head tracking remains experimental and off by default. Region calibration is not release-validated; see the limits below before enabling it.
 
 ## Requirements
 
@@ -71,7 +71,7 @@ Without a speech model, Voice mode reports "Speech recognition unavailable — v
 
 Only one copy runs at a time. A second launch says the reader is already open and exits, because two copies would share one state file, one camera and one set of global chords. The installer uses the same named mutex, so an upgrade asks for the running reader to be closed instead of replacing files underneath it.
 
-The first Voice session loads the acoustic model before it can hear anything. The menu's status line says it is loading. On the machine used for the engine benchmark that load took 4.2 seconds; the loaded engine is reused until the process exits, so switching to the editor and back does not pay it again.
+The first Voice session loads the acoustic model before it can hear anything. The menu's status line says it is loading. The packaged-build measurements reported for the release audit were 8–9.5 seconds on the test machine; the loaded engine is reused until the process exits, so switching to the editor and back does not pay it again.
 
 ## Building a Windows installer
 
@@ -128,7 +128,7 @@ The recogniser sometimes writes "not" instead of "Notch"; both forms are accepte
 
 ### Head tracking
 
-Head tracking is experimental and off by default. Turn it on from the menu or with `Ctrl+Shift+H`. The camera opens at 640×480 and requests 15 frames per second; the worker achieved about 14.7 Hz on the test machine. MediaPipe's face landmarker finds 478 points per face, including both irises.
+Head tracking is experimental and off by default on a fresh installation. An existing opt-in is restored. Region calibration remains unvalidated for release, so this feature is excluded from headline release claims. Turn it on from the menu or with `Ctrl+Shift+H`. The camera opens at 640×480 and requests 15 frames per second; the worker achieved about 14.7 Hz on the test machine. MediaPipe's face landmarker finds 478 points per face, including both irises.
 
 The screen's upper half is divided into five columns and two rows. Head position and face direction choose a region; the irises refine the position inside that region. The card eases to a region on a spring and is clamped so the words cannot enter the lower half. Calibration measures the neutral pose from a still window when tracking is switched on, a dead zone keeps a still head still, and hysteresis stops a head on a boundary from rattling between cells.
 
@@ -232,3 +232,8 @@ model/              local speech and face models (not tracked)
 ## License
 
 Distributed under the MIT License. See [LICENSE](LICENSE).
+
+
+## Release readiness
+
+See [the release checklist](docs/release-readiness.md) for signing, packaged soak evidence and the remaining release blockers.

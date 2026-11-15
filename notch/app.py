@@ -18,9 +18,13 @@ Right-click the card for mode, typeface, theme, Help, Setup and Quit.
 
 import sys
 
+from notch.diagnostics import install, heartbeat
+
+install()
+
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtGui import QFont
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 
 from notch.platform import single_instance
 
@@ -34,6 +38,9 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Notch")
     app.setStyle("Fusion")
+    heartbeat_timer = QTimer(app)
+    heartbeat_timer.timeout.connect(heartbeat)
+    heartbeat_timer.start(5000)
 
     # One reader per session: a second copy would share the state file, the
     # global chords and the camera with the first, and the last save wins.
@@ -60,3 +67,4 @@ def main():
     print("[Notch] Running (load a script and speak in Notch mode)", flush=True)
 
     sys.exit(app.exec_())
+
