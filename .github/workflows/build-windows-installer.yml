@@ -74,7 +74,9 @@ jobs:
 
       # A tag used to publish without running anything. These are the checks
       # the README documents as offscreen-safe, so a behavioural regression
-      # cannot reach the installer.
+      # cannot reach the installer. check_diagnostics is included because the
+      # only support evidence a windowed build leaves behind is its log: a
+      # frozen build that stopped writing one would otherwise ship silently.
       - name: Install check dependencies
         run: python -m pip install -r requirements.txt
 
@@ -85,7 +87,7 @@ jobs:
             'check_behavior', 'check_voice_follow', 'check_waveform',
             'check_speech_engine', 'check_robustness', 'check_note_clearing',
             'check_note_placement', 'check_motion', 'check_upgrades',
-            'check_head_tracking', 'check_storage',
+            'check_head_tracking', 'check_storage', 'check_diagnostics',
             'check_predictive_highlight', 'check_predictive_speech'
           )
           foreach ($check in $checks) {
