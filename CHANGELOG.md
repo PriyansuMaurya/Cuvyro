@@ -8,10 +8,64 @@ messages.
 
 ## Unreleased
 
-Pre-launch hardening found by an independent read of the shipping paths.
+### Fixed
+
+- Launch logs no longer accumulate. Every launch writes its own
+  `notch-<pid>.log` and `notch-fault-<pid>.log`, and nothing removed the
+  previous ones, so a reader started daily kept one session per launch for
+  ever. Startup now keeps the five newest sessions and deletes the rest,
+  never the running process's own files.
+
+## 1.6.2 — 2026-11-15
+
+The first release since 1.6.1, and the first to carry the work that landed
+without a release of its own: state that survives an update, one palette and
+one set of springs on every surface, notes that belong to the reader, three
+reading tiers, a lighter Manual mode, and the support and release tooling a
+packaged build needs.
+
+The installer was frozen at 00:55 from `c5ee8f2` and passed an eight-hour
+packaged soak against those bytes. The log retention fix above landed after
+the freeze, so it ships in the next build rather than this one.
 
 ### Added
 
+- Saved work survives an update. The script, the notes, the preferences, the
+  card's placement and the learned speaking profile are stored under a schema
+  that migrates one version at a time; the file an older build wrote is kept
+  as a `*.v<schema>.bak` snapshot before its first rewrite, a file from a
+  newer schema is read for the fields this build understands instead of being
+  rejected, and a corrupt store recovers its backup. Each launch keeps one
+  timestamped copy of the state and profile it found, pruned to the newest
+  ten, so the previous session stays recoverable. `tests/check_upgrades.py`
+  loads the formats older builds wrote and `tests/check_storage.py` reports
+  the health of a data folder without writing to it.
+- The reading line has three tiers. The words being spoken carry a brighter
+  accent with a hairline stroke, the anticipated run sits behind them in a
+  quieter, lower-chroma one, and the resting ink is what is still to come.
+  The stroke is a glyph outline rather than a font weight, so a state change
+  cannot re-wrap the line under the reader, and the change crossfades over
+  120 ms from the reader's own clock.
+- One palette and one set of springs for every surface. `notch/ui/theme.py`
+  holds the colours, radii and spacing and `notch/ui/motion.py` holds the
+  spring presets and crossfade durations, which ends the drift of a note a
+  shade off the card it was opened from and of a hover that took 150 ms in
+  one place and 170 in another. The sticky note animates for the first time:
+  it grows out of the reader to its corner, leaves on a quicker spring,
+  reverses when grabbed mid-dismissal, and coasts after a drag within a
+  bounded limit. Reduced motion turns all of it into an instant appearance
+  and close.
+- A note is a piece of the reader. It takes the card's fill, border, radius
+  and dark-mode edge catchlight, and its entrance and dismissal are anchored
+  to the reader's live rectangle, so the saved coordinate follows the resting
+  corner rather than wherever the travel left it.
+- Switching themes dissolves instead of flashing. The frame on screen is
+  captured, every surface is recoloured underneath it, and the captured frame
+  is released over one 220 ms dissolve; reduced motion switches instantly.
+- Manual mode gives the memory back. Entering Manual asks the worker to drop
+  the speech model, which took the process from 208 MB to 89 MB across three
+  measured Voice/Manual cycles with no growth across them, and returning to
+  Voice reloads it in 3.0-4.2 seconds behind the existing status line.
 - Windowed builds now leave support evidence. `notch.diagnostics` writes a
   rotating `notch-<pid>.log` beside the executable, falling back to
   `%LOCALAPPDATA%\NotchFree\logs`, records unhandled exceptions from the
@@ -60,11 +114,6 @@ Pre-launch hardening found by an independent read of the shipping paths.
 - The microphone ribbon drains on a time constant instead of a fixed fraction
   per frame, so an unplugged or muted mic clears in the same wall-clock time on
   a busy host as on an idle one.
-- Launch logs no longer accumulate. Every launch writes its own
-  `notch-<pid>.log` and `notch-fault-<pid>.log`, and nothing removed the
-  previous ones, so a reader started daily kept one session per launch for
-  ever. Startup now keeps the five newest sessions and deletes the rest,
-  never the running process's own files.
 
 ### Changed
 

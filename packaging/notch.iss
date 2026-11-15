@@ -1,9 +1,9 @@
 ; Inno Setup script for Notch (Windows installer).
-; Build with:  ISCC.exe /DMyAppVersion=1.6.1 packaging\notch.iss
+; Build with:  ISCC.exe /DMyAppVersion=1.6.2 packaging\notch.iss
 ; Expects a frozen build in ..\dist\Notch (produced by packaging\notch.spec).
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.6.1"
+  #define MyAppVersion "1.6.2"
 #endif
 
 #define MyAppName "Notch"

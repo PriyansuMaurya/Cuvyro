@@ -1,7 +1,7 @@
 @echo off
 REM ============================================================
 REM  Notch - build a Windows installer in one command.
-REM  Usage:  build-installer.bat [version]     (default 1.6.1)
+REM  Usage:  build-installer.bat [version]     (default 1.6.2)
 REM  Output: dist\NotchSetup-<version>.exe
 REM
 REM  Signing is opt-in through the NOTCH_SIGN_* environment; see
@@ -12,7 +12,7 @@ setlocal
 cd /d "%~dp0"
 
 set "VERSION=%~1"
-if "%VERSION%"=="" set "VERSION=1.6.1"
+if "%VERSION%"=="" set "VERSION=1.6.2"
 
 set "PY=.venv\Scripts\python.exe"
 REM Prefer `python` (present on CI runners); fall back to the `py` launcher.
