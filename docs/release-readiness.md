@@ -1,7 +1,10 @@
 # Release readiness
 
-The release remains blocked until signing and the packaged eight-hour soak
-have been completed. Preparing a harness is not a completed soak.
+The packaged eight-hour soak for 1.6.2 passed; its candidate identity, the
+monitor report and the check output are archived in `docs/release/1.6.2.md`.
+The release is still blocked on signing and on the tester's own notes from that
+run. Preparing a harness is not a completed soak; a passing report from one
+candidate is, and only for that candidate's bytes.
 
 ## Diagnostics
 
@@ -29,7 +32,8 @@ python tests/soak_packaged.py dist/Notch/Notch.exe --report soak-result.json
 The monitor uses an isolated state folder and runs for 28,800 seconds. It
 fails on an early exit, absent startup heartbeat or a GUI heartbeat more than
 60 seconds old. The report includes hashes of the packaged files. Keep the
-computer awake. A killed monitor or missing report is not a pass.
+computer awake. A killed monitor or missing report is not a pass. The 1.6.2
+run completed 28,801.4 seconds and passed.
 
 This measures process survival and GUI responsiveness. During the run, exercise
 Voice and Manual modes, microphone loss/recovery, notes and editor changes,
@@ -61,4 +65,6 @@ enforce certificate verification or soak evidence. Do not create the release
 tag until those gates are integrated and the exact candidate passes. Rebuilding
 after the soak creates different bytes; do not present an earlier candidate's
 report as proof of the rebuilt artifact. Archive the signed installer, its
-SHA-256, the matching packaged-file manifest, soak report and check output.
+SHA-256, the matching packaged-file manifest, soak report and check output; for
+1.6.2 those last three are in `docs/release/` and the installer stays in `dist/`
+and in the release attachment.

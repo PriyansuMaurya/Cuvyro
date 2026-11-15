@@ -1,0 +1,25 @@
+Release gate output, Notch 1.6.2
+Captured 2026-11-15 on the Windows build machine, after the packaged soak.
+The first fourteen are the workflow's own list; design, quality and hotkeys
+need a real display. Only the verdict, the duration and the closing line are
+kept: the full transcripts name local paths and foreground window titles.
+
+PASS  check_behavior                 8s  All behaviour checks passed.
+PASS  check_voice_follow            18s  All voice-follow checks passed.
+PASS  check_waveform                 7s  All waveform checks passed.
+PASS  check_speech_engine            7s  All speech-engine checks passed.
+PASS  check_robustness              20s  All robustness checks passed.
+PASS  check_note_clearing            4s  All note-clearing checks passed.
+PASS  check_note_placement           3s  All note-placement checks passed.
+PASS  check_motion                   1s  All motion checks passed.
+PASS  check_upgrades                 2s  All upgrade checks passed.
+PASS  check_head_tracking           35s  all head tracking checks passed
+PASS  check_storage                  1s  Storage health check passed.
+PASS  check_diagnostics              1s  PASS: windowed output, main/thread exceptions, unwritable-path fallback and bounded session...
+PASS  check_predictive_highlight     2s  All predictive-highlight checks passed.
+PASS  check_predictive_speech       27s  NOTE  decode 20.3 ms mean, 75.7 ms p95 per 100 ms block
+PASS  check_design                  14s  All design checks passed.
+PASS  check_quality                 10s  All quality checks passed.
+PASS  check_hotkeys                  5s  All global-hotkey checks passed.
+
+Every check exited 0.

@@ -38,6 +38,9 @@ rea-work/installer/
 rea-work/app-js/node_modules/
 rea-work/app-js/dist/
 
+# Soak reports are archived under docs/release/, not left at the repo root
+soak-result.json
+
 # Recorded sessions and logs (start-notch.bat writes notch-run.log)
 .sessions/
 *.log
