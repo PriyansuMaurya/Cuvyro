@@ -48,23 +48,40 @@ Head tracking stays experimental and default-off for new installations.
 Existing explicit opt-ins are preserved. Do not promote it in headline claims
 until region calibration has passed real-camera validation.
 
-The release audit reported 8–9.5 seconds for packaged model loading. README
-now uses that range; it is supplied audit evidence, not a new measurement
-from this change. Repeat the measurement on the release candidate.
+The release audit reported 8–9.5 seconds for packaged model loading, and README
+quotes that range as audit evidence rather than a fresh measurement. The 1.6.2
+candidate reaches speech recognition 3.9–4.5 seconds after process start on
+this machine, measured over three launches of the packaged exe; a cold first
+launch after installation can be slower, which is why README keeps the wider
+range. Re-measure if the machine, the model or the freeze changes.
 
 ## Signing and release
 
 An OV/EV signing certificate and access to its supported signing provider are
 still required. Do not put private keys or passwords into the repository.
-Configure signing for the certificate provider on the Windows build machine,
-sign `Notch.exe` before compiling the installer, then sign the installer.
-Verify both signatures and timestamps on a clean Windows machine.
 
-The existing workflow checks behaviour and bundled engines, but does not yet
-enforce certificate verification or soak evidence. Do not create the release
-tag until those gates are integrated and the exact candidate passes. Rebuilding
-after the soak creates different bytes; do not present an earlier candidate's
-report as proof of the rebuilt artifact. Archive the signed installer, its
-SHA-256, the matching packaged-file manifest, soak report and check output; for
-1.6.2 those last three are in `docs/release/` and the installer stays in `dist/`
-and in the release attachment.
+`packaging/sign.bat` signs one artifact when `NOTCH_SIGN_CERT` points at a
+`.pfx`; `NOTCH_SIGN_PASSWORD` is its password and `NOTCH_SIGN_TIMESTAMP`
+overrides the default RFC 3161 server. `build-installer.bat` calls it twice, in
+the order a release verifies: `dist\Notch\Notch.exe` before Inno Setup runs and
+`dist\NotchSetup-<version>.exe` after. `NOTCH_SIGN_REQUIRED` turns the
+unconfigured path into an error, which is what a release build sets; a
+developer build without a certificate stays unsigned and says so.
+
+A tag now carries both gates. Before anything is built, the workflow requires
+`docs/release/<version>-soak-result.json` to report PASS, at least 28,800
+seconds and a packaged-file manifest. Before anything is published, it restores
+the certificate from `secrets.NOTCH_SIGN_CERT_PFX` (a base64 `.pfx`) with
+`secrets.NOTCH_SIGN_CERT_PASSWORD`, deletes it afterwards, and fails unless
+`Notch.exe` and the installer both verify as valid, attributable and
+timestamped. A `workflow_dispatch` build is held to neither gate because it has
+no version to check.
+
+Verify both signatures and timestamps on a clean Windows machine as well: the
+workflow sees the runner's copy, not what the installer writes.
+
+Rebuilding after the soak creates different bytes; do not present an earlier
+candidate's report as proof of the rebuilt artifact. Archive the signed
+installer, its SHA-256, the matching packaged-file manifest, soak report and
+check output; for 1.6.2 those last three are in `docs/release/` and the
+installer stays in `dist/` and in the release attachment.
