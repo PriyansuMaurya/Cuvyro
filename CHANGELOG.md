@@ -10,6 +10,23 @@ messages.
 
 Pre-launch hardening found by an independent read of the shipping paths.
 
+### Added
+
+- Windowed builds now leave support evidence. `notch.diagnostics` writes a
+  rotating `notch-<pid>.log` beside the executable, falling back to
+  `%LOCALAPPDATA%\NotchFree\logs`, records unhandled exceptions from the
+  main thread and from worker threads, and keeps native fault traces in
+  `notch-fault-<pid>.log`. A windowed build has no console, so without this
+  a launch-day crash left nothing to read.
+- `tests/soak_packaged.py` is the eight-hour endurance monitor: it hashes the
+  packaged tree, runs the exe against an isolated state folder, and fails on
+  an early exit, a stale GUI heartbeat, any logged error, or native fault
+  evidence. `docs/release-readiness.md` records what a pass proves and what
+  signing still blocks.
+- `tests/check_diagnostics.py` proves exception capture in fresh windowed-
+  style processes, and the release workflow now runs it before the installer
+  step.
+
 ### Fixed
 
 - A release build now ships the engine it is measured with. The workflow
@@ -38,6 +55,13 @@ Pre-launch hardening found by an independent read of the shipping paths.
 - `tests/check_robustness.py` checks the cross-process mutex and the silent
   default for transcript logging; `tests/check_waveform.py` checks that one
   late frame drains as far as a frame budget would.
+- README gives the packaged model load as 8-9.5 seconds instead of the 4.2
+  seconds measured from a source run, and describes head tracking as
+  experimental and off by default for new installations.
+- `tests/check_robustness.py` reports SKIP instead of a failure for the
+  session-mutex checks when another reader already holds it, so a
+  developer's open window or a running soak no longer turns the suite red
+  while the guard is doing its job.
 
 ## 1.6.1 — 2026-11-14
 
