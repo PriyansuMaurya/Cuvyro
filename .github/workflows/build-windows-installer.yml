@@ -34,13 +34,32 @@ jobs:
           "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "Building version $version"
 
-      - name: Fetch speech model
+      # The app ships and is measured against sherpa-onnx zipformer + Silero
+      # VAD. model/ is not tracked, so the runner has to fetch every file the
+      # build expects; fetching only the Vosk fallback published an installer
+      # running the engine the benchmark replaced (4.3x realtime, RMS gate).
+      - name: Fetch speech models
         run: |
+          $ProgressPreference = 'SilentlyContinue'
           $zip = Join-Path $env:RUNNER_TEMP 'vosk-model.zip'
           Invoke-WebRequest -Uri 'https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip' -OutFile $zip
           Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP -Force
           if (Test-Path 'model') { Remove-Item -Recurse -Force 'model' }
           Move-Item (Join-Path $env:RUNNER_TEMP 'vosk-model-small-en-us-0.15') 'model'
+
+          $archive = Join-Path $env:RUNNER_TEMP 'sherpa.tar.bz2'
+          Invoke-WebRequest -Uri 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2' -OutFile $archive
+          tar.exe -xjf $archive -C $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { throw 'could not extract the sherpa model archive' }
+          Move-Item (Join-Path $env:RUNNER_TEMP 'sherpa-onnx-streaming-zipformer-en-2023-06-26') (Join-Path 'model' 'sherpa')
+
+          $vad = Join-Path 'model' 'silero_vad.onnx'
+          Invoke-WebRequest -Uri 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx' -OutFile $vad
+          if ((Get-Item $vad).Length -lt 500KB) { throw 'silero_vad.onnx is truncated' }
+
+          # The build prefers sherpa; assert the files it needs actually landed.
+          if (-not (Test-Path 'model/sherpa/tokens.txt')) { throw 'model/sherpa/tokens.txt is missing' }
+          if (-not (Get-ChildItem 'model/sherpa' -Filter '*encoder*.onnx')) { throw 'sherpa encoder is missing' }
           Write-Host "Model ready: $(Get-ChildItem model | Measure-Object | Select-Object -ExpandProperty Count) entries"
 
       # Head tracking ships the MediaPipe landmarker beside the speech model,
@@ -53,10 +72,50 @@ jobs:
           if ($size -lt 1MB) { throw "face landmarker is truncated: $size bytes" }
           Write-Host "Face landmarker ready: $size bytes"
 
+      # A tag used to publish without running anything. These are the checks
+      # the README documents as offscreen-safe, so a behavioural regression
+      # cannot reach the installer.
+      - name: Install check dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run offscreen checks
+        run: |
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $checks = @(
+            'check_behavior', 'check_voice_follow', 'check_waveform',
+            'check_speech_engine', 'check_robustness', 'check_note_clearing',
+            'check_note_placement', 'check_motion', 'check_upgrades',
+            'check_head_tracking', 'check_storage',
+            'check_predictive_highlight', 'check_predictive_speech'
+          )
+          foreach ($check in $checks) {
+            Write-Host "::group::$check"
+            python "tests/$check.py"
+            if ($LASTEXITCODE -ne 0) { throw "$check failed" }
+            Write-Host '::endgroup::'
+          }
+
       # Same one-command flow used locally; version comes from the tag.
       - name: Build installer
         shell: cmd
         run: build-installer.bat %VERSION%
+
+      # The frozen tree must carry the same models the checks just exercised.
+      # build-installer.bat still accepts a Vosk-only folder for legacy local
+      # builds, so the release asserts the shipping configuration explicitly.
+      - name: Verify the frozen build carries the tested engines
+        run: |
+          $required = @(
+            'dist/Notch/model/sherpa/tokens.txt',
+            'dist/Notch/model/silero_vad.onnx',
+            'dist/Notch/model/face_landmarker.task'
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) { throw "release build is missing $path" }
+          }
+          $encoder = Get-ChildItem 'dist/Notch/model/sherpa' -Filter '*encoder*.onnx'
+          if (-not $encoder) { throw 'release build has no sherpa encoder' }
+          Write-Host "Frozen models verified: $(($required + $encoder.FullName).Count) files"
 
       - name: Verify installer exists
         run: |
