@@ -23,8 +23,8 @@ from PyQt5.QtCore import QElapsedTimer, QPoint, Qt, QTimer
 from PyQt5.QtGui import QPainter, QPixmap, QRegion
 from PyQt5.QtWidgets import QWidget
 
-from notch.ui import motion
-from notch.ui.spring import system_allows_motion
+from cuvyro.ui import motion
+from cuvyro.ui.spring import system_allows_motion
 
 
 class SnapshotFade(QWidget):

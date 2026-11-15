@@ -50,9 +50,9 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette, QPen
 from PyQt5.QtWidgets import QApplication, QLabel, QMenu, QWidget
 
-from notch.platform.capture import exclude_from_capture
-from notch.ui import motion, theme
-from notch.ui.spring import Spring, system_allows_motion
+from cuvyro.platform.capture import exclude_from_capture
+from cuvyro.ui import motion, theme
+from cuvyro.ui.spring import Spring, system_allows_motion
 
 HOVER_DELAY_MS = 650
 FOCUS_DELAY_MS = 350

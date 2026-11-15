@@ -156,7 +156,7 @@ def check_declared_tooltips():
     broken = {}
     total = 0
     for name in ("overlay.py", "settings.py", "notes.py", "tooltips.py"):
-        path = os.path.join(REPO_ROOT, "notch", "ui", name)
+        path = os.path.join(REPO_ROOT, "cuvyro", "ui", name)
         for text in declared_tooltips(path):
             text = " ".join(text.split())
             total += 1
@@ -169,7 +169,7 @@ def check_declared_tooltips():
 
 
 def tooltip_service():
-    from notch.ui import tooltips
+    from cuvyro.ui import tooltips
     return tooltips.install(QApplication.instance())
 
 
@@ -193,7 +193,7 @@ def check_tooltips(win):
     shadow, clear of its control, inside the work area, opened by a hover or
     by Tab, and gone the moment the user does anything else.
     """
-    from notch.ui import tooltips
+    from cuvyro.ui import tooltips
 
     service = tooltip_service()
     tip = service.tooltip()
@@ -358,7 +358,7 @@ def check_menu_tooltips(win, menu):
     label that owns it, it would hang over the field the same row holds, so
     the panel is anchored to the menu's own edge at the control's height.
     """
-    from notch.ui import tooltips
+    from cuvyro.ui import tooltips
 
     service = tooltip_service()
     tip = service.tooltip()
@@ -404,18 +404,18 @@ def check_menu_tooltips(win, menu):
 
 
 def main():
-    # The first-run guide is modal. A machine that has never run Notch (a
+    # The first-run guide is modal. A machine that has never run Cuvyro (a
     # runner, a new laptop) would block on it instead of starting, so the
     # check states the machine it describes. check_note_clearing, the
     # robustness check and the upgrade check do the same.
     from PyQt5.QtCore import QSettings
-    QSettings("Notch", "Notch").setValue("guide_seen", True)
+    QSettings("Cuvyro", "Cuvyro").setValue("guide_seen", True)
     app = QApplication(sys.argv)
-    from notch.ui import overlay as ui_overlay
-    from notch.storage.store import Store
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.storage.store import Store
 
-    win = ui_overlay.NotchOverlay()
-    win._store = Store(tempfile.mkdtemp(prefix="notch-design-"))
+    win = ui_overlay.CuvyroOverlay()
+    win._store = Store(tempfile.mkdtemp(prefix="cuvyro-design-"))
     win._voice_mode = False  # keep the microphone out of an automated run
     win.show()
     win._load_script_from_file(FIXTURE)
@@ -453,7 +453,7 @@ def main():
         x0, pitch, count, bar_w = win.waveform_layout()
         band = win.waveform_band()
         centre_y = win.height() - win.WAVE_TOP_MARGIN * win._scale
-        channel = 2 if win._voice_mode else 1  # blue = Notch, green = Keys
+        channel = 2 if win._voice_mode else 1  # blue = Cuvyro, green = Keys
         bars = 0
         for index in range(count):
             sx = x0 + index * pitch + bar_w / 2.0
@@ -551,7 +551,7 @@ def main():
     # pixels, so the same button rendered on black and on white has to come
     # back identical. The plate used to be 6% white glass mixed over whatever
     # was behind it, which let the script's words read through the toolbar.
-    from notch.ui import controls
+    from cuvyro.ui import controls
 
     samples = []
     for backdrop in ("#000000", "#FFFFFF"):

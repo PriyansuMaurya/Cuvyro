@@ -85,13 +85,13 @@ def main():
     light = theme == "light"
 
     app = QApplication(sys.argv)
-    from notch.ui import overlay as ui_overlay
+    from cuvyro.ui import overlay as ui_overlay
 
-    win = ui_overlay.NotchOverlay()
+    win = ui_overlay.CuvyroOverlay()
     # Captures must not write into the app's saved state: the notes they open
     # used to come back as extra note windows on the next real launch.
-    from notch.storage.store import Store
-    win._store = Store(tempfile.mkdtemp(prefix="notch-shots-"))
+    from cuvyro.storage.store import Store
+    win._store = Store(tempfile.mkdtemp(prefix="cuvyro-shots-"))
     win.show()
     # After show(): showEvent restores the saved theme from the store, so the
     # capture theme has to be applied here or the store wins.

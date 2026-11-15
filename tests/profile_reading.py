@@ -7,7 +7,7 @@ at the cadence of the recogniser. It reports:
   * how long the main thread spends inside each speech result,
   * how long the highlight takes to reach the screen after one arrives,
   * how evenly the scroll advances while a line is gliding,
-  * how long a wheel notch takes to move the page,
+  * how long a wheel cuvyro takes to move the page,
   * and what an idle and a reading second cost in CPU and working set.
 
 It touches no saved state (temporary store) and never opens the microphone.
@@ -130,9 +130,9 @@ class Profile:
 
 
 def build_overlay(profile, detach_effects=False):
-    from notch.ui import controls
-    from notch.ui import overlay as ui_overlay
-    from notch.storage.store import Store
+    from cuvyro.ui import controls
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.storage.store import Store
 
     class ProfiledText(controls.ScriptTextEdit):
         def paintEvent(self, event):
@@ -150,7 +150,7 @@ def build_overlay(profile, detach_effects=False):
 
     ui_overlay.ScriptTextEdit = ProfiledText
 
-    class ProfiledOverlay(ui_overlay.NotchOverlay):
+    class ProfiledOverlay(ui_overlay.CuvyroOverlay):
         def _start_listening(self):
             """The harness calls the recognition slot directly."""
 
@@ -208,7 +208,7 @@ def build_overlay(profile, detach_effects=False):
                 profile.speech.append(time.perf_counter() - started)
 
     win = ProfiledOverlay()
-    win._store = Store(tempfile.mkdtemp(prefix="notch-profile-"))
+    win._store = Store(tempfile.mkdtemp(prefix="cuvyro-profile-"))
     if detach_effects:
         win._text_edit.setGraphicsEffect(None)
     return win

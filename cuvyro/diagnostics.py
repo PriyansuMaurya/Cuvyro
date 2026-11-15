@@ -13,11 +13,11 @@ import time
 _logger = None
 _fault_file = None
 
-# Every launch writes its own notch-<pid>.log, so a reader started daily
+# Every launch writes its own cuvyro-<pid>.log, so a reader started daily
 # accumulates one session per launch for ever unless the old ones go. The
 # support evidence is the newest few; anything older is noise in the folder.
-SESSION_LOG = re.compile(r'^notch-(\d+)\.log(?:\.\d+)?$')
-FAULT_LOG = re.compile(r'^notch-fault-(\d+)\.log$')
+SESSION_LOG = re.compile(r'^cuvyro-(\d+)\.log(?:\.\d+)?$')
+FAULT_LOG = re.compile(r'^cuvyro-fault-(\d+)\.log$')
 KEEP_SESSIONS = 5
 
 
@@ -76,27 +76,27 @@ def install():
     global _logger, _fault_file
     if _logger is not None:
         return _logger
-    from notch.paths import app_dir
+    from cuvyro.paths import app_dir
     candidates = [Path(app_dir()), Path(os.environ.get('LOCALAPPDATA') or
-                  Path.home() / '.local' / 'state') / 'NotchFree' / 'logs']
+                  Path.home() / '.local' / 'state') / 'Cuvyro' / 'logs']
     handler = None
     for directory in candidates:
         try:
             directory.mkdir(parents=True, exist_ok=True)
-            handler = RotatingFileHandler(directory / f'notch-{os.getpid()}.log',
+            handler = RotatingFileHandler(directory / f'cuvyro-{os.getpid()}.log',
                                           maxBytes=2 * 1024 * 1024,
                                           backupCount=2, encoding='utf-8')
             break
         except OSError:
             continue
-    logger = logging.getLogger('notch.runtime')
+    logger = logging.getLogger('cuvyro.runtime')
     logger.setLevel(logging.INFO)
     logger.propagate = False
     logger.addHandler(handler or logging.NullHandler())
     if handler:
         handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
         try:
-            _fault_file = open(directory / f'notch-fault-{os.getpid()}.log', 'a')
+            _fault_file = open(directory / f'cuvyro-fault-{os.getpid()}.log', 'a')
             faulthandler.enable(file=_fault_file, all_threads=True)
         except (OSError, RuntimeError):
             logger.warning('Native fault logging unavailable')
@@ -131,7 +131,7 @@ def install():
 
 def heartbeat():
     """Opt-in GUI event-loop evidence, with no script or audio content."""
-    directory = os.environ.get('NOTCH_SOAK_DIR')
+    directory = os.environ.get('CUVYRO_SOAK_DIR')
     if directory:
         try:
             path = Path(directory) / f'heartbeat-{os.getpid()}'

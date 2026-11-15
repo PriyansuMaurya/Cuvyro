@@ -119,11 +119,11 @@ def build_audio(directory):
 
 
 def make_overlay(text, tmp):
-    from notch.ui import overlay as ui_overlay
-    from notch.storage.store import Store
-    from notch.audio.predict import PredictiveHighlighter, ProfileStore
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.storage.store import Store
+    from cuvyro.audio.predict import PredictiveHighlighter, ProfileStore
 
-    win = ui_overlay.NotchOverlay()
+    win = ui_overlay.CuvyroOverlay()
     win._store = Store(tmp)
     win._predictor = PredictiveHighlighter(ProfileStore(tmp))
     win._voice_mode = False
@@ -265,10 +265,10 @@ def drive_audio(path, script, source, trace=None):
     boundary. It is how a surprising number gets explained instead of guessed
     at: the difference between a live pass and its replay is visible there.
     """
-    from notch.audio.speech import (create_recognizer, create_vad,
+    from cuvyro.audio.speech import (create_recognizer, create_vad,
                                     release_recognizer)
-    from notch.audio.worker import AudioWorker
-    from notch import paths
+    from cuvyro.audio.worker import AudioWorker
+    from cuvyro import paths
 
     # Decode with the production block handler, not a hand-rolled loop: the
     # worker's voice-activity state machine, onset buffer and utterance final
@@ -289,7 +289,7 @@ def drive_audio(path, script, source, trace=None):
     worker._vad = vad
 
     app = QApplication.instance() or QApplication(sys.argv)
-    win = make_overlay(script, tempfile.mkdtemp(prefix="notch-predict-e2e-"))
+    win = make_overlay(script, tempfile.mkdtemp(prefix="cuvyro-predict-e2e-"))
     slot_costs = []
 
     def on_text(text, is_final):
@@ -369,7 +369,7 @@ def drive_audio(path, script, source, trace=None):
 
 
 def evaluate(report, words_label, coverage_bar=0.6):
-    from notch.audio.predict import RETREAT_DELAY
+    from cuvyro.audio.predict import RETREAT_DELAY
 
     print(report)
     check(f"real recogniser produced words for the {words_label}",
@@ -524,7 +524,7 @@ def save_session(directory, raw, rate, script, report, source_note):
 
 
 def run_sapi(trace=None):
-    audio_dir = tempfile.mkdtemp(prefix="notch-predict-sapi-")
+    audio_dir = tempfile.mkdtemp(prefix="cuvyro-predict-sapi-")
     path = build_audio(audio_dir)
     if path is None:
         return skip("SAPI synthesis is unavailable on this machine")
@@ -535,8 +535,8 @@ def run_sapi(trace=None):
 
 
 def run_live(seconds, save_dir):
-    from notch import paths
-    from notch.audio.speech import find_sherpa_model_dir
+    from cuvyro import paths
+    from cuvyro.audio.speech import find_sherpa_model_dir
 
     model_root = paths.model_dir()
     has_sherpa = find_sherpa_model_dir(model_root) is not None
@@ -555,7 +555,7 @@ def run_live(seconds, save_dir):
 
     app = QApplication.instance() or QApplication(sys.argv)
     directory = os.path.join(save_dir, time.strftime("%Y-%m-%d-%H%M%S"))
-    win = make_overlay(SCRIPT, tempfile.mkdtemp(prefix="notch-predict-live-"))
+    win = make_overlay(SCRIPT, tempfile.mkdtemp(prefix="cuvyro-predict-live-"))
     sampler = Sampler(win, len(words_of(SCRIPT)))
 
     recorder = MicRecorder()
@@ -664,12 +664,12 @@ def run_replay(target, script_override=None, trace=None):
 
 
 def main():
-    # The first-run guide is modal. A machine that has never run Notch (a
+    # The first-run guide is modal. A machine that has never run Cuvyro (a
     # runner, a new laptop) would block on it instead of starting, so the
     # check states the machine it describes. check_note_clearing, the
     # robustness check and the upgrade check do the same.
     from PyQt5.QtCore import QSettings
-    QSettings("Notch", "Notch").setValue("guide_seen", True)
+    QSettings("Cuvyro", "Cuvyro").setValue("guide_seen", True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true",
                         help="use the real microphone and record the session")

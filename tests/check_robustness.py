@@ -89,10 +89,10 @@ def saved_note(directory, index=0):
 
 
 def make_overlay(directory):
-    from notch.ui import overlay as ui_overlay
-    from notch.storage.store import Store
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.storage.store import Store
 
-    win = ui_overlay.NotchOverlay()
+    win = ui_overlay.CuvyroOverlay()
     win._store = Store(directory)
     win._voice_mode = False  # keep the microphone out of an automated run
     win.show()
@@ -106,14 +106,14 @@ def on_screen(rect):
 
 
 def main():
-    QSettings("Notch", "Notch").setValue("guide_seen", True)
+    QSettings("Cuvyro", "Cuvyro").setValue("guide_seen", True)
     app = QApplication(sys.argv)
-    from notch.ui import overlay as ui_overlay
-    from notch.ui import settings as settings_dialog
-    from notch.storage.store import SCHEMA, Store
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.ui import settings as settings_dialog
+    from cuvyro.storage.store import SCHEMA, Store
 
     # ── Persistence is debounced, and every close path flushes ────────
-    tmp = tempfile.mkdtemp(prefix="notch-robust-save-")
+    tmp = tempfile.mkdtemp(prefix="cuvyro-robust-save-")
     win = make_overlay(tmp)
     text = open(FIXTURE, encoding="utf-8").read() * 20
     win._text_edit.setPlainText(text)
@@ -139,7 +139,7 @@ def main():
           "note text persisted")
 
     # Closing the app must not lose the last <=400 ms of typing.
-    tmp_close = tempfile.mkdtemp(prefix="notch-robust-close-")
+    tmp_close = tempfile.mkdtemp(prefix="cuvyro-robust-close-")
     closing = make_overlay(tmp_close)
     closing_note = closing._open_note()
     closing_note._edit.setPlainText("flushed on close")
@@ -152,7 +152,7 @@ def main():
     # A shutdown is a separate exit path (logoff, power off). It arrives as
     # aboutToQuit, after which the notes list is cleared; saving that empty
     # list would erase the state the close itself just wrote.
-    tmp_shutdown = tempfile.mkdtemp(prefix="notch-robust-shutdown-")
+    tmp_shutdown = tempfile.mkdtemp(prefix="cuvyro-robust-shutdown-")
     shutting = make_overlay(tmp_shutdown)
     shutdown_note = shutting._open_note()
     shutdown_note._edit.setPlainText("survives shutdown")
@@ -169,7 +169,7 @@ def main():
           repr(saved_note(tmp_shutdown)))
 
     # ── Menus are released, not accumulated ───────────────────────────
-    menu_win = make_overlay(tempfile.mkdtemp(prefix="notch-robust-menu-"))
+    menu_win = make_overlay(tempfile.mkdtemp(prefix="cuvyro-robust-menu-"))
     menu_win._present_menu = lambda menu, pos: menu.close()  # no blocking exec_
     before = len(menu_win.findChildren(QObject))
     for _ in range(6):
@@ -180,7 +180,7 @@ def main():
           after <= before + 2, f"{before} -> {after} QObjects after 6 menus")
 
     # ── Restored windows are clamped to the screens that exist ────────
-    tmp_geom = tempfile.mkdtemp(prefix="notch-robust-geom-")
+    tmp_geom = tempfile.mkdtemp(prefix="cuvyro-robust-geom-")
     Store(tmp_geom).save("", [{"id": "offscreen", "text": "kept",
                                "x": 99999, "y": 99999}],
                          {"window_x": 99999, "window_y": 99999})
@@ -207,7 +207,7 @@ def main():
         def availableGeometry(self):
             return self._rect
 
-    tmp_display = tempfile.mkdtemp(prefix="notch-robust-display-")
+    tmp_display = tempfile.mkdtemp(prefix="cuvyro-robust-display-")
     display = make_overlay(tmp_display)
     display.move(6000, 6000)
     QTest.qWait(50)
@@ -241,7 +241,7 @@ def main():
           f"at {edge_note.x()},{edge_note.y()}")
 
     # A valid saved position is restored rather than re-centred.
-    tmp_pos = tempfile.mkdtemp(prefix="notch-robust-pos-")
+    tmp_pos = tempfile.mkdtemp(prefix="cuvyro-robust-pos-")
     wanted = QRect(screen.x() + 40, screen.y() + 30,
                    win.DEFAULT_W, win.DEFAULT_H)
     Store(tmp_pos).save("", [], {"window_x": wanted.x(), "window_y": wanted.y()})
@@ -251,7 +251,7 @@ def main():
           f"{positioned.x()},{positioned.y()} vs {wanted.x()},{wanted.y()}")
 
     # Sticky notes own their position, not just their text.
-    tmp_note_pos = tempfile.mkdtemp(prefix="notch-robust-note-pos-")
+    tmp_note_pos = tempfile.mkdtemp(prefix="cuvyro-robust-note-pos-")
     note_wanted = QPoint(screen.x() + 120, screen.y() + 80)
     Store(tmp_note_pos).save("", [{"id": "placed", "text": "placed note",
                                    "x": note_wanted.x(), "y": note_wanted.y()}], {})
@@ -263,7 +263,7 @@ def main():
         note_placed.close()
 
     # ── Font, mode and setup preferences survive a relaunch ──────────
-    tmp_prefs = tempfile.mkdtemp(prefix="notch-robust-prefs-")
+    tmp_prefs = tempfile.mkdtemp(prefix="cuvyro-robust-prefs-")
     prefs = make_overlay(tmp_prefs)
     prefs._save_timer.stop()
     prefs._font_size = 16
@@ -281,7 +281,7 @@ def main():
     prefs._save_state()
     with patch.object(QApplication, "quit", lambda *_: None):
         prefs.close()
-    restarted = ui_overlay.NotchOverlay()
+    restarted = ui_overlay.CuvyroOverlay()
     restarted._store = Store(tmp_prefs)
     restarted._start_listening = lambda: None
     restarted.show()
@@ -304,7 +304,7 @@ def main():
         restarted.close()
 
     # ── A saved size is restored, not just the position ───────────────
-    tmp_size = tempfile.mkdtemp(prefix="notch-robust-size-")
+    tmp_size = tempfile.mkdtemp(prefix="cuvyro-robust-size-")
     wanted_size = QSize(win.DEFAULT_W + 40, win.DEFAULT_H + 60)
     Store(tmp_size).save("", [], {"window_x": screen.x() + 25,
                                    "window_y": screen.y() + 15,
@@ -321,7 +321,7 @@ def main():
         sized.close()
 
     # A size saved on a bigger display cannot put the card off the screen.
-    tmp_oversize = tempfile.mkdtemp(prefix="notch-robust-oversize-")
+    tmp_oversize = tempfile.mkdtemp(prefix="cuvyro-robust-oversize-")
     Store(tmp_oversize).save("", [], {"window_x": 0, "window_y": 0,
                                        "window_w": int(860 * win._scale)
                                        + win.RAIL_W,
@@ -335,7 +335,7 @@ def main():
         oversized.close()
 
     # A size no reader state could have produced is corrupt, not a resize.
-    tmp_absurd_size = tempfile.mkdtemp(prefix="notch-robust-absurd-size-")
+    tmp_absurd_size = tempfile.mkdtemp(prefix="cuvyro-robust-absurd-size-")
     Store(tmp_absurd_size).save("", [], {"window_x": 10, "window_y": 10,
                                           "window_w": 999999,
                                           "window_h": 999999})
@@ -352,7 +352,7 @@ def main():
     # a list where a string belongs, coordinates past QRect's 32-bit range
     # (which raises OverflowError, not ValueError), booleans, numeric
     # strings, NaN and infinity, and sizes below the minimum.
-    tmp_bad = tempfile.mkdtemp(prefix="notch-robust-bad-")
+    tmp_bad = tempfile.mkdtemp(prefix="cuvyro-robust-bad-")
     with open(os.path.join(tmp_bad, "state.json"), "w", encoding="utf-8") as handle:
         json.dump({
             "schema": 1,
@@ -413,7 +413,7 @@ def main():
         bad.close()
 
     # ── Recovery: a truncated file falls back to the last good copy ───
-    tmp_bak = tempfile.mkdtemp(prefix="notch-robust-bak-")
+    tmp_bak = tempfile.mkdtemp(prefix="cuvyro-robust-bak-")
     Store(tmp_bak).save("recovered script",
                         [{"id": "n1", "text": "recovered note",
                           "x": 10, "y": 10}], {})
@@ -432,7 +432,7 @@ def main():
     # Launching against a corrupt primary and then saving must not promote
     # that corrupt file over the last good backup: the next crash would then
     # have nothing valid to recover from.
-    tmp_guard = tempfile.mkdtemp(prefix="notch-robust-bak-guard-")
+    tmp_guard = tempfile.mkdtemp(prefix="cuvyro-robust-bak-guard-")
     Store(tmp_guard).save("first good", [], {})
     Store(tmp_guard).save("second good", [], {})
     with open(os.path.join(tmp_guard, "state.json"), "w", encoding="utf-8") as handle:
@@ -445,17 +445,17 @@ def main():
           guarded.get("script") == "first good",
           repr(guarded.get("script")))
 
-    fresh = Store(tempfile.mkdtemp(prefix="notch-robust-fresh-")).load()
+    fresh = Store(tempfile.mkdtemp(prefix="cuvyro-robust-fresh-")).load()
     check("a first launch loads empty state",
           fresh.get("schema") == SCHEMA and fresh.get("script") == ""
           and fresh.get("notes") == [])
     fresh["notes"].append({"id": "leak"})
     check("a failed load cannot pollute the shared defaults",
-          Store(tempfile.mkdtemp(prefix="notch-robust-fresh-")).load().get("notes") == [],
+          Store(tempfile.mkdtemp(prefix="cuvyro-robust-fresh-")).load().get("notes") == [],
           "defaults were mutated by a caller")
 
     # ── Showing the window again keeps the live state ────────────────
-    tmp_live = tempfile.mkdtemp(prefix="notch-robust-live-")
+    tmp_live = tempfile.mkdtemp(prefix="cuvyro-robust-live-")
     Store(tmp_live).save("", [], {"font_size": 10, "font_family": "Segoe UI"})
     live = make_overlay(tmp_live)
     live._font_size = 19
@@ -470,8 +470,8 @@ def main():
         live.close()
 
     # ── Import: encodings, failures, and honesty ─────────────────────
-    import_win = make_overlay(tempfile.mkdtemp(prefix="notch-robust-import-"))
-    cp1252 = os.path.join(tempfile.mkdtemp(prefix="notch-script-"), "windows.txt")
+    import_win = make_overlay(tempfile.mkdtemp(prefix="cuvyro-robust-import-"))
+    cp1252 = os.path.join(tempfile.mkdtemp(prefix="cuvyro-script-"), "windows.txt")
     with open(cp1252, "wb") as handle:
         handle.write("Café — déjà vu".encode("cp1252"))
     check("a Windows-encoded script decodes losslessly",
@@ -487,13 +487,13 @@ def main():
     reported = []
     import_win._report_import_error = lambda path, error: reported.append(
         (path, str(error)))
-    missing = os.path.join(tempfile.mkdtemp(prefix="notch-missing-"), "gone.txt")
+    missing = os.path.join(tempfile.mkdtemp(prefix="cuvyro-missing-"), "gone.txt")
     loaded = import_win._load_script_from_file(missing)
     check("a missing script reports an error instead of failing silently",
           loaded is False and reported and reported[0][0] == missing)
 
     # ── Shading is incremental, and still correct when it goes back ──
-    shade_win = make_overlay(tempfile.mkdtemp(prefix="notch-robust-shade-"))
+    shade_win = make_overlay(tempfile.mkdtemp(prefix="cuvyro-robust-shade-"))
     shade_text = (open(FIXTURE, encoding="utf-8").read() + "\n") * 5
     shade_win._text_edit.setPlainText(shade_text)
     shade_win._script_text = shade_text
@@ -853,7 +853,7 @@ def main():
     settings._vu_start_timer.stop()  # never shown: no meter to start
     settings.deleteLater()
 
-    from notch.ui.controls import TextButton
+    from cuvyro.ui.controls import TextButton
     primary_contrast = contrast((255, 255, 255), hex_rgb(TextButton.PRIMARY))
     check("the primary button label clears 4.5:1 on its fill",
           primary_contrast >= 4.5,
@@ -907,14 +907,14 @@ def main():
     # ── One reader per session ───────────────────────────────────────
     # Two copies share one state file, one camera and one set of chords; the
     # last save wins, so the second launch can silently undo the first.
-    from notch.platform import single_instance
+    from cuvyro.platform import single_instance
     import subprocess
 
     def probe_from_another_process():
         """Ask a fresh interpreter whether it can take the reader's mutex."""
         code = (
             "import sys; sys.path.insert(0, %r);"
-            "from notch.platform import single_instance as s;"
+            "from cuvyro.platform import single_instance as s;"
             "print('taken' if not s.acquire() else 'free')" % REPO_ROOT
         )
         done = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT,
@@ -942,7 +942,7 @@ def main():
                   probe_from_another_process() == "free")
 
     # ── The reader's own words stay out of the log by default ────────
-    from notch.audio import worker as audio_worker
+    from cuvyro.audio import worker as audio_worker
 
     def trace_output(enabled):
         buffer = io.StringIO()

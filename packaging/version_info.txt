@@ -16,11 +16,11 @@ VSVersionInfo(
           '040904B0',
           [
             StringStruct('CompanyName', 'Socia'),
-            StringStruct('FileDescription', 'Notch teleprompter'),
+            StringStruct('FileDescription', 'Cuvyro teleprompter'),
             StringStruct('FileVersion', '1.6.2'),
-            StringStruct('InternalName', 'Notch'),
-            StringStruct('OriginalFilename', 'Notch.exe'),
-            StringStruct('ProductName', 'Notch'),
+            StringStruct('InternalName', 'Cuvyro'),
+            StringStruct('OriginalFilename', 'Cuvyro.exe'),
+            StringStruct('ProductName', 'Cuvyro'),
             StringStruct('ProductVersion', '1.6.2')
           ]
         )

@@ -1,9 +1,9 @@
 """System-wide manual controls that do not need the reader focused.
 
 Manual playback used to depend entirely on the reader owning the keyboard.
-That is fine while Notch is focused, but the moment to use Manual is usually
+That is fine while Cuvyro is focused, but the moment to use Manual is usually
 a presentation or a recording, where another application owns the keyboard.
-Windows' ``RegisterHotKey`` lets Notch listen for three chords from anywhere
+Windows' ``RegisterHotKey`` lets Cuvyro listen for three chords from anywhere
 without taking focus away from the application the user is working in.
 
 Registration is explicit and reversible. The caller asks the user once, the

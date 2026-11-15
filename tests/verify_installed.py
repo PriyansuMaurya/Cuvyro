@@ -1,4 +1,4 @@
-"""Check the *installed* Notch build, not the source tree.
+"""Check the *installed* Cuvyro build, not the source tree.
 
 The source checks drive PyQt in-process. This one launches the exe that the
 installer produced and asks Windows whether that build does what the source
@@ -12,8 +12,8 @@ does:
 * closing it hands the chords back.
 
 The reader hides itself from screen capture on purpose, so the scroll offset
-comes out of the app: this run sets ``NOTCH_MANUAL_TRACE=1``, which makes the
-app append one line per Manual start and pause to ``notch.log`` beside the
+comes out of the app: this run sets ``CUVYRO_MANUAL_TRACE=1``, which makes the
+app append one line per Manual start and pause to ``cuvyro.log`` beside the
 executable.
 
 The user's saved script, notes and settings are backed up and put back before
@@ -37,10 +37,10 @@ REPO_ROOT = os.path.dirname(HERE)
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
-EXE = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Notch\Notch.exe")
-STATE_DIR = os.path.expandvars(r"%APPDATA%\NotchFree")
+EXE = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Cuvyro\Cuvyro.exe")
+STATE_DIR = os.path.expandvars(r"%APPDATA%\Cuvyro")
 STATE = os.path.join(STATE_DIR, "state.json")
-TRACE_LOG = os.path.join(os.path.dirname(EXE), "notch.log")
+TRACE_LOG = os.path.join(os.path.dirname(EXE), "cuvyro.log")
 
 MOD_CONTROL, MOD_SHIFT, MOD_ALT, MOD_NOREPEAT = 0x2, 0x4, 0x1, 0x4000
 VK_SHIFT, VK_CONTROL, VK_MENU = 0x10, 0x11, 0x12
@@ -129,10 +129,10 @@ def main():
 
     # A leftover instance would own the chords, take the key presses, and the
     # run would be testing that copy instead of the one just installed.
-    subprocess.run(["taskkill", "/F", "/IM", "Notch.exe"], capture_output=True)
+    subprocess.run(["taskkill", "/F", "/IM", "Cuvyro.exe"], capture_output=True)
     time.sleep(1.0)
 
-    backup = tempfile.mkdtemp(prefix="notch-state-")
+    backup = tempfile.mkdtemp(prefix="cuvyro-state-")
     for name in os.listdir(STATE_DIR) if os.path.isdir(STATE_DIR) else []:
         shutil.copy2(os.path.join(STATE_DIR, name), os.path.join(backup, name))
     app = None
@@ -156,7 +156,7 @@ def main():
             pass
 
         app = subprocess.Popen([EXE], cwd=os.path.dirname(EXE),
-                               env=dict(os.environ, NOTCH_MANUAL_TRACE="1"))
+                               env=dict(os.environ, CUVYRO_MANUAL_TRACE="1"))
         reader = []
         for _ in range(120):
             reader = windows_for(app.pid)
@@ -212,7 +212,7 @@ def main():
             if "manual paused" in trace:
                 break
             time.sleep(0.2)
-        print("  notch.log:", " | ".join(trace.splitlines()) or "empty")
+        print("  cuvyro.log:", " | ".join(trace.splitlines()) or "empty")
         check("the chord reached Manual in the installed build",
               "chord toggle" in trace and "manual started" in trace)
         offsets = manual_offsets(trace)
@@ -243,7 +243,7 @@ def main():
                 app.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 pass
-        subprocess.run(["taskkill", "/F", "/IM", "Notch.exe"],
+        subprocess.run(["taskkill", "/F", "/IM", "Cuvyro.exe"],
                        capture_output=True)
         # Put the reader's own state back: this run seeded a test script and
         # a granted consent into it, and neither belongs to the user.

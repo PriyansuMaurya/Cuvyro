@@ -1,11 +1,11 @@
 @echo off
 REM ============================================================
-REM  Notch - build a Windows installer in one command.
+REM  Cuvyro - build a Windows installer in one command.
 REM  Usage:  build-installer.bat [version]     (default 1.6.2)
 REM          build-installer.bat [version] --freeze-only    (for MSIX)
-REM  Output: dist\NotchSetup-<version>.exe
+REM  Output: dist\CuvyroSetup-<version>.exe
 REM
-REM  Signing is opt-in through the NOTCH_SIGN_* environment; see
+REM  Signing is opt-in through the CUVYRO_SIGN_* environment; see
 REM  packaging\sign.bat. The exe is signed before the installer is compiled and
 REM  the installer afterwards, which is the order a release verifies.
 REM ============================================================
@@ -63,21 +63,21 @@ if not exist "model\face_landmarker.task" (
 echo [3/7] Freezing app with PyInstaller...
 if exist "build" rmdir /s /q "build"
 if exist "dist" rmdir /s /q "dist"
-"%PY%" -m PyInstaller --noconfirm --clean packaging\notch.spec
+"%PY%" -m PyInstaller --noconfirm --clean packaging\cuvyro.spec
 if errorlevel 1 goto :err
 
-if not exist "dist\Notch\Notch.exe" (
-  echo ERROR: PyInstaller did not produce dist\Notch\Notch.exe
+if not exist "dist\Cuvyro\Cuvyro.exe" (
+  echo ERROR: PyInstaller did not produce dist\Cuvyro\Cuvyro.exe
   goto :err
 )
 
 echo [4/7] Placing the model folder next to the executable...
-xcopy /e /i /y "model" "dist\Notch\model" >nul
+xcopy /e /i /y "model" "dist\Cuvyro\model" >nul
 if errorlevel 1 goto :err
 if /i "%~2"=="--freeze-only" exit /b 0
 
 echo [5/7] Signing the executable...
-call "%~dp0packaging\sign.bat" "dist\Notch\Notch.exe"
+call "%~dp0packaging\sign.bat" "dist\Cuvyro\Cuvyro.exe"
 if errorlevel 1 goto :err
 
 echo [6/7] Compiling installer with Inno Setup...
@@ -91,17 +91,17 @@ if not defined ISCC (
   goto :err
 )
 
-"%ISCC%" /Q /DMyAppVersion=%VERSION% packaging\notch.iss
+"%ISCC%" /Q /DMyAppVersion=%VERSION% packaging\cuvyro.iss
 if errorlevel 1 goto :err
 
 echo [7/7] Signing the installer...
-call "%~dp0packaging\sign.bat" "dist\NotchSetup-%VERSION%.exe"
+call "%~dp0packaging\sign.bat" "dist\CuvyroSetup-%VERSION%.exe"
 if errorlevel 1 goto :err
 
 echo.
 echo ============================================================
 echo  BUILD OK
-echo  Installer: dist\NotchSetup-%VERSION%.exe
+echo  Installer: dist\CuvyroSetup-%VERSION%.exe
 echo ============================================================
 exit /b 0
 

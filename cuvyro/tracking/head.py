@@ -947,13 +947,13 @@ MIN_EYE_PX = 18.0
 
 
 def model_dir() -> str:
-    """Where the face model lives. See :func:`notch.paths.model_dir`.
+    """Where the face model lives. See :func:`cuvyro.paths.model_dir`.
 
-    ``model/`` is copied next to Notch.exe by the build, not into the bundle —
+    ``model/`` is copied next to Cuvyro.exe by the build, not into the bundle —
     the same rule the speech model follows — so looking beside this package
     file would find nothing in a frozen build.
     """
-    from notch import paths
+    from cuvyro import paths
     return paths.model_dir()
 
 
@@ -1237,7 +1237,7 @@ class CameraHeadSource:
             self._recovering = False
             self._ready = False
         self._ever_opened = False
-        self._thread = threading.Thread(target=self._run, name="notch-head",
+        self._thread = threading.Thread(target=self._run, name="cuvyro-head",
                                         daemon=True)
         self._thread.start()
         return True
@@ -1430,7 +1430,7 @@ class CameraHeadSource:
         last_frame = started_at
         watch_stop = threading.Event()
         watcher = threading.Thread(target=self._watch_stall, args=(watch_stop,),
-                                   name="notch-head-watch", daemon=True)
+                                   name="cuvyro-head-watch", daemon=True)
         watcher.start()
         interval = 1.0 / max(1.0, float(self.fps))
 

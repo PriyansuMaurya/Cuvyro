@@ -18,7 +18,7 @@
     <Resource Language="en-us" />
   </Resources>
   <Applications>
-    <Application Id="Cuvyro" Executable="Notch.exe"
+    <Application Id="Cuvyro" Executable="Cuvyro.exe"
                  uap10:RuntimeBehavior="packagedClassicApp" uap10:TrustLevel="mediumIL">
       <uap:VisualElements DisplayName="Cuvyro" Description="Offline Windows teleprompter with voice following and manual scrolling."
                           Square150x150Logo="StoreAssets\Square150x150Logo.png"

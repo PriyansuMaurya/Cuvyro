@@ -36,7 +36,7 @@ import re
 import time
 from typing import List, Optional, Sequence
 
-from notch.storage.store import (LEGACY_SCHEMA, copy_atomic, migrate_payload,
+from cuvyro.storage.store import (LEGACY_SCHEMA, copy_atomic, migrate_payload,
                                  read_json, rolling_backup, version_of,
                                  write_json_atomic)
 

@@ -23,7 +23,7 @@ Run:
     .venv/Scripts/python.exe tests/bench_speech_engines.py --engine sherpa20m
     .venv/Scripts/python.exe tests/bench_speech_engines.py --vad-only
 
-The fixture audio is written to %TEMP%\\notch-bench by default.
+The fixture audio is written to %TEMP%\\cuvyro-bench by default.
 """
 
 import argparse
@@ -579,7 +579,7 @@ def main() -> int:
                         help="vosk | sherpa20m | sherpa2023 | all (comma separated)")
     parser.add_argument("--model-root", default=DEFAULT_MODEL_ROOT)
     parser.add_argument("--fixture-dir",
-                        default=os.path.join(tempfile.gettempdir(), "notch-bench"))
+                        default=os.path.join(tempfile.gettempdir(), "cuvyro-bench"))
     parser.add_argument("--voices", default="all",
                         help="comma separated fixture voice ids, or all")
     parser.add_argument("--limit", type=int, default=0,

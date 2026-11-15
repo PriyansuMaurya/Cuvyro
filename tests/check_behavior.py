@@ -51,19 +51,19 @@ def wheel(widget, notches):
 
 
 def main():
-    # The first-run guide is modal. A machine that has never run Notch (a
+    # The first-run guide is modal. A machine that has never run Cuvyro (a
     # runner, a new laptop) would block on it instead of starting, so the
     # check states the machine it describes. check_note_clearing, the
     # robustness check and the upgrade check do the same.
     from PyQt5.QtCore import QSettings
-    QSettings("Notch", "Notch").setValue("guide_seen", True)
+    QSettings("Cuvyro", "Cuvyro").setValue("guide_seen", True)
     app = QApplication(sys.argv)
-    from notch.ui import overlay as ui_overlay
-    from notch.ui.notes import NoteWindow
-    from notch.storage.store import Store
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.ui.notes import NoteWindow
+    from cuvyro.storage.store import Store
 
-    tmp = tempfile.mkdtemp(prefix="notch-check-")
-    win = ui_overlay.NotchOverlay()
+    tmp = tempfile.mkdtemp(prefix="cuvyro-check-")
+    win = ui_overlay.CuvyroOverlay()
     win._store = Store(tmp)
     win._voice_mode = False  # keep the microphone out of an automated run
     win.show()
@@ -79,8 +79,8 @@ def main():
     # ── Appearance changes are one dissolve ──────────────────────────
     # The machine's own accessibility setting must not decide whether the
     # dissolve can be observed; the reduced path is covered in check_motion.
-    os.environ["NOTCH_REDUCED_MOTION"] = "0"
-    from notch.ui import themefade
+    os.environ["CUVYRO_REDUCED_MOTION"] = "0"
+    from cuvyro.ui import themefade
 
     was_dark = win._dark_theme
     check("choosing the current appearance is a no-op",
@@ -100,7 +100,7 @@ def main():
     win._set_dark_theme(was_dark)
     if getattr(win, "_theme_fade", None) is not None:
         win._theme_fade.finish()
-    del os.environ["NOTCH_REDUCED_MOTION"]
+    del os.environ["CUVYRO_REDUCED_MOTION"]
 
     bar = win._text_edit.verticalScrollBar()
     check("long script overflows the viewport", bar.maximum() > 0, f"max={bar.maximum()}")
@@ -250,7 +250,7 @@ def main():
     saved = Store(tmp).load()
     check("edited script is written to the state file", saved["script"] == edited)
 
-    win2 = ui_overlay.NotchOverlay()
+    win2 = ui_overlay.CuvyroOverlay()
     win2._store = Store(tmp)
     win2._voice_mode = False
     win2.show()

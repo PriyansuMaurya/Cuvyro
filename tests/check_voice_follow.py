@@ -164,20 +164,20 @@ def share_ok(win, above, visible, slack):
 
 
 def main():
-    # The first-run guide is modal. A machine that has never run Notch (a
+    # The first-run guide is modal. A machine that has never run Cuvyro (a
     # runner, a new laptop) would block on it instead of starting, so the
     # check states the machine it describes. check_note_clearing, the
     # robustness check and the upgrade check do the same.
     from PyQt5.QtCore import QSettings
-    QSettings("Notch", "Notch").setValue("guide_seen", True)
+    QSettings("Cuvyro", "Cuvyro").setValue("guide_seen", True)
     app = QApplication(sys.argv)
-    from notch.ui import overlay as ui_overlay
-    from notch.audio.worker import AudioWorker
-    from notch.audio.matching import MatchingEngine
-    from notch.storage.store import Store
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.audio.worker import AudioWorker
+    from cuvyro.audio.matching import MatchingEngine
+    from cuvyro.storage.store import Store
 
-    tmp = tempfile.mkdtemp(prefix="notch-voice-check-")
-    win = ui_overlay.NotchOverlay()
+    tmp = tempfile.mkdtemp(prefix="cuvyro-voice-check-")
+    win = ui_overlay.CuvyroOverlay()
     win._store = Store(tmp)
     win._voice_mode = False  # keep the microphone out of an automated run
     win.show()

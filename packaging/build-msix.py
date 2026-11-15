@@ -48,7 +48,7 @@ def find_makeappx():
 
 def write_store_assets(directory):
     directory.mkdir()
-    with Image.open(HERE / "notch.ico") as image:
+    with Image.open(HERE / "cuvyro.ico") as image:
         icon = image.convert("RGBA")
         for name, size in LOGOS.items():
             icon.resize((size, size), Image.Resampling.LANCZOS).save(directory / f"{name}.png")
@@ -59,8 +59,8 @@ def main():
     parser.add_argument("version", type=store_version)
     args = parser.parse_args()
     dist = ROOT / "dist"
-    frozen = dist / "Notch"
-    if not (frozen / "Notch.exe").is_file() or not (frozen / "_internal").is_dir():
+    frozen = dist / "Cuvyro"
+    if not (frozen / "Cuvyro.exe").is_file() or not (frozen / "_internal").is_dir():
         parser.error("Create the x64 frozen tree with build-installer.bat <version> --freeze-only.")
     models = frozen / "model"
     for relative in ("sherpa/tokens.txt", "silero_vad.onnx", "face_landmarker.task"):
@@ -77,10 +77,10 @@ def main():
         work = Path(directory)
         stage = work / "package"
         # The app leaves support logs beside its executable, and a local build
-        # that was run once keeps a notch_log.txt there whose first line is the
+        # that was run once keeps a cuvyro_log.txt there whose first line is the
         # install path. None of that belongs in a package the Store serves.
         shutil.copytree(
-            frozen, stage, ignore=shutil.ignore_patterns("notch*.log*", "notch*.txt")
+            frozen, stage, ignore=shutil.ignore_patterns("cuvyro*.log*", "cuvyro*.txt")
         )
         # Vosk is only the fallback engine and sherpa was verified above, so its
         # four model folders would add ~140 MB to every download for nothing.

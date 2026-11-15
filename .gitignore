@@ -18,7 +18,7 @@ build/
 dist/
 *.spec
 # ...except the hand-written PyInstaller spec, which is build config rather than output
-!packaging/notch.spec
+!packaging/cuvyro.spec
 
 # IDE and OS clutter
 .vscode/
@@ -41,10 +41,10 @@ rea-work/app-js/dist/
 # Soak reports are archived under docs/release/, not left at the repo root
 soak-result.json
 
-# Recorded sessions and logs (start-notch.bat writes notch-run.log)
+# Recorded sessions and logs (start-cuvyro.bat writes cuvyro-run.log)
 .sessions/
 *.log
-notch-run*.err
+cuvyro-run*.err
 head-runtime.log
 
 # One-shot patch scripts and scratch captures

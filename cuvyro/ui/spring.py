@@ -34,7 +34,7 @@ def _env_bool(name: str) -> bool | None:
 
 def system_allows_motion() -> bool:
     """False when the user asked Windows to reduce animation."""
-    override = _env_bool("NOTCH_REDUCED_MOTION")
+    override = _env_bool("CUVYRO_REDUCED_MOTION")
     if override is not None:
         return override
     try:
@@ -55,7 +55,7 @@ def system_allows_transparency() -> bool:
     Windows keeps this in the personalisation key rather than exposing an
     SPI for it.
     """
-    override = _env_bool("NOTCH_REDUCED_TRANSPARENCY")
+    override = _env_bool("CUVYRO_REDUCED_TRANSPARENCY")
     if override is not None:
         return override
     try:

@@ -66,7 +66,7 @@ def hex_rgb(colour):
 
 
 def make_predictor(directory):
-    from notch.audio.predict import PredictiveHighlighter, ProfileStore
+    from cuvyro.audio.predict import PredictiveHighlighter, ProfileStore
     return PredictiveHighlighter(ProfileStore(directory))
 
 
@@ -120,16 +120,16 @@ def chroma(rgb):
 
 
 def main():
-    # The first-run guide is modal. A machine that has never run Notch (a
+    # The first-run guide is modal. A machine that has never run Cuvyro (a
     # runner, a new laptop) would block on it instead of starting, so the
     # check states the machine it describes. check_note_clearing, the
     # robustness check and the upgrade check do the same.
     from PyQt5.QtCore import QSettings
-    QSettings("Notch", "Notch").setValue("guide_seen", True)
+    QSettings("Cuvyro", "Cuvyro").setValue("guide_seen", True)
     app = QApplication(sys.argv)
-    from notch.ui import overlay as ui_overlay
-    from notch.storage.store import Store
-    from notch.audio.predict import (DEFAULT_WEIGHTS, MAX_LEAD_WORDS, MIN_WPS,
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.storage.store import Store
+    from cuvyro.audio.predict import (DEFAULT_WEIGHTS, MAX_LEAD_WORDS, MIN_WPS,
                                      MAX_WPS, PredictiveHighlighter,
                                      ProfileStore)
 
@@ -137,7 +137,7 @@ def main():
     words = script.split()
 
     # ── A session is required before anything is learned or saved ────────
-    tmp = tempfile.mkdtemp(prefix="notch-predict-profile-")
+    tmp = tempfile.mkdtemp(prefix="cuvyro-predict-profile-")
     silent = make_predictor(tmp)
     silent.set_script(words)
     silent.observe(4, 2.0, False)
@@ -146,7 +146,7 @@ def main():
           f"words={silent.profile.words}")
 
     # ── Adaptive rate ───────────────────────────────────────────────────
-    directory = tempfile.mkdtemp(prefix="notch-predict-rate-")
+    directory = tempfile.mkdtemp(prefix="cuvyro-predict-rate-")
     predictor = make_predictor(directory)
     predictor.set_script(words)
     clock = 0.0
@@ -199,7 +199,7 @@ def main():
           f"lead={released}")
 
     # ── Repeated partials do not flicker ────────────────────────────────
-    fl = make_predictor(tempfile.mkdtemp(prefix="notch-predict-flicker-"))
+    fl = make_predictor(tempfile.mkdtemp(prefix="cuvyro-predict-flicker-"))
     fl.set_script(words)
     now = 0.0
     fl.speech_started(now)
@@ -230,7 +230,7 @@ def main():
           before == after, f"{before} -> {after}")
 
     # ── Skipped clause and backward jump stay safe ──────────────────────
-    jump = make_predictor(tempfile.mkdtemp(prefix="notch-predict-jump-"))
+    jump = make_predictor(tempfile.mkdtemp(prefix="cuvyro-predict-jump-"))
     jump.set_script(words)
     jump.speech_started(0.0)
     jump.observe(5, 2.0, True)
@@ -272,7 +272,7 @@ def main():
           f"{reloaded.rate_wps:.2f} words/s, last session {learned_rate:.2f}")
 
     # A corrupt profile must not take the reader down.
-    corrupt = tempfile.mkdtemp(prefix="notch-predict-corrupt-")
+    corrupt = tempfile.mkdtemp(prefix="cuvyro-predict-corrupt-")
     with open(os.path.join(corrupt, "speaking-profile.json"), "w",
               encoding="utf-8") as handle:
         handle.write('{"schema": 1, "wps": "fast", "timing_weights": [1]}')
@@ -291,8 +291,8 @@ def main():
           f"weights={odd.profile.timing_weights}")
 
     # ── Overlay integration ─────────────────────────────────────────────
-    ui_tmp = tempfile.mkdtemp(prefix="notch-predict-ui-")
-    win = ui_overlay.NotchOverlay()
+    ui_tmp = tempfile.mkdtemp(prefix="cuvyro-predict-ui-")
+    win = ui_overlay.CuvyroOverlay()
     win._store = Store(ui_tmp)
     win._predictor = PredictiveHighlighter(ProfileStore(ui_tmp))
     win._voice_mode = False

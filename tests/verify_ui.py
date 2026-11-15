@@ -73,7 +73,7 @@ def main():
         return
 
     app = QApplication(sys.argv)
-    from notch.ui import overlay as ui_overlay
+    from cuvyro.ui import overlay as ui_overlay
 
     # --prefix NAME names the captures; --theme light flips the palette.
     prefix = "after"
@@ -81,11 +81,11 @@ def main():
         prefix = sys.argv[sys.argv.index("--prefix") + 1]
     light = "--theme" in sys.argv and sys.argv[sys.argv.index("--theme") + 1] == "light"
 
-    win = ui_overlay.NotchOverlay()
+    win = ui_overlay.CuvyroOverlay()
     # A capture run must not write into the app's own saved state: the note it
     # opens used to come back as an extra note window on the next launch.
-    from notch.storage.store import Store
-    win._store = Store(tempfile.mkdtemp(prefix="notch-verify-"))
+    from cuvyro.storage.store import Store
+    win._store = Store(tempfile.mkdtemp(prefix="cuvyro-verify-"))
     if light:
         win._dark_theme = False
         win._apply_read_mode_style()
@@ -146,11 +146,11 @@ def main():
 def check_protection():
     """Assert the windows really do carry capture exclusion when shown."""
     app = QApplication([])
-    from notch.ui import overlay as ui_overlay
+    from cuvyro.ui import overlay as ui_overlay
 
-    win = ui_overlay.NotchOverlay()
-    from notch.storage.store import Store
-    win._store = Store(tempfile.mkdtemp(prefix="notch-protection-"))
+    win = ui_overlay.CuvyroOverlay()
+    from cuvyro.storage.store import Store
+    win._store = Store(tempfile.mkdtemp(prefix="cuvyro-protection-"))
     win.show()
     note = win._open_note()
     win._load_script_from_file(FIXTURE)

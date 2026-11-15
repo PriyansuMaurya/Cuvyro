@@ -33,10 +33,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 
-from notch.storage.store import (LEGACY_SCHEMA, MIGRATIONS, SCHEMA,
-                                 default_directory, migrate_payload,
-                                 normalize_state, read_json, version_of)
-from notch.audio.predict import (PROFILE_MIGRATIONS, SCHEMA as PROFILE_SCHEMA,
+from cuvyro.storage.store import (LEGACY_SCHEMA, MIGRATIONS, SCHEMA,
+                                 default_directory, legacy_directory,
+                                 migrate_payload, normalize_state, read_json,
+                                 version_of)
+from cuvyro.audio.predict import (PROFILE_MIGRATIONS, SCHEMA as PROFILE_SCHEMA,
                                  SpeakerProfile)
 
 STATE_STEM = "state.json"
@@ -245,12 +246,19 @@ def main(argv=None):
         description="Report the reader's stored data without changing it.")
     parser.add_argument("--dir", dest="directory", default=None,
                         help="data folder to inspect "
-                             "(default: %APPDATA%\\NotchFree)")
+                             "(default: %APPDATA%\\Cuvyro)")
     args = parser.parse_args(argv)
+    # Never let the report trigger the rename migration: it promises not to
+    # create or change anything, and the next launch does the copy itself.
     directory = os.path.abspath(os.path.expanduser(
-        args.directory or default_directory()))
+        args.directory or default_directory(migrate=False)))
 
     print(f"Storage health - {directory}")
+    if not args.directory and not os.path.isdir(directory):
+        legacy = legacy_directory()
+        if os.path.isdir(legacy):
+            say("INFO", f"the pre-rename folder {legacy} is pending "
+                        "migration; the next launch copies it here")
     if not os.path.isdir(directory):
         print("\n  The folder does not exist yet; a first launch will create it.")
         print("\nNo stored data to check. Nothing was changed.")

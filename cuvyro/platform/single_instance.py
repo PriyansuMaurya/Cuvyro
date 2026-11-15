@@ -1,6 +1,6 @@
 """One reader per desktop.
 
-Notch keeps a single state file, a single set of registered global chords and
+Cuvyro keeps a single state file, a single set of registered global chords and
 a single camera. None of those are shared safely between two processes: a
 second launch would register the same chords (Windows refuses them with error
 1409), open the same camera, and save over the first window's script with
@@ -18,7 +18,7 @@ replace files underneath a running copy.
 import ctypes
 import sys
 
-APP_MUTEX = "Local\\NotchReaderSingleton"
+APP_MUTEX = "Local\\CuvyroReaderSingleton"
 _ERROR_ALREADY_EXISTS = 183
 
 _handle = None

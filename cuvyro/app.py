@@ -1,8 +1,8 @@
 """
-notch.app — Entry point for the Notch teleprompter.
+cuvyro.app — Entry point for the Cuvyro teleprompter.
 
   ┌─────────────────────────────────────────────────────────────┐
-  │  NOTCH  —  Local, offline teleprompter for your webcam.     │
+  │  CUVYRO  —  Local, offline teleprompter for your webcam.    │
   │  Reads your voice, scrolls your script.  No cloud. Ever.   │
   └─────────────────────────────────────────────────────────────┘
 
@@ -18,7 +18,7 @@ Right-click the card for mode, typeface, theme, Help, Setup and Quit.
 
 import sys
 
-from notch.diagnostics import install, heartbeat
+from cuvyro.diagnostics import install, heartbeat
 
 install()
 
@@ -26,17 +26,17 @@ from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt, QTimer
 
-from notch.platform import single_instance
+from cuvyro.platform import single_instance
 
 
 def main():
-    print("[Notch] Starting...", flush=True)
+    print("[Cuvyro] Starting...", flush=True)
     # ── High-DPI scaling (Windows 10/11) ─────────────────────────────
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Notch")
+    app.setApplicationName("Cuvyro")
     app.setStyle("Fusion")
     heartbeat_timer = QTimer(app)
     heartbeat_timer.timeout.connect(heartbeat)
@@ -46,8 +46,8 @@ def main():
     # global chords and the camera with the first, and the last save wins.
     if not single_instance.acquire():
         QMessageBox.information(
-            None, "Notch",
-            "Notch is already running.\n\n"
+            None, "Cuvyro",
+            "Cuvyro is already running.\n\n"
             "Use the copy that is already open, or quit it from its menu "
             "before starting another.")
         return 0
@@ -58,13 +58,13 @@ def main():
     app.setFont(font)
 
     # ── Launch the overlay ───────────────────────────────────────────
-    from notch.ui.overlay import NotchOverlay
+    from cuvyro.ui.overlay import CuvyroOverlay
 
-    print("[Notch] Creating overlay...", flush=True)
-    overlay = NotchOverlay()
-    print("[Notch] Overlay created, showing...", flush=True)
+    print("[Cuvyro] Creating overlay...", flush=True)
+    overlay = CuvyroOverlay()
+    print("[Cuvyro] Overlay created, showing...", flush=True)
     overlay.show()
-    print("[Notch] Running (load a script and speak in Notch mode)", flush=True)
+    print("[Cuvyro] Running (load a script and speak in Cuvyro mode)", flush=True)
 
     sys.exit(app.exec_())
 

@@ -1,4 +1,4 @@
-"""Keep Notch's windows out of screen capture.
+"""Keep Cuvyro's windows out of screen capture.
 
 Every surface the app shows should carry the same policy: the reader, the
 notes, the menu, and the dialogs. A privacy promise that only covers some of

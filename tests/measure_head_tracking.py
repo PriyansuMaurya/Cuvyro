@@ -31,7 +31,7 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)
 
-from notch.tracking import head as ht
+from cuvyro.tracking import head as ht
 
 # The guided walk uses the same ten poses the deterministic check uses, but a
 # person is asked for the intent rather than a number: lean and turn toward

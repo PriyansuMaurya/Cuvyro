@@ -43,7 +43,7 @@ sys.path.insert(0, HERE)
 os.chdir(REPO_ROOT)
 
 MODEL_DIR = os.path.join(REPO_ROOT, "model")
-FIXTURE_DIR = os.path.join(tempfile.gettempdir(), "notch-bench")
+FIXTURE_DIR = os.path.join(tempfile.gettempdir(), "cuvyro-bench")
 SENTENCE = "Second, why the harbour plan changed."
 BLOCK = 1600  # 100 ms at 16 kHz, the worker's block size
 
@@ -93,9 +93,9 @@ def words(text: str) -> list:
 def main() -> int:
     app = QApplication(sys.argv)  # noqa: F841 — the worker is a QThread
 
-    from notch.audio import speech as speech_engine
-    from notch.audio.worker import AudioWorker
-    from notch.audio.matching import MatchingEngine
+    from cuvyro.audio import speech as speech_engine
+    from cuvyro.audio.worker import AudioWorker
+    from cuvyro.audio.matching import MatchingEngine
 
     if speech_engine.find_sherpa_model_dir(MODEL_DIR) is None and not os.path.isdir(
             os.path.join(MODEL_DIR, "conf")):

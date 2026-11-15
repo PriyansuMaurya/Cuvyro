@@ -1,12 +1,12 @@
 """
-notch.audio.worker — Microphone audio worker running on a QThread.
+cuvyro.audio.worker — Microphone audio worker running on a QThread.
 
 Reads raw PCM from the microphone via sounddevice and emits volume levels
 for voice-activity-driven scrolling. Optionally uses local speech recognition
 for word alignment; volume detection always works independently.
 
 The recogniser and the voice-activity detector both come from
-``notch.audio.speech``, which decodes on this machine only. A Silero VAD segments
+``cuvyro.audio.speech``, which decodes on this machine only. A Silero VAD segments
 utterances, so an utterance is closed when the speaker actually stops and
 silence never reaches the recogniser.
 """
@@ -25,15 +25,15 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 
 # Every partial result used to be printed, which meant the reader's own speech
-# was written to stdout (and, under start-notch.bat, appended to a growing log)
+# was written to stdout (and, under start-cuvyro.bat, appended to a growing log)
 # at recogniser cadence. The transcript is the reader's words, not diagnostics,
 # so it is only emitted when someone asks for it explicitly.
-_TRACE_TRANSCRIPT = os.environ.get("NOTCH_TRACE_TRANSCRIPT") == "1"
+_TRACE_TRANSCRIPT = os.environ.get("CUVYRO_TRACE_TRANSCRIPT") == "1"
 
 
 def _trace_transcript(kind: str, text: str) -> None:
     if _TRACE_TRANSCRIPT:
-        print(f"[Notch audio] ({kind}): {text!r}", flush=True)
+        print(f"[Cuvyro audio] ({kind}): {text!r}", flush=True)
 
 
 class AudioWorker(QThread):
@@ -72,7 +72,7 @@ class AudioWorker(QThread):
 
         But the data is sometimes in a subfolder. If we detect that,
         we automatically use the inner folder. A sherpa-onnx model is found
-        by notch.audio.speech wherever it sits under the same root.
+        by cuvyro.audio.speech wherever it sits under the same root.
         """
         try:
             if not model_path:
@@ -101,16 +101,16 @@ class AudioWorker(QThread):
     def _log_frozen_error(message: str):
         """
         In the windowed PyInstaller build, stdout isn't visible.
-        Write key failures to notch.log in the exe install directory for debugging.
+        Write key failures to cuvyro.log in the exe install directory for debugging.
         """
         try:
             if getattr(sys, "frozen", False):
                 log_dir = os.path.dirname(sys.executable)
             else:
                 log_dir = os.getenv("LOCALAPPDATA") or os.path.expanduser("~")
-                log_dir = os.path.join(log_dir, "Notch")
+                log_dir = os.path.join(log_dir, "Cuvyro")
             os.makedirs(log_dir, exist_ok=True)
-            log_path = os.path.join(log_dir, "notch.log")
+            log_path = os.path.join(log_dir, "cuvyro.log")
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(message.rstrip() + "\n")
         except Exception:
@@ -141,8 +141,8 @@ class AudioWorker(QThread):
 
         # Recognition state (assigned in run so a load failure leaves the
         # volume meter working on its own).
-        self._engine = None          # notch.audio.speech.StreamRecognizer
-        self._vad = None             # notch.audio.speech.SpeechDetector
+        self._engine = None          # cuvyro.audio.speech.StreamRecognizer
+        self._vad = None             # cuvyro.audio.speech.SpeechDetector
         self._last_partial = ""
         self._onset_blocks = max(
             1, int(round(self.ONSET_SECONDS / self._block_seconds)))
@@ -310,14 +310,14 @@ class AudioWorker(QThread):
     # ── Main thread loop ─────────────────────────────────────────────
     def run(self):
         self._running = True
-        print("[Notch] Audio worker thread started", flush=True)
+        print("[Cuvyro] Audio worker thread started", flush=True)
         if getattr(sys, "frozen", False):
-            self._log_frozen_error("[Notch] Audio worker started")
+            self._log_frozen_error("[Cuvyro] Audio worker started")
 
         # Open microphone stream
         try:
             dev = "default" if self.device_index is None else f"device #{self.device_index}"
-            print(f"[Notch] Opening microphone ({dev})...", flush=True)
+            print(f"[Cuvyro] Opening microphone ({dev})...", flush=True)
             stream = sd.RawInputStream(
                 samplerate=self.SAMPLE_RATE,
                 blocksize=self.BLOCK_SAMPLES,  # 100 ms chunks
@@ -327,18 +327,18 @@ class AudioWorker(QThread):
                 callback=self._audio_callback,
             )
             stream.start()
-            print("[Notch] Microphone opened — listening", flush=True)
+            print("[Cuvyro] Microphone opened — listening", flush=True)
             self.status_signal.emit("Listening...")
         except Exception as exc:
-            print(f"[Notch] Microphone error: {exc}", flush=True)
+            print(f"[Cuvyro] Microphone error: {exc}", flush=True)
             self.error_signal.emit(f"Microphone error:\n{exc}")
             return
 
         # Optional speech recogniser (use instance attrs so we can reset on
-        # unmute). notch.audio.speech picks sherpa-onnx when its model is present
+        # unmute). cuvyro.audio.speech picks sherpa-onnx when its model is present
         # and falls back to Vosk for an existing model folder.
         try:
-            from notch.audio.speech import create_recognizer, create_vad
+            from cuvyro.audio.speech import create_recognizer, create_vad
 
             model_dir = self._resolve_model_dir(self.model_path)
             # The model load costs seconds on a cold start; say so instead of
@@ -347,12 +347,12 @@ class AudioWorker(QThread):
             self._engine = create_recognizer(model_dir)
             if self._engine is not None:
                 self._vad = create_vad(model_dir)
-                print("[Notch] Speech recognition on "
+                print("[Cuvyro] Speech recognition on "
                       f"({self._engine.name})", flush=True)
                 if getattr(sys, "frozen", False):
                     self._log_frozen_error(f"Speech data loaded from: {model_dir}")
             else:
-                print("[Notch] Speech recognition off (data folder not found)", flush=True)
+                print("[Cuvyro] Speech recognition off (data folder not found)", flush=True)
                 if getattr(sys, "frozen", False):
                     self._log_frozen_error(f"Speech data NOT found at: {model_dir}")
                 self.status_signal.emit("Speech recognition unavailable — voice match off")
@@ -363,7 +363,7 @@ class AudioWorker(QThread):
                     "If you installed via the installer, reinstall and ensure the full package was used."
                 )
         except Exception as e:
-            print(f"[Notch] Speech recognition load failed: {e}", flush=True)
+            print(f"[Cuvyro] Speech recognition load failed: {e}", flush=True)
             traceback.print_exc()
             try:
                 self._log_frozen_error("Speech load failed:\n" + "".join(traceback.format_exc()))
@@ -401,7 +401,7 @@ class AudioWorker(QThread):
             stream.stop()
             stream.close()
             try:
-                from notch.audio.speech import release_recognizer
+                from cuvyro.audio.speech import release_recognizer
                 release_recognizer(self._engine)
             except Exception:
                 pass

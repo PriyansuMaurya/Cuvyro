@@ -1,5 +1,5 @@
 """
-notch.ui.settings — Microphone and audio configuration dialog.
+cuvyro.ui.settings — Microphone and audio configuration dialog.
 
 Provides:
   • Dropdown of available input devices (via sounddevice).
@@ -20,12 +20,12 @@ from PyQt5.QtWidgets import (
     QSlider, QProgressBar, QPushButton, QGroupBox, QMessageBox,
 )
 
-from notch.ui import motion
+from cuvyro.ui import motion
 
 
-from notch.platform import hotkeys as hk
-from notch.platform.capture import exclude_from_capture
-from notch.ui import tooltips
+from cuvyro.platform import hotkeys as hk
+from cuvyro.platform.capture import exclude_from_capture
+from cuvyro.ui import tooltips
 
 class SettingsDialog(QDialog):
     """Modal dialog for microphone and audio settings."""
@@ -47,8 +47,8 @@ class SettingsDialog(QDialog):
                  hotkey_toggle: str = hk.DEFAULT_CHORDS["toggle"],
                  hotkey_status: Optional[dict] = None):
         super().__init__(parent)
-        self.setWindowTitle("Notch Settings")
-        self.setAccessibleName("Notch settings")
+        self.setWindowTitle("Cuvyro Settings")
+        self.setAccessibleName("Cuvyro settings")
         self._dark = dark
         self.setMinimumSize(320, 200)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
@@ -230,7 +230,7 @@ class SettingsDialog(QDialog):
         keys_layout.setSpacing(6)
 
         self._hotkeys_check = QCheckBox(
-            "Control Notch while another app has focus")
+            "Control Cuvyro while another app has focus")
         self._hotkeys_check.setAccessibleName("Global keys")
         self._hotkeys_check.setChecked(self._hotkeys_enabled)
         self._hotkeys_check.setEnabled(hk.available())
@@ -445,9 +445,9 @@ class SettingsDialog(QDialog):
         if not hk.available():
             return "System-wide keys are only available on Windows."
         if not self._hotkeys_enabled:
-            return "Off. Space and the arrow keys work while Notch has focus."
+            return "Off. Space and the arrow keys work while Cuvyro has focus."
         if self._hotkey_status.get("toggle"):
-            return "Registered. These keys work even when Notch is not focused."
+            return "Registered. These keys work even when Cuvyro is not focused."
         if not self._hotkey_status:
             return "Applies in Manual mode."
         return ("Could not register; another application may be using the "
@@ -500,7 +500,7 @@ class SettingsDialog(QDialog):
         super().showEvent(event)
         parent = self.parent()
         if parent and parent.isVisible():
-            # Position centered below Notch overlay (no slide, fade-in only)
+            # Position centered below Cuvyro overlay (no slide, fade-in only)
             gap = 8
             parent_top_left = parent.mapToGlobal(parent.rect().topLeft())
             parent_w = parent.width()

@@ -1,7 +1,7 @@
-"""Run Notch locally from a source checkout.
+"""Run Cuvyro locally from a source checkout.
 
     python run.py
-    python -m notch
+    python -m cuvyro
 
 This is a development convenience: it installs the requirements on first use
 when PyQt5 or sounddevice is missing, then starts the packaged entry point.
@@ -24,10 +24,10 @@ def main():
     except ImportError:
         print("Installing dependencies (first run)...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
-        print("Done. Starting Notch...")
+        print("Done. Starting Cuvyro...")
 
-    from notch.app import main as notch_main
-    notch_main()
+    from cuvyro.app import main as cuvyro_main
+    cuvyro_main()
 
 
 if __name__ == "__main__":

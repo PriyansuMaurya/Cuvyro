@@ -28,26 +28,26 @@ from PyQt5.QtWidgets import (
     QStackedWidget, QButtonGroup,
 )
 
-from notch import paths
-from notch.audio.matching import MatchingEngine
-from notch.audio.predict import (
+from cuvyro import paths
+from cuvyro.audio.matching import MatchingEngine
+from cuvyro.audio.predict import (
     PredictiveHighlighter, ProfileStore as PredictionProfileStore,
 )
-from notch.audio.worker import AudioWorker
-from notch.platform import hotkeys as hk
-from notch.platform.capture import exclude_from_capture
-from notch.storage.store import Store, sane_coord, sane_number
-from notch.tracking import head as ht
-from notch.ui.controls import (
+from cuvyro.audio.worker import AudioWorker
+from cuvyro.platform import hotkeys as hk
+from cuvyro.platform.capture import exclude_from_capture
+from cuvyro.storage.store import Store, sane_coord, sane_number
+from cuvyro.tracking import head as ht
+from cuvyro.ui.controls import (
     CompactButton, GlyphButton, MenuRowNav, MicButton, MinimizeButton,
     NoteButton, RoundedMenu, ScriptTextEdit, TextButton,
 )
-from notch.ui.note_placement import choose_position
-from notch.ui.notes import NoteWindow
-from notch.ui.settings import SettingsDialog
-from notch.ui import motion, theme, themefade
-from notch.ui.spring import Spring, SpringGroup, system_allows_motion
-from notch.ui import tooltips
+from cuvyro.ui.note_placement import choose_position
+from cuvyro.ui.notes import NoteWindow
+from cuvyro.ui.settings import SettingsDialog
+from cuvyro.ui import motion, theme, themefade
+from cuvyro.ui.spring import Spring, SpringGroup, system_allows_motion
+from cuvyro.ui import tooltips
 
 
 class _RenderedLine(NamedTuple):
@@ -58,17 +58,17 @@ class _RenderedLine(NamedTuple):
     top: float
     height: float
 
-# Measurement aid, not a feature: NOTCH_HEAD_TRACE=1 prints the tracker's raw
+# Measurement aid, not a feature: CUVYRO_HEAD_TRACE=1 prints the tracker's raw
 # reading and the offsets it produced five times a second, so a head turn can be
 # watched as numbers instead of guessed at from a six-pixel card edge. Nothing
 # is printed unless the variable is set.
-_HEAD_TRACE = os.environ.get("NOTCH_HEAD_TRACE", "") not in ("", "0")
+_HEAD_TRACE = os.environ.get("CUVYRO_HEAD_TRACE", "") not in ("", "0")
 # The same kind of aid for the installed build: the reader hides itself from
 # screen capture on purpose, so its pixels cannot be sampled from outside.
-# NOTCH_MANUAL_TRACE=1 appends one line per Manual start and pause, with the
-# scroll offset reached, to notch.log beside the executable. Nothing is
+# CUVYRO_MANUAL_TRACE=1 appends one line per Manual start and pause, with the
+# scroll offset reached, to cuvyro.log beside the executable. Nothing is
 # written unless the variable is set.
-_MANUAL_TRACE = os.environ.get("NOTCH_MANUAL_TRACE", "") not in ("", "0")
+_MANUAL_TRACE = os.environ.get("CUVYRO_MANUAL_TRACE", "") not in ("", "0")
 
 
 def grid_card_rect(area: QRect, size: QSize, u: float, v: float) -> QRect:
@@ -106,8 +106,8 @@ class HelpDialog(QDialog):
 
     def __init__(self, parent=None, dark: bool = True):
         super().__init__(parent)
-        self.setWindowTitle("Notch Help")
-        self.setAccessibleName("Notch help")
+        self.setWindowTitle("Cuvyro Help")
+        self.setAccessibleName("Cuvyro help")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setFixedSize(360, 310)
@@ -229,7 +229,7 @@ class HelpDialog(QDialog):
         body_layout.setSpacing(8)
 
         body_layout.addWidget(_make_label(
-            "<p style='margin:4px 0'>Notch is a smart, invisible to screensharing teleprompter that stays on top of your screen.</p>"
+            "<p style='margin:4px 0'>Cuvyro is a smart, invisible to screensharing teleprompter that stays on top of your screen.</p>"
             "<p style='margin:6px 0 2px 0'><b>Main features:</b></p>"
             "<ul style='margin:0; padding-left:16px;'>"
             "<li><b>Invisible to screenshare</b> — Not shown in screen recordings or video calls</li>"
@@ -242,7 +242,7 @@ class HelpDialog(QDialog):
         body_layout.addWidget(_make_label(
             "<p style='margin:6px 0 2px 0'><b>Get started:</b></p>"
             "<ul style='margin:0; padding-left:16px;'>"
-            "<li><b>Load a script</b> — Double-click Notch to edit, drag a .txt file, or use <i>Load Script</i>.</li>"
+            "<li><b>Load a script</b> — Double-click Cuvyro to edit, drag a .txt file, or use <i>Load Script</i>.</li>"
             "<li><b>Voice</b> — the script follows your speech. Switch modes in the right-click menu.</li>"
             "<li><b>Manual</b> — press <b>Space</b> to start or pause timed scroll; <b>Arrow keys</b> adjust speed. Turn on <b>Global keys</b> in the menu to control it while another app is focused.</li>"
             "<li><b>Right-click</b> the card for mode, font, theme, Help, Setup and Quit.</li>"
@@ -251,12 +251,12 @@ class HelpDialog(QDialog):
         ))
         body_layout.addWidget(_make_line())
         body_layout.addWidget(_make_label(
-            "<p style='margin:6px 0 2px 0'><b>Voice commands</b> (Notch mode):</p>"
+            "<p style='margin:6px 0 2px 0'><b>Voice commands</b> (Cuvyro mode):</p>"
             "<ul style='margin:0; padding-left:16px;'>"
-            "<li><i>\"Notch Restart\"</i> — Restart from the beginning</li>"
-            "<li><i>\"Notch Expand\"</i> — Open edit mode</li>"
-            "<li><i>\"Notch Mute\"</i> — Mute/unmute the mic</li>"
-            "<li><i>\"Notch Close\"</i> — Close Notch</li>"
+            "<li><i>\"Cuvyro Restart\"</i> — Restart from the beginning</li>"
+            "<li><i>\"Cuvyro Expand\"</i> — Open edit mode</li>"
+            "<li><i>\"Cuvyro Mute\"</i> — Mute/unmute the mic</li>"
+            "<li><i>\"Cuvyro Close\"</i> — Close Cuvyro</li>"
             "</ul>"
         ))
         body_layout.addWidget(_make_line())
@@ -269,13 +269,13 @@ class HelpDialog(QDialog):
             "<li><i>Space</i> — Start or pause timed scroll (Manual)</li>"
             "<li><i>Ctrl+Shift+Space</i> — Start or pause Manual from any app (global keys)</li>"
             "<li><i>Ctrl+Alt+Left / Right</i> — Slower / faster from any app (global keys)</li>"
-            "<li><i>Esc</i> — Leave the editor or pill; closes Notch when reading</li>"
+            "<li><i>Esc</i> — Leave the editor or pill; closes Cuvyro when reading</li>"
             "</ul>"
         ))
         body_layout.addWidget(_make_line())
         credit = QLabel(
-            f'<a href="https://socia.ae/products/notch" style="color:{muted}; '
-            'font-size:9px; text-decoration:none;">Notch by Socia</a>')
+            f'<a href="https://socia.ae/products/cuvyro" style="color:{muted}; '
+            'font-size:9px; text-decoration:none;">Cuvyro by Socia</a>')
         credit.setOpenExternalLinks(True)
         credit.setTextFormat(Qt.RichText)
         credit.setStyleSheet(
@@ -482,7 +482,7 @@ class NoticeDialog(QDialog):
         self.move(x, y)
 
 
-class NotchOverlay(QWidget):
+class CuvyroOverlay(QWidget):
     """
     Minimalist 'Dynamic Island' style teleprompter.
     Pulses with voice activity.
@@ -518,7 +518,7 @@ class NotchOverlay(QWidget):
 
     # Aesthetic Constants
     CORNER_RADIUS = 24      # Pill shape (lower = less curved)
-    GLOW_COLOR = QColor(41, 98, 255)       # Blue = Notch (follows voice)
+    GLOW_COLOR = QColor(41, 98, 255)       # Blue = Cuvyro (follows voice)
     MANUAL_GLOW_COLOR = QColor(46, 204, 113)  # Green = Keys & Scroll
 
     # ── Foot waveform ────────────────────────────────────────────────
@@ -581,7 +581,7 @@ class NotchOverlay(QWidget):
     # card (AAA for body text), the current words clear 7:1 against their own
     # band, and the predicted accent is a quieter, less saturated blue so it
     # reads as a hint rather than as confirmation.
-    # The values live in ``notch/ui/theme.py`` with the rest of the palette so
+    # The values live in ``cuvyro/ui/theme.py`` with the rest of the palette so
     # a note, a tooltip and the reading line cannot drift apart; these names
     # stay because the checks read them off the window.
     CURRENT_DARK = theme.CURRENT.dark        # 12.8:1 on the dark card
@@ -606,14 +606,14 @@ class NotchOverlay(QWidget):
     def __init__(self):
         super().__init__()
         # The model sits beside the exe when frozen and at the repository
-        # root in a source checkout; notch.paths owns that rule.
+        # root in a source checkout; cuvyro.paths owns that rule.
         if getattr(sys, "frozen", False):
             self._log_install_paths()
 
         # ── State ────────────────────────────────────────────────────
         self._font_size = 10
         self._font_family = "Segoe UI"  # reference card: system sans, ~16 px
-        self._dark_theme = True  # False = light (white pill in Notch/Keys & Scroll)
+        self._dark_theme = True  # False = light (white pill in Cuvyro/Keys & Scroll)
         self._opacity = 1.0
         self._voice_mode = True
         self._voice_wpm = 60
@@ -806,8 +806,8 @@ class NotchOverlay(QWidget):
             | Qt.Tool
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setWindowTitle("Notch")
-        self.setAccessibleName("Notch teleprompter")
+        self.setWindowTitle("Cuvyro")
+        self.setAccessibleName("Cuvyro teleprompter")
         self.setAcceptDrops(True)
         self.setMinimumSize(self.MIN_W, self.MIN_H)
         self.resize(self.DEFAULT_W, self.DEFAULT_H)
@@ -852,7 +852,7 @@ class NotchOverlay(QWidget):
         
         # Start timer immediately for animation loop
         self._scroll_timer.start()
-        print("[Notch] Overlay ready (mode: Notch=voice follow, Keys & Scroll=manual)", flush=True)
+        print("[Cuvyro] Overlay ready (mode: Cuvyro=voice follow, Keys & Scroll=manual)", flush=True)
 
     def _on_motion_tick(self):
         """Apply the springs to the window. One place, every frame."""
@@ -987,7 +987,7 @@ class NotchOverlay(QWidget):
             # previous stop has not released it yet. Two handles on one camera
             # is what makes the light blink and the readings fight; refusing
             # is the honest outcome.
-            print(f"[Notch] Head tracking off: {source.error}", flush=True)
+            print(f"[Cuvyro] Head tracking off: {source.error}", flush=True)
             self._head_wanted = False
             self._head_track_enabled = False
             # Keep the source. If a previous stop was still releasing the
@@ -1007,7 +1007,7 @@ class NotchOverlay(QWidget):
         self._head_motion.seed(*self._head_home_uv())
         self._head_track_enabled = True
         self._schedule_save()
-        print("[Notch] Head tracking on (local camera, nothing leaves this machine)",
+        print("[Cuvyro] Head tracking on (local camera, nothing leaves this machine)",
               flush=True)
 
     def _toggle_head_tracking(self) -> None:
@@ -1024,7 +1024,7 @@ class NotchOverlay(QWidget):
         if error:
             # The camera was busy, unplugged or died. Say so and stand down
             # rather than leaving a toggle on that tracks nothing.
-            print(f"[Notch] Head tracking off: {error}", flush=True)
+            print(f"[Cuvyro] Head tracking off: {error}", flush=True)
             self._set_head_tracking(False)
             return
         now = time.monotonic()
@@ -1046,7 +1046,7 @@ class NotchOverlay(QWidget):
             waited = now - self._head_enabled_at
             if waited >= 1.5:
                 self._head_starting_reported = True
-                print("[Notch] Head tracking starting (loading the face model, "
+                print("[Cuvyro] Head tracking starting (loading the face model, "
                       "a few seconds on the first enable)", flush=True)
         elif source.ready and not self._head_no_face_reported:
             # Only once the model is loaded: before that, no reading is
@@ -1066,7 +1066,7 @@ class NotchOverlay(QWidget):
                 # feature and leaves the reader no way to fix it. Turning it
                 # off is still one click away.
                 self._head_no_face_reported = True
-                print("[Notch] Head tracking is on but the camera sees no face — "
+                print("[Cuvyro] Head tracking is on but the camera sees no face — "
                       "sit within about a metre of the lens and face it, "
                       "or switch head tracking off", flush=True)
         offsets = self._head_motion.poll(now)
@@ -1077,7 +1077,7 @@ class NotchOverlay(QWidget):
         self._trace_head(sample, now)
 
     def _trace_head(self, sample, now: float) -> None:
-        """Print what the tracker saw and what it did with it (NOTCH_HEAD_TRACE).
+        """Print what the tracker saw and what it did with it (CUVYRO_HEAD_TRACE).
 
         Read after the tick so the window position is the one that was just
         applied, which is the number that proves the card actually moved.
@@ -1095,7 +1095,7 @@ class NotchOverlay(QWidget):
                if self._head_last_sample is not None else -1.0)
         off = self._head_offsets
         shift_x, shift_y = self._head_card_shift()
-        print(f"[Notch head] t={now:9.2f} age={age:5.2f} raw={raw} "
+        print(f"[Cuvyro head] t={now:9.2f} age={age:5.2f} raw={raw} "
               f"src={self._head_source.last_source:7} "
               f"cal={str(self._head_motion.calibrated):5} "
               f"region={off.region:2d} u={off.u:.3f} v={off.v:.3f} "
@@ -1334,7 +1334,7 @@ class NotchOverlay(QWidget):
         self._text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._text_edit.setLineWrapMode(QTextEdit.WidgetWidth)
         self._text_edit.setAlignment(Qt.AlignCenter)
-        self._text_edit.setPlaceholderText("Notch\n(Double click or drop script)")
+        self._text_edit.setPlaceholderText("Cuvyro\n(Double click or drop script)")
         self._apply_read_mode_style()
         self._text_edit.installEventFilter(self)
         self._text_edit.viewport().installEventFilter(self)
@@ -1648,7 +1648,7 @@ class NotchOverlay(QWidget):
     def _start_listening(self):
         self._stop_listening()
         self._stop_listening_sync()  # Wait for old worker before starting new one (only blocks when restarting)
-        print("[Notch] Starting audio worker...", flush=True)
+        print("[Cuvyro] Starting audio worker...", flush=True)
         self._audio_worker = AudioWorker(
             self._device_index,
             self._noise_gate,
@@ -1660,7 +1660,7 @@ class NotchOverlay(QWidget):
         self._audio_worker.speech_text_signal.connect(self._on_speech_text)
         self._audio_worker.error_signal.connect(self._on_audio_error)
         self._audio_worker.start()
-        print("[Notch] Audio worker started", flush=True)
+        print("[Cuvyro] Audio worker started", flush=True)
 
     def _stop_listening(self):
         """Stop audio worker. Non-blocking: worker exits in background. Use _stop_listening_sync to wait."""
@@ -1711,7 +1711,7 @@ class NotchOverlay(QWidget):
         memory until a collect runs.
         """
         try:
-            from notch.audio.speech import request_drop_recognizer
+            from cuvyro.audio.speech import request_drop_recognizer
         except Exception:
             return
         request_drop_recognizer()
@@ -1734,7 +1734,7 @@ class NotchOverlay(QWidget):
     def _log_install_paths(self):
         """When running as installed exe, write data path and existence to a log for debugging."""
         try:
-            log_path = os.path.join(os.path.dirname(sys.executable), "notch_log.txt")
+            log_path = os.path.join(os.path.dirname(sys.executable), "cuvyro_log.txt")
             exists = os.path.isdir(self.MODEL_PATH)
             with open(log_path, "w", encoding="utf-8") as f:
                 f.write(f"data_path={self.MODEL_PATH}\n")
@@ -1745,7 +1745,7 @@ class NotchOverlay(QWidget):
     @pyqtSlot(str)
     def _on_audio_error(self, message: str):
         """Show mic/speech errors to the user (installed exe has no console)."""
-        QMessageBox.warning(self, "Notch – Audio", message)
+        QMessageBox.warning(self, "Cuvyro – Audio", message)
 
     @pyqtSlot(bool)
     def _on_speaking_changed(self, is_speaking):
@@ -1948,16 +1948,16 @@ class NotchOverlay(QWidget):
     # Filler words often recognised from ambient noise when nothing is said
     _SPEECH_IGNORE_WORDS = frozenset({"huh", "uh", "um", "hmm", "hm", "eh", "ah"})
 
-    # Voice commands: "Notch X" — checked case-insensitive, final results only
-    # Include "not" variant (common misrecognition of "notch")
+    # Voice commands: "Cuvyro X" — checked case-insensitive, final results only
+    # Include "not" variant (common misrecognition of "cuvyro")
     _VOICE_COMMANDS = {
-        "notch restart": lambda s: s._reset_position(),
+        "cuvyro restart": lambda s: s._reset_position(),
         "not restart": lambda s: s._reset_position(),
-        "notch expand": lambda s: s._toggle_edit_mode(),
+        "cuvyro expand": lambda s: s._toggle_edit_mode(),
         "not expand": lambda s: s._toggle_edit_mode(),
-        "notch mute": lambda s: s._toggle_mic_mute(),
+        "cuvyro mute": lambda s: s._toggle_mic_mute(),
         "not mute": lambda s: s._toggle_mic_mute(),
-        "notch close": lambda s: s.close(),
+        "cuvyro close": lambda s: s.close(),
         "not close": lambda s: s.close(),
     }
 
@@ -1968,7 +1968,7 @@ class NotchOverlay(QWidget):
         txt = " ".join(text.strip().lower().split())  # normalize spaces
         if txt in self._SPEECH_IGNORE_WORDS and not self._is_speaking:
             return  # Skip filler false positives when not actively speaking
-        # The worker already logs the transcript when NOTCH_TRACE_TRANSCRIPT is
+        # The worker already logs the transcript when CUVYRO_TRACE_TRANSCRIPT is
         # set; printing it again here wrote every partial twice.
 
         # Voice commands (final only, work even without script)
@@ -2262,7 +2262,7 @@ class NotchOverlay(QWidget):
         """)
         # Tooltips are not styled here on purpose: they are separate
         # top-level windows and inherit neither this stylesheet nor the
-        # index card's. ``notch.ui.tooltips`` paints them itself, from the
+        # index card's. ``cuvyro.ui.tooltips`` paints them itself, from the
         # theme of the surface the control belongs to.
 
         def label(text, size=13, color=fg, weight=400):
@@ -2670,7 +2670,7 @@ class NotchOverlay(QWidget):
         global_on = segment_button(global_group, "On", 34)
         global_off.setAccessibleName("Global keys off")
         global_on.setAccessibleName("Global keys on")
-        global_off.setToolTip("Keys work only while Notch is focused")
+        global_off.setToolTip("Keys work only while Cuvyro is focused")
         global_on.setToolTip(
             f"{self._hotkey_toggle} and Ctrl+Alt+Left/Right work in any app")
         on_now = (self._hotkeys_enabled
@@ -2807,7 +2807,7 @@ class NotchOverlay(QWidget):
     def _focus_reader(self):
         """Give the keyboard back to the reader after one of its own surfaces.
 
-        Opening and closing Notch's menu, Help or Setup is an interaction with
+        Opening and closing Cuvyro's menu, Help or Setup is an interaction with
         this window, so the keyboard belongs to the reader again afterwards.
         This never reaches for the foreground of another application; the
         system-wide chords are what make Manual work while someone else has
@@ -2916,11 +2916,11 @@ class NotchOverlay(QWidget):
     def _report_import_error(self, path: str, error: Exception):
         """Tell the reader why a script did not open. Silence is a bug."""
         name = os.path.basename(path) or path
-        print(f"[Notch] Could not open {path}: {error}", flush=True)
+        print(f"[Cuvyro] Could not open {path}: {error}", flush=True)
         QMessageBox.warning(
-            self, "Notch – Open Script",
+            self, "Cuvyro – Open Script",
             f"Could not open “{name}”.\n\n{error}\n\n"
-            "Notch reads plain text (.txt) scripts.",
+            "Cuvyro reads plain text (.txt) scripts.",
         )
 
     def _load_script_from_file(self, path):
@@ -2928,7 +2928,7 @@ class NotchOverlay(QWidget):
         try:
             with open(path, "rb") as handle:
                 text = self._decode_script(handle.read())
-            print(f"[Notch] Script loaded: {path}", flush=True)
+            print(f"[Cuvyro] Script loaded: {path}", flush=True)
             self._text_edit.setPlainText(text)
             # Replacing the text resets every block's format; the spacing key
             # must not pretend the new document is already typeset.
@@ -3055,7 +3055,7 @@ class NotchOverlay(QWidget):
         notice = NoticeDialog(
             self, title="Global keys", dark=self._dark_theme,
             body=(f"{self._hotkey_toggle} could not be registered.\n\n"
-                  f"{detail}\n\nManual mode still works while Notch has "
+                  f"{detail}\n\nManual mode still works while Cuvyro has "
                   "focus. Choose a different combination in Setup."))
         # Shown, never exec_()ed: this can be raised from inside a menu
         # teardown, and a nested event loop there is both unnecessary and
@@ -3540,7 +3540,7 @@ class NotchOverlay(QWidget):
         self._manual_trace("started")
 
     def _manual_trace(self, event: str):
-        """One line about Manual playback, when NOTCH_MANUAL_TRACE is set.
+        """One line about Manual playback, when CUVYRO_MANUAL_TRACE is set.
 
         The packaged build has no console and is invisible to screen capture,
         so this is how a run of the installed app can be checked from outside:
@@ -3550,16 +3550,16 @@ class NotchOverlay(QWidget):
             return
         try:
             bar = self._text_edit.verticalScrollBar()
-            line = (f"[Notch] manual {event} scroll={bar.value()}"
+            line = (f"[Cuvyro] manual {event} scroll={bar.value()}"
                     f" of {bar.maximum()} wpm={self._manual_wpm}")
             if getattr(sys, "frozen", False):
                 log_dir = os.path.dirname(sys.executable)
             else:
                 log_dir = os.path.join(
                     os.getenv("LOCALAPPDATA") or os.path.expanduser("~"),
-                    "Notch")
+                    "Cuvyro")
             os.makedirs(log_dir, exist_ok=True)
-            with open(os.path.join(log_dir, "notch.log"), "a",
+            with open(os.path.join(log_dir, "cuvyro.log"), "a",
                       encoding="utf-8") as handle:
                 handle.write(line + "\n")
         except OSError:
@@ -3951,7 +3951,7 @@ class NotchOverlay(QWidget):
         self._text_edit.ensureCursorVisible()
 
     def _apply_read_mode_style(self):
-        """Set text edit stylesheet for read mode (Notch/Keys & Scroll). Dark = white text, light = dark text."""
+        """Set text edit stylesheet for read mode (Cuvyro/Keys & Scroll). Dark = white text, light = dark text."""
         color = "#111111" if not self._dark_theme else "#fafafa"
         self._text_edit.setStyleSheet(
             "QTextEdit {"
@@ -3995,7 +3995,7 @@ class NotchOverlay(QWidget):
         neither the card's stylesheet nor the menu's. That rule could only
         set colours on a frame Qt drew; it could not round the corners, lift
         the panel off its surface, fade it, or show it for a control reached
-        with Tab. ``notch.ui.tooltips`` builds the panel itself and is
+        with Tab. ``cuvyro.ui.tooltips`` builds the panel itself and is
         installed here, so the reader, its menu, the notes and Setup all
         share one material.
 
@@ -4383,7 +4383,7 @@ class NotchOverlay(QWidget):
         self.move(x, y)
 
     def _show_help(self):
-        """Open the How to use Notch guide (same as first-time popup)."""
+        """Open the How to use Cuvyro guide (same as first-time popup)."""
         HelpDialog(self, dark=self._dark_theme).exec_()
         QTimer.singleShot(0, self._focus_reader)
 
@@ -4658,7 +4658,7 @@ class NotchOverlay(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         # First-time guide (persist with QSettings so we only show once per machine)
-        settings = QSettings("Notch", "Notch")
+        settings = QSettings("Cuvyro", "Cuvyro")
         guide_seen = settings.value("guide_seen", False, type=bool)
         # Restore on every launch, not just the first one: the script, notes and
         # reader preferences are expected to survive close and relaunch.
@@ -4671,7 +4671,7 @@ class NotchOverlay(QWidget):
         if self._fade_anim.state() != QAbstractAnimation.Running:
             self._fade_anim.start()
         if self._voice_mode:
-            print("[Notch] Voice mode on — starting mic + speech recognition", flush=True)
+            print("[Cuvyro] Voice mode on — starting mic + speech recognition", flush=True)
             self._start_listening()
         # Without this the toolbar only recedes after the pointer has moved;
         # launching with the cursor elsewhere left it on screen for good.
@@ -4849,7 +4849,7 @@ class NotchOverlay(QWidget):
         if they still belonged to something.
         """
         if self._detach_notes(persist=True):
-            print("[Notch] Cleared the notes for the cleared script", flush=True)
+            print("[Cuvyro] Cleared the notes for the cleared script", flush=True)
 
     def _close_all_notes(self):
         self._detach_notes()
@@ -5129,7 +5129,7 @@ class NotchOverlay(QWidget):
             self._store.save(self._script_text, self._note_state(),
                              self._settings_state(), purge_backup=purge_backup)
         except OSError as exc:
-            print(f"[Notch] Could not save state: {exc}", flush=True)
+            print(f"[Cuvyro] Could not save state: {exc}", flush=True)
         # Learned timings are local, aggregate and tiny; the predictor only
         # writes when speech has taught it something new.
         self._predictor.save()
@@ -5162,7 +5162,7 @@ class NotchOverlay(QWidget):
             self._text_edit.verticalScrollBar().setValue(0)
             if self._voice_mode:
                 self._scroll_to_reading_line(0)
-            print(f"[Notch] Restored saved script ({len(script)} chars)", flush=True)
+            print(f"[Cuvyro] Restored saved script ({len(script)} chars)", flush=True)
 
         for entry in state.get("notes") or []:
             # A container where the text belongs is corrupt data, not a note.
@@ -5196,7 +5196,7 @@ class NotchOverlay(QWidget):
             note.show()
 
         if self._notes:
-            print(f"[Notch] Restored {len(self._notes)} note(s)", flush=True)
+            print(f"[Cuvyro] Restored {len(self._notes)} note(s)", flush=True)
 
     def closeEvent(self, event):
         self._save_state()
@@ -5221,6 +5221,6 @@ class NotchOverlay(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = NotchOverlay()
+    window = CuvyroOverlay()
     window.show()
     sys.exit(app.exec_())

@@ -1,4 +1,4 @@
-"""Local persistence for the Notch teleprompter.
+"""Local persistence for the Cuvyro teleprompter.
 
 Stores the active script, any written sticky notes and the reader's
 preferences under the app-data folder. Writes go to a temp file and are then
@@ -94,11 +94,62 @@ def sane_number(value, low: float, high: float) -> float | None:
     return number
 
 
-def default_directory() -> str:
-    # Deliberately not APPDATA/Notch: an installed Notch build keeps its own
-    # trial, help and note files there, and this app must not touch them.
-    base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
-    return os.path.join(base, "NotchFree")
+# The folder the app wrote before it was called Cuvyro. Its data is carried
+# forward once, so an update across the rename is not a reset.
+LEGACY_DIRECTORY = "NotchFree"
+
+
+def data_base() -> str:
+    """The roaming folder the reader's data lives under."""
+    return os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
+
+
+def legacy_directory() -> str:
+    """The folder the build before the rename wrote."""
+    return os.path.join(data_base(), LEGACY_DIRECTORY)
+
+
+def default_directory(migrate: bool = True) -> str:
+    """The reader's data folder, with an older install carried forward.
+
+    The app stored its state under ``%APPDATA%\\NotchFree`` until it was
+    renamed. On the first launch after the rename that folder is copied to
+    ``Cuvyro`` before the request is answered, so the reader keeps the script,
+    the notes and the learned speaking profile. If the copy fails the legacy
+    folder is used instead of starting empty: losing the reader's work is a
+    worse failure than writing to the old path once more.
+
+    ``migrate=False`` answers with the destination only. The read-only storage
+    report uses it so inspecting the folder cannot create one.
+    """
+    directory = os.path.join(data_base(), "Cuvyro")
+    legacy = legacy_directory()
+    if migrate and not os.path.exists(directory) and os.path.isdir(legacy):
+        return migrate_legacy_directory(legacy, directory)
+    return directory
+
+
+def migrate_legacy_directory(legacy: str, directory: str) -> str:
+    """Copy the pre-rename data folder to ``directory`` and return where to read.
+
+    Only files are copied; the session logs beside them belonged to the old
+    install and are pruned as stale on the next start anyway. The legacy
+    folder stays untouched, so an older build still finds its state and a
+    failure halfway through cannot leave the old copy half-moved.
+    """
+    created = not os.path.exists(directory)
+    try:
+        os.makedirs(directory, exist_ok=True)
+        for name in sorted(os.listdir(legacy)):
+            source = os.path.join(legacy, name)
+            if not os.path.isfile(source) or name.lower().endswith(".log"):
+                continue
+            shutil.copy2(source, os.path.join(directory, name))
+        return directory
+    except OSError:
+        if created:
+            shutil.rmtree(directory, ignore_errors=True)
+        return legacy
 
 
 def read_json(path: str) -> dict | None:

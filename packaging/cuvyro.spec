@@ -1,8 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for Notch (Windows onedir build).
+"""PyInstaller spec for Cuvyro (Windows onedir build).
 
 The app looks for the speech model at <exe dir>/model when frozen
-(see notch/paths.py), so the build script copies model/ next to Notch.exe
+(see cuvyro/paths.py), so the build script copies model/ next to Cuvyro.exe
 instead of bundling it inside _internal.
 
 sherpa-onnx is the engine the app prefers. Its wheel carries the sherpa and
@@ -30,7 +30,7 @@ for pkg in ("sherpa_onnx", "vosk", "sounddevice", "thefuzz", "rapidfuzz", "cv2",
 
 # Imported from inside AudioWorker.run, so name it here rather than rely on the
 # analyser walking a function-local import.
-hiddenimports.append("notch.audio.speech")
+hiddenimports.append("cuvyro.audio.speech")
 
 # PyQt5 is resolved by PyInstaller's own hooks; only silence noisy optional modules.
 excludes = [
@@ -65,8 +65,8 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="Notch",
-    icon=os.path.join(SPECPATH, "notch.ico"),
+    name="Cuvyro",
+    icon=os.path.join(SPECPATH, "cuvyro.ico"),
     version=os.path.join(SPECPATH, "version_info.txt"),
     debug=False,
     bootloader_ignore_signals=False,
@@ -87,5 +87,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="Notch",
+    name="Cuvyro",
 )

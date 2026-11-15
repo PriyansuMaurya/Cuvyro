@@ -144,7 +144,7 @@ def scene(dark, layers=(), title="", sub="", header=True, caption_on=True):
     txt = DAT if dark else LIGHT_TXT
     dim = DIM if dark else LIGHT_DIM
     if header:
-        draw.text((56, 32), "NOTCH", font=F_SMALL_B, fill=txt)
+        draw.text((56, 32), "CUVYRO", font=F_SMALL_B, fill=txt)
         right = "local  ·  offline  ·  Windows"
         rw = draw.textbbox((0, 0), right, font=F_SMALL)[2]
         draw.text((W - 56 - rw, 32), right, font=F_SMALL, fill=dim)
@@ -177,7 +177,7 @@ def title_card():
     words = "WINDOWS  ·  LOCAL  ·  OFFLINE"
     ww = draw.textbbox((0, 0), words, font=F_SMALL_B)[2]
     draw.text(((W - ww) // 2, 186), words, font=F_SMALL_B, fill=ACC)
-    title = "Notch"
+    title = "Cuvyro"
     tw = draw.textbbox((0, 0), title, font=F_HERO)[2]
     draw.text(((W - tw) // 2, 214), title, font=F_HERO, fill=DAT)
     sub = "A teleprompter that follows your voice"
@@ -241,7 +241,7 @@ def grid_card():
     lower = "lower half · never a destination"
     lw = draw.textbbox((0, 0), lower, font=F_SMALL)[2]
     draw.text(((x0 + x1 - lw) // 2, mid + 22), lower, font=F_SMALL, fill=DIM)
-    draw.text((56, 32), "NOTCH", font=F_SMALL_B, fill=DAT)
+    draw.text((56, 32), "CUVYRO", font=F_SMALL_B, fill=DAT)
     right = "local  ·  offline  ·  Windows"
     rw = draw.textbbox((0, 0), right, font=F_SMALL)[2]
     draw.text((W - 56 - rw, 32), right, font=F_SMALL, fill=DIM)
@@ -291,13 +291,13 @@ def reveal(assets, title, sub, dark, seconds=0.45):
 
 def main():
     app = QApplication(sys.argv)
-    from notch.storage.store import Store
-    from notch.ui import overlay as ui
-    from notch.ui.overlay import HelpDialog
-    from notch.ui.settings import SettingsDialog
+    from cuvyro.storage.store import Store
+    from cuvyro.ui import overlay as ui
+    from cuvyro.ui.overlay import HelpDialog
+    from cuvyro.ui.settings import SettingsDialog
 
-    win = ui.NotchOverlay()
-    win._store = Store(tempfile.mkdtemp(prefix="notch-demo-"))
+    win = ui.CuvyroOverlay()
+    win._store = Store(tempfile.mkdtemp(prefix="cuvyro-demo-"))
     win._voice_mode = False
     win.show()
     QTest.qWait(700)

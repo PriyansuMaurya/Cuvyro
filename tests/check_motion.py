@@ -107,11 +107,11 @@ def main():
     # Windows can be told to reduce animation and a CI runner usually is,
     # which would make every surface answer instantly and fail every
     # assertion about a spring. The reduced path is exercised explicitly.
-    os.environ["NOTCH_REDUCED_MOTION"] = "0"
+    os.environ["CUVYRO_REDUCED_MOTION"] = "0"
     app = QApplication(sys.argv)
-    from notch.ui import motion, theme
-    from notch.ui.notes import NoteWindow, NOTE_H, NOTE_W
-    from notch.ui import tooltips
+    from cuvyro.ui import motion, theme
+    from cuvyro.ui.notes import NoteWindow, NOTE_H, NOTE_W
+    from cuvyro.ui import tooltips
 
     check("the palette is one object for both themes",
           all(isinstance(role, theme.Role) for role in
@@ -174,10 +174,10 @@ def main():
               f"{contrast(hex_rgb(theme.CARD_HAIRLINE.pick(dark)), card):.2f}:1")
 
     # ── Surfaces read the roles, they do not copy the values ────────────
-    from notch.ui import overlay as ui_overlay
+    from cuvyro.ui import overlay as ui_overlay
     check("the reading tiers come from the palette",
-          ui_overlay.NotchOverlay.CURRENT_DARK == theme.CURRENT.dark
-          and ui_overlay.NotchOverlay.BAND_LIGHT == theme.BAND.light)
+          ui_overlay.CuvyroOverlay.CURRENT_DARK == theme.CURRENT.dark
+          and ui_overlay.CuvyroOverlay.BAND_LIGHT == theme.BAND.light)
     check("the tooltip panel is the same material as the menu",
           tooltips.PANEL[True][0] == theme.SURFACE.dark
           and tooltips.PANEL[False][1] == theme.HAIRLINE.light)
@@ -185,7 +185,7 @@ def main():
           tooltips.RADIUS == theme.RADIUS["surface"])
 
     # ── A note is the reader's material ─────────────────────────────────
-    from notch.ui import notes as notes_module, themefade
+    from cuvyro.ui import notes as notes_module, themefade
     check("a note takes the reader's corner radius",
           notes_module.CORNER_RADIUS == theme.RADIUS["card"],
           f"{notes_module.CORNER_RADIUS} px")
@@ -309,7 +309,7 @@ def main():
     # ── A note emerges from the reader and returns into it ─────────────
     # Keep the machine's accessibility setting from deciding whether this
     # half of the check can run; the reduced-motion path is exercised below.
-    os.environ["NOTCH_REDUCED_MOTION"] = "0"
+    os.environ["CUVYRO_REDUCED_MOTION"] = "0"
     anchor = QRect(100, 100, 300, 120)
     origin = QPoint(399, 219)  # nearest card point to the note's centre
     emerged = NoteWindow(scale=1.0, dark=True, anchor=anchor)
@@ -371,7 +371,7 @@ def main():
           themed._theme_fade is None)
     themed.close()
 
-    os.environ["NOTCH_REDUCED_MOTION"] = "1"
+    os.environ["CUVYRO_REDUCED_MOTION"] = "1"
     instant = NoteWindow(scale=1.0, dark=True)
     instant.move(80, 80)
     instant.show()
@@ -384,7 +384,7 @@ def main():
     check("reduced motion: recolouring has no dissolve",
           getattr(instant, "_theme_fade", None) is None)
     instant.close()
-    os.environ["NOTCH_REDUCED_MOTION"] = "0"  # back to the path this check describes
+    os.environ["CUVYRO_REDUCED_MOTION"] = "0"  # back to the path this check describes
 
     # ── Dragging and the release coast ──────────────────────────────────
     dragged = NoteWindow(scale=1.0, dark=True)

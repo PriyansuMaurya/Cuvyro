@@ -149,7 +149,7 @@ def track(script: str, events) -> float:
     survivable, a reader that stops advancing is not. The matcher is the same
     one the overlay uses, with the same thresholds.
     """
-    from notch.audio.matching import MatchingEngine
+    from cuvyro.audio.matching import MatchingEngine
 
     matcher = MatchingEngine()
     matcher.load_script(script)
@@ -289,7 +289,7 @@ def record_all_auto(sentences, out_dir, device, max_seconds=12.0):
       the delay..." arrived as "roughly sixty".
     """
     import sounddevice as sd
-    from notch.audio import speech as speech_engine
+    from cuvyro.audio import speech as speech_engine
 
     vad = speech_engine.create_vad(MODEL_DIR, trailing_silence=4.0)
     os.makedirs(out_dir, exist_ok=True)
@@ -340,7 +340,7 @@ def record_all_auto(sentences, out_dir, device, max_seconds=12.0):
 
 def record_all(sentences, out_dir, device):
     import sounddevice as sd
-    from notch.audio import speech as speech_engine
+    from cuvyro.audio import speech as speech_engine
 
     vad = speech_engine.create_vad(MODEL_DIR)
     model = None
@@ -389,12 +389,12 @@ def reader_follow(sentences, takes, engine):
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication
 
-    from notch.ui import overlay as ui_overlay
-    from notch.storage.store import Store
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.storage.store import Store
 
     app = QApplication.instance() or QApplication(sys.argv)  # noqa: F841
-    win = ui_overlay.NotchOverlay()
-    win._store = Store(tempfile.mkdtemp(prefix="notch-reader-"))
+    win = ui_overlay.CuvyroOverlay()
+    win._store = Store(tempfile.mkdtemp(prefix="cuvyro-reader-"))
     win._voice_mode = False
     win.show()
     QTest.qWait(200)
@@ -490,7 +490,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sentences", default="",
                         help="a .txt file to read instead of the built-in corpus")
-    parser.add_argument("--out", default=os.path.join(tempfile.gettempdir(), "notch-voice"))
+    parser.add_argument("--out", default=os.path.join(tempfile.gettempdir(), "cuvyro-voice"))
     parser.add_argument("--dir", default="", help="score existing WAVs in this folder")
     parser.add_argument("--no-mic", action="store_true", help="skip recording")
     parser.add_argument("--auto", action="store_true",
@@ -512,7 +512,7 @@ def main() -> int:
     if args.limit:
         sentences = sentences[:args.limit]
 
-    from notch.audio import speech as speech_engine
+    from cuvyro.audio import speech as speech_engine
 
     engines = build_engines(speech_engine, compare=args.compare)
     if not engines:

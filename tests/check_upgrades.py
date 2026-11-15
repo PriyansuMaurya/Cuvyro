@@ -94,14 +94,14 @@ def profile_payload(schema=None):
 
 
 def main():
-    QSettings("Notch", "Notch").setValue("guide_seen", True)
+    QSettings("Cuvyro", "Cuvyro").setValue("guide_seen", True)
     app = QApplication(sys.argv)
-    from notch.storage.store import ROLLING_KEEP, SCHEMA, Store
-    from notch.audio.predict import SCHEMA as PROFILE_SCHEMA
-    from notch.audio.predict import ProfileStore
+    from cuvyro.storage.store import ROLLING_KEEP, SCHEMA, Store
+    from cuvyro.audio.predict import SCHEMA as PROFILE_SCHEMA
+    from cuvyro.audio.predict import ProfileStore
 
     # ── A same-version load is a plain round trip ────────────────────
-    tmp_current = tempfile.mkdtemp(prefix="notch-upgrade-current-")
+    tmp_current = tempfile.mkdtemp(prefix="cuvyro-upgrade-current-")
     write(os.path.join(tmp_current, "state.json"), state_payload(SCHEMA))
     current = Store(tmp_current).load()
     original = state_payload(SCHEMA)
@@ -118,7 +118,7 @@ def main():
     # ── The worked v1 -> v2 step is a template for the next change ─────
     # v2 adds saved_at. The test writes a v1 file, upgrades it, checks that
     # nothing else moved, and checks the new field is only filled by a save.
-    tmp_v1 = tempfile.mkdtemp(prefix="notch-upgrade-v1-")
+    tmp_v1 = tempfile.mkdtemp(prefix="cuvyro-upgrade-v1-")
     v1_path = os.path.join(tmp_v1, "state.json")
     v1_payload = state_payload(1)
     write(v1_path, v1_payload)
@@ -150,7 +150,7 @@ def main():
           and reloaded_v2["script"] == v1_payload["script"])
 
     # ── A pre-schema state is upgraded, not rejected ──────────────────
-    tmp_legacy = tempfile.mkdtemp(prefix="notch-upgrade-legacy-")
+    tmp_legacy = tempfile.mkdtemp(prefix="cuvyro-upgrade-legacy-")
     legacy_path = os.path.join(tmp_legacy, "state.json")
     write(legacy_path, state_payload())
     legacy = Store(tmp_legacy).load()
@@ -193,11 +193,11 @@ def main():
     # ── The real overlay starts from the old file ──────────────────────
     # Schema migration is only useful if the reader actually comes back with
     # its script, notes and preferences, so this is the update a person sees.
-    from notch.ui import overlay as ui_overlay
-    from notch.audio.predict import PredictiveHighlighter
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.audio.predict import PredictiveHighlighter
 
     screen = QApplication.primaryScreen().availableGeometry()
-    tmp_ui = tempfile.mkdtemp(prefix="notch-upgrade-ui-")
+    tmp_ui = tempfile.mkdtemp(prefix="cuvyro-upgrade-ui-")
     ui_legacy = state_payload()
     ui_legacy["notes"] = [
         note("ui-first", "Board block reads", screen.x() + 120,
@@ -208,13 +208,13 @@ def main():
     ui_legacy["settings"].update({
         "window_x": screen.x() + 40,
         "window_y": screen.y() + 30,
-        "window_w": ui_overlay.NotchOverlay.DEFAULT_W,
-        "window_h": ui_overlay.NotchOverlay.DEFAULT_H,
+        "window_w": ui_overlay.CuvyroOverlay.DEFAULT_W,
+        "window_h": ui_overlay.CuvyroOverlay.DEFAULT_H,
     })
     ui_path = os.path.join(tmp_ui, "state.json")
     write(ui_path, ui_legacy)
 
-    win = ui_overlay.NotchOverlay()
+    win = ui_overlay.CuvyroOverlay()
     win._store = Store(tmp_ui)
     win._predictor = PredictiveHighlighter(ProfileStore(tmp_ui))
     win._voice_mode = False
@@ -264,7 +264,7 @@ def main():
         win.close()
 
     # ── A file from a newer build is preserved, not silently dropped ──
-    tmp_newer = tempfile.mkdtemp(prefix="notch-upgrade-newer-")
+    tmp_newer = tempfile.mkdtemp(prefix="cuvyro-upgrade-newer-")
     newer_payload = state_payload(99)
     newer_payload["future_field"] = {"kept": True}
     write(os.path.join(tmp_newer, "state.json"), newer_payload)
@@ -282,8 +282,34 @@ def main():
           read(os.path.join(tmp_newer, "state.json"))["script"]
           == newer_payload["script"])
 
+    # ── The rename from Notch keeps the reader's folder ───────────────
+    # The build before the rename wrote %APPDATA%\NotchFree. That folder is
+    # copied once, so an update does not look like a first run with no script.
+    tmp_appdata = tempfile.mkdtemp(prefix="cuvyro-upgrade-appdata-")
+    legacy_dir = os.path.join(tmp_appdata, "NotchFree")
+    legacy_state = state_payload(SCHEMA)
+    write(os.path.join(legacy_dir, "state.json"), legacy_state)
+    write(os.path.join(legacy_dir, "speaking-profile.json"), profile_payload(PROFILE_SCHEMA))
+    with open(os.path.join(legacy_dir, "notch-4242.log"), "w", encoding="utf-8") as handle:
+        handle.write("old session log")
+    with patch.dict(os.environ, {"APPDATA": tmp_appdata}):
+        renamed = Store().load()
+        renamed_profile = ProfileStore(os.path.join(tmp_appdata, "Cuvyro")).load()
+    new_dir = os.path.join(tmp_appdata, "Cuvyro")
+    check("the pre-rename data folder is copied to Cuvyro",
+          os.path.isfile(os.path.join(new_dir, "state.json")), new_dir)
+    check("the copied state keeps the script and notes",
+          renamed["script"] == legacy_state["script"]
+          and renamed["notes"] == legacy_state["notes"])
+    check("the copied state keeps the learned speaking profile",
+          renamed_profile.words == profile_payload(PROFILE_SCHEMA)["words"])
+    check("the old session logs are not carried across",
+          not os.path.exists(os.path.join(new_dir, "notch-4242.log")))
+    check("the pre-rename folder is left in place",
+          os.path.isfile(os.path.join(legacy_dir, "state.json")))
+
     # ── Rolling copies keep more than the last session ────────────────
-    tmp_roll = tempfile.mkdtemp(prefix="notch-upgrade-rolling-")
+    tmp_roll = tempfile.mkdtemp(prefix="cuvyro-upgrade-rolling-")
     Store(tmp_roll).save("session one", [note("old", "old note")],
                          {"font_size": 12})
     second_session = Store(tmp_roll)
@@ -317,7 +343,7 @@ def main():
 
     # The learned profile rolls the same way: the first save of a launch
     # keeps the profile the previous launch ended with.
-    tmp_profile_roll = tempfile.mkdtemp(prefix="notch-upgrade-rolling-profile-")
+    tmp_profile_roll = tempfile.mkdtemp(prefix="cuvyro-upgrade-rolling-profile-")
     first_profile = ProfileStore(tmp_profile_roll).load()
     first_profile.words = 100
     first_profile.wps = 2.5
@@ -334,7 +360,7 @@ def main():
           str([os.path.basename(p) for p in profile_copies]))
 
     # ── The learned speaking profile is data too ──────────────────────
-    tmp_profile = tempfile.mkdtemp(prefix="notch-upgrade-profile-")
+    tmp_profile = tempfile.mkdtemp(prefix="cuvyro-upgrade-profile-")
     write(os.path.join(tmp_profile, "speaking-profile.json"),
           profile_payload(PROFILE_SCHEMA))
     learned = ProfileStore(tmp_profile).load()
@@ -364,7 +390,7 @@ def main():
           and recovered_profile.words == expected_profile["words"],
           f"wps={recovered_profile.wps}, words={recovered_profile.words}")
 
-    tmp_profile_old = tempfile.mkdtemp(prefix="notch-upgrade-profile-old-")
+    tmp_profile_old = tempfile.mkdtemp(prefix="cuvyro-upgrade-profile-old-")
     write(os.path.join(tmp_profile_old, "speaking-profile.json"),
           profile_payload())
     old_profile = ProfileStore(tmp_profile_old).load()
@@ -380,7 +406,7 @@ def main():
           read(os.path.join(tmp_profile_old, "speaking-profile.json"))
           .get("schema") == PROFILE_SCHEMA)
 
-    tmp_profile_new = tempfile.mkdtemp(prefix="notch-upgrade-profile-new-")
+    tmp_profile_new = tempfile.mkdtemp(prefix="cuvyro-upgrade-profile-new-")
     future_profile = profile_payload(99)
     future_profile["future_weighting"] = "keep me"
     write(os.path.join(tmp_profile_new, "speaking-profile.json"),

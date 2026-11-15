@@ -65,16 +65,16 @@ def os_chord(*keys):
 
 
 def main():
-    # The first-run guide is modal. A machine that has never run Notch (a
+    # The first-run guide is modal. A machine that has never run Cuvyro (a
     # runner, a new laptop) would block on it instead of starting, so the
     # check states the machine it describes. check_note_clearing, the
     # robustness check and the upgrade check do the same.
     from PyQt5.QtCore import QSettings
-    QSettings("Notch", "Notch").setValue("guide_seen", True)
+    QSettings("Cuvyro", "Cuvyro").setValue("guide_seen", True)
     app = QApplication(sys.argv)
-    from notch.platform import hotkeys as hk
-    from notch.ui import overlay as ui_overlay
-    from notch.storage.store import Store
+    from cuvyro.platform import hotkeys as hk
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.storage.store import Store
 
     if not hk.available():
         print("SKIP  global hotkeys are Windows-only")
@@ -112,8 +112,8 @@ def main():
                   for chord in hk.DEFAULT_CHORDS.values()),
           str(hk.DEFAULT_CHORDS))
 
-    win = ui_overlay.NotchOverlay()
-    win._store = Store(tempfile.mkdtemp(prefix="notch-hotkeys-"))
+    win = ui_overlay.CuvyroOverlay()
+    win._store = Store(tempfile.mkdtemp(prefix="cuvyro-hotkeys-"))
     win._voice_mode = False
     win._hotkey_consent = "granted"
     win._hotkeys_enabled = True

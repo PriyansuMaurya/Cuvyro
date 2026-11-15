@@ -1,5 +1,5 @@
 """
-notch.audio.speech — local streaming speech recognition behind one small interface.
+cuvyro.audio.speech — local streaming speech recognition behind one small interface.
 
 Two backends, both fully offline:
 
@@ -45,7 +45,7 @@ _drop_requested = False
 
 
 def _log(message: str):
-    print(f"[Notch speech] {message}", flush=True)
+    print(f"[Cuvyro speech] {message}", flush=True)
 
 
 class StreamRecognizer:

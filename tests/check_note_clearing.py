@@ -48,7 +48,7 @@ def state_file(directory):
 
 def visible_notes():
     """Every note window currently on screen, whoever owns it."""
-    from notch.ui.notes import NoteWindow
+    from cuvyro.ui.notes import NoteWindow
 
     on_screen = []
     for widget in QApplication.topLevelWidgets():
@@ -63,10 +63,10 @@ def visible_notes():
 
 
 def make_overlay(directory):
-    from notch.ui import overlay as ui_overlay
-    from notch.storage.store import Store
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.storage.store import Store
 
-    win = ui_overlay.NotchOverlay()
+    win = ui_overlay.CuvyroOverlay()
     win._store = Store(directory)
     win._voice_mode = False  # keep the microphone out of an automated run
     win.show()
@@ -98,12 +98,12 @@ def write_script(directory, name, text):
 
 
 def main():
-    QSettings("Notch", "Notch").setValue("guide_seen", True)
+    QSettings("Cuvyro", "Cuvyro").setValue("guide_seen", True)
     app = QApplication(sys.argv)
-    from notch.storage.store import SCHEMA
+    from cuvyro.storage.store import SCHEMA
 
     # ── Clearing the script takes its notes with it ───────────────────
-    tmp = tempfile.mkdtemp(prefix="notch-clear-")
+    tmp = tempfile.mkdtemp(prefix="cuvyro-clear-")
     win = make_overlay(tmp)
     script = "Morning block.\nShip the note fix, then rehearse."
     set_script(win, script)

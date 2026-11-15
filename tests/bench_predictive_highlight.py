@@ -101,7 +101,7 @@ def pct(values, share):
 
 
 def run_simulation(words, latency, tick=0.05, window=2.5):
-    from notch.audio.predict import PredictiveHighlighter
+    from cuvyro.audio.predict import PredictiveHighlighter
 
     events, spoken_at, skipped = build_timeline(words)
     # What the recogniser can see, after its own delay. Partial results keep
@@ -112,7 +112,7 @@ def run_simulation(words, latency, tick=0.05, window=2.5):
     visible.sort(key=lambda item: item[0])
     end_time = max(event[2] for event in events) + latency + 1.0
     line_words = 8
-    directory = tempfile.mkdtemp(prefix="notch-predict-bench-")
+    directory = tempfile.mkdtemp(prefix="cuvyro-predict-bench-")
     predictor = PredictiveHighlighter()  # no store: measurement only
     predictor.set_script(words)
 
@@ -289,13 +289,13 @@ def measure_painting():
     from PyQt5.QtGui import QFont
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication
-    from notch.ui import overlay as ui_overlay
-    from notch.storage.store import Store
-    from notch.audio.predict import PredictiveHighlighter, ProfileStore
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.storage.store import Store
+    from cuvyro.audio.predict import PredictiveHighlighter, ProfileStore
 
     app = QApplication.instance() or QApplication(sys.argv)
-    win = ui_overlay.NotchOverlay()
-    win._store = Store(tempfile.mkdtemp(prefix="notch-predict-paint-"))
+    win = ui_overlay.CuvyroOverlay()
+    win._store = Store(tempfile.mkdtemp(prefix="cuvyro-predict-paint-"))
     win._predictor = PredictiveHighlighter(
         ProfileStore(win._store.directory))
     win._voice_mode = False

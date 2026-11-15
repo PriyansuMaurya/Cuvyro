@@ -3,7 +3,7 @@
 packaging/sign.bat is called by build-installer.bat before Inno Setup and again
 after it. The only thing between a release build and an unsigned artifact is
 this script refusing to exit 0, so its branches are pinned here rather than
-trusted. A stub named through NOTCH_SIGNTOOL replaces the real signtool, which
+trusted. A stub named through CUVYRO_SIGNTOOL replaces the real signtool, which
 means no certificate is needed and nothing contacts a timestamp server.
 
     .venv/Scripts/python.exe tests/check_signing.py
@@ -49,7 +49,7 @@ def main():
         stub.write_text(STUB.format(log=calls), encoding="utf-8")
 
         def run(**overrides):
-            env = {k: v for k, v in os.environ.items() if not k.startswith("NOTCH_SIGN")}
+            env = {k: v for k, v in os.environ.items() if not k.startswith("CUVYRO_SIGN")}
             env.pop("STUB_FAIL_SIGN", None)
             env.pop("STUB_FAIL_VERIFY", None)
             env.update({k: str(v) for k, v in overrides.items()})
@@ -64,7 +64,7 @@ def main():
         check("a missing argument is refused", rc == 1 and "no file given" in out,
               f"rc={rc}")
 
-        rc, out = run(NOTCH_SIGN_CERT=cert, NOTCH_SIGNTOOL=stub, no_target=True)
+        rc, out = run(CUVYRO_SIGN_CERT=cert, CUVYRO_SIGNTOOL=stub, no_target=True)
         check("a missing argument is refused even when signing is configured",
               rc == 1 and "no file given" in out, f"rc={rc}")
 
@@ -72,16 +72,16 @@ def main():
         check("an unconfigured local build is left unsigned", rc == 0,
               f"rc={rc} {out.strip()}")
 
-        rc, out = run(NOTCH_SIGN_REQUIRED=1)
+        rc, out = run(CUVYRO_SIGN_REQUIRED=1)
         check("a release build refuses to skip signing",
-              rc == 1 and "NOTCH_SIGN_REQUIRED is set but NOTCH_SIGN_CERT is not" in out,
+              rc == 1 and "CUVYRO_SIGN_REQUIRED is set but CUVYRO_SIGN_CERT is not" in out,
               f"rc={rc}")
 
-        rc, out = run(NOTCH_SIGN_CERT=temp / "absent.pfx")
+        rc, out = run(CUVYRO_SIGN_CERT=temp / "absent.pfx")
         check("a missing certificate is an error, not a skip",
               rc == 1 and "certificate not found" in out, f"rc={rc}")
 
-        rc, out = run(NOTCH_SIGN_CERT=cert, NOTCH_SIGNTOOL=stub, NOTCH_SIGN_PASSWORD="pw")
+        rc, out = run(CUVYRO_SIGN_CERT=cert, CUVYRO_SIGNTOOL=stub, CUVYRO_SIGN_PASSWORD="pw")
         logged = calls.read_text(encoding="utf-8") if calls.exists() else ""
         first = logged.splitlines()[0] if logged else ""
         check("a configured build signs", rc == 0 and "sign: ok" in out, f"rc={rc} {out.strip()}")
@@ -91,11 +91,11 @@ def main():
         check("the certificate and timestamp server reach signtool",
               "certificate.pfx" in logged and "/tr" in logged, logged.replace("\n", " | "))
 
-        rc, out = run(NOTCH_SIGN_CERT=cert, NOTCH_SIGNTOOL=stub, STUB_FAIL_SIGN=1)
+        rc, out = run(CUVYRO_SIGN_CERT=cert, CUVYRO_SIGNTOOL=stub, STUB_FAIL_SIGN=1)
         check("a failed signature fails the build",
               rc == 1 and "signing failed" in out, f"rc={rc}")
 
-        rc, out = run(NOTCH_SIGN_CERT=cert, NOTCH_SIGNTOOL=stub, STUB_FAIL_VERIFY=1)
+        rc, out = run(CUVYRO_SIGN_CERT=cert, CUVYRO_SIGNTOOL=stub, STUB_FAIL_VERIFY=1)
         check("a signature that does not verify fails the build",
               rc == 1 and "does not verify" in out, f"rc={rc}")
 

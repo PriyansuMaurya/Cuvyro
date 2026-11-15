@@ -90,18 +90,18 @@ def count_updates(win):
 
 
 def main():
-    # The first-run guide is modal. A machine that has never run Notch (a
+    # The first-run guide is modal. A machine that has never run Cuvyro (a
     # runner, a new laptop) would block on it instead of starting, so the
     # check states the machine it describes. check_note_clearing, the
     # robustness check and the upgrade check do the same.
     from PyQt5.QtCore import QSettings
-    QSettings("Notch", "Notch").setValue("guide_seen", True)
+    QSettings("Cuvyro", "Cuvyro").setValue("guide_seen", True)
     app = QApplication(sys.argv)
-    from notch.ui import overlay as ui_overlay
-    from notch.storage.store import Store
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.storage.store import Store
 
-    win = ui_overlay.NotchOverlay()
-    win._store = Store(tempfile.mkdtemp(prefix="notch-wave-"))
+    win = ui_overlay.CuvyroOverlay()
+    win._store = Store(tempfile.mkdtemp(prefix="cuvyro-wave-"))
     win._voice_mode = False          # keep the microphone out of the run
     win.show()
     wait(600)                        # let the card and its springs settle

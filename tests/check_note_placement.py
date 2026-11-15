@@ -28,7 +28,7 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)
 
-from notch.ui.note_placement import (  # noqa: E402
+from cuvyro.ui.note_placement import (  # noqa: E402
     GRID_LIMIT, _candidate_points, choose_position,
 )
 
@@ -103,10 +103,10 @@ def write_state(directory, notes):
 
 
 def make_overlay(directory):
-    from notch.ui import overlay as ui_overlay
-    from notch.storage.store import Store
+    from cuvyro.ui import overlay as ui_overlay
+    from cuvyro.storage.store import Store
 
-    win = ui_overlay.NotchOverlay()
+    win = ui_overlay.CuvyroOverlay()
     win._store = Store(directory)
     win._voice_mode = False  # keep the microphone out of an automated run
     win.show()
@@ -115,12 +115,12 @@ def make_overlay(directory):
 
 
 def main():
-    # The first-run guide is modal. A machine that has never run Notch (a
+    # The first-run guide is modal. A machine that has never run Cuvyro (a
     # runner, a new laptop) would block on it instead of starting, so the
     # check states the machine it describes. check_note_clearing, the
     # robustness check and the upgrade check do the same.
     from PyQt5.QtCore import QSettings
-    QSettings("Notch", "Notch").setValue("guide_seen", True)
+    QSettings("Cuvyro", "Cuvyro").setValue("guide_seen", True)
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     app = QApplication(sys.argv)
 
@@ -216,7 +216,7 @@ def main():
           QRect(0, 0, 800, 600).contains(oversized.topLeft()))
 
     # ── The reader opens notes on screen, clear of itself ────────────
-    tmp = tempfile.mkdtemp(prefix="notch-place-")
+    tmp = tempfile.mkdtemp(prefix="cuvyro-place-")
     win = make_overlay(tmp)
     available = QApplication.primaryScreen().availableGeometry()
     note = win._open_note()
@@ -284,7 +284,7 @@ def main():
           f"{restored[0].pos() if restored else None} vs {moved}")
 
     # The same rule for a note left on a monitor that is gone.
-    gone = tempfile.mkdtemp(prefix="notch-place-gone-")
+    gone = tempfile.mkdtemp(prefix="cuvyro-place-gone-")
     write_state(gone, [{"id": "abc123", "text": "remember the close",
                         "x": 60_000, "y": 60_000}])
     recovered = make_overlay(gone)
@@ -320,7 +320,7 @@ def main():
     # The reader's own resize (the narrow reading mode) must not make the
     # placement stale: the rail moves, and a note opened afterwards still
     # avoids it.
-    compact = make_overlay(tempfile.mkdtemp(prefix="notch-place-compact-"))
+    compact = make_overlay(tempfile.mkdtemp(prefix="cuvyro-place-compact-"))
     compact._toggle_compact_mode()
     QTest.qWait(600)
     compact_note = compact._open_note()

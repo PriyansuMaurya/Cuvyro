@@ -1,4 +1,4 @@
-"""Sticky note window for the Notch teleprompter.
+"""Sticky note window for the Cuvyro teleprompter.
 
 A separate 260 x 165 DIP card with a drag strip, a multiline field and a
 compact close control, matching the reference geometry. It follows the
@@ -16,8 +16,8 @@ from PyQt5.QtCore import QPoint, QPointF, QRect, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import QHBoxLayout, QShortcut, QTextEdit, QVBoxLayout, QWidget
 
-from notch.ui import motion, theme, themefade
-from notch.ui.spring import SpringGroup
+from cuvyro.ui import motion, theme, themefade
+from cuvyro.ui.spring import SpringGroup
 
 NOTE_W, NOTE_H = 260, 165
 # A note is a piece of the reader's card lifted off it, so it takes the
@@ -159,8 +159,8 @@ class NoteWindow(QWidget):
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setWindowTitle("Notch Note")
-        self.setAccessibleName("Notch note")
+        self.setWindowTitle("Cuvyro Note")
+        self.setAccessibleName("Cuvyro note")
         self.setMinimumSize(self._dim(NOTE_W), self._dim(NOTE_H))
         self.resize(self._dim(NOTE_W), self._dim(NOTE_H))
 
