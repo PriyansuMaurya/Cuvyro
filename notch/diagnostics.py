@@ -5,12 +5,51 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
+import re
 import sys
 import threading
 import time
 
 _logger = None
 _fault_file = None
+
+# Every launch writes its own notch-<pid>.log, so a reader started daily
+# accumulates one session per launch for ever unless the old ones go. The
+# support evidence is the newest few; anything older is noise in the folder.
+SESSION_LOG = re.compile(r'^notch-(\d+)\.log(?:\.\d+)?$')
+FAULT_LOG = re.compile(r'^notch-fault-(\d+)\.log$')
+KEEP_SESSIONS = 5
+
+
+def _prune_sessions(directory):
+    """Delete all but the newest KEEP_SESSIONS sessions, never this one."""
+    current = os.getpid()
+    sessions = {}
+    for path in directory.iterdir():
+        match = SESSION_LOG.match(path.name) or FAULT_LOG.match(path.name)
+        if not match:
+            continue
+        pid = int(match.group(1))
+        if pid == current:
+            continue
+        try:
+            stamp = path.stat().st_mtime
+        except OSError:
+            continue
+        sessions.setdefault(pid, []).append((stamp, path))
+    newest = sorted(sessions.items(), key=lambda item: max(s for s, _ in item[1]),
+                    reverse=True)[:KEEP_SESSIONS]
+    keep = {pid for pid, _ in newest}
+    for pid, files in sessions.items():
+        if pid in keep:
+            continue
+        for _, path in files:
+            try:
+                path.unlink()
+            except OSError:
+                # A still-running process holds its own file open on
+                # Windows; leaving one behind is better than failing.
+                pass
 
 
 class LogStream:
@@ -61,6 +100,7 @@ def install():
             faulthandler.enable(file=_fault_file, all_threads=True)
         except (OSError, RuntimeError):
             logger.warning('Native fault logging unavailable')
+        _prune_sessions(directory)
     _logger = logger
     original_hook = sys.excepthook
 
