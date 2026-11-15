@@ -6,6 +6,39 @@ saved state or a workflow. Each release is a `vX.Y.Z` tag on `main`; this file
 starts at 1.6.0, and earlier releases are described by their tags and commit
 messages.
 
+## Unreleased
+
+Pre-launch hardening found by an independent read of the shipping paths.
+
+### Fixed
+
+- A release build now ships the engine it is measured with. The workflow
+  fetched only the Vosk fallback, which `build-installer.bat` accepts, so a
+  tagged installer would have run the recogniser the benchmark replaced (4.3x
+  realtime, RMS gate instead of Silero) while every documented figure came from
+  sherpa-onnx. The workflow fetches `model/sherpa`, `silero_vad.onnx` and the
+  face landmarker, asserts them, and verifies the frozen tree carries them.
+- A tag can no longer publish an untested build. The release workflow runs the
+  offscreen checks before the installer step and fails on any non-zero check.
+- Two copies can no longer run at once. They shared one state file, one camera
+  and one set of global chords, and the last save won. `notch.platform.
+  single_instance` takes a session mutex; the window explains the situation and
+  exits, and the installer uses the same name as its `AppMutex`.
+- The reader's own words are no longer written to the log at partial cadence,
+  twice per result. Transcript tracing is opt-in with `NOTCH_TRACE_TRANSCRIPT=1`.
+- The microphone ribbon drains on a time constant instead of a fixed fraction
+  per frame, so an unplugged or muted mic clears in the same wall-clock time on
+  a busy host as on an idle one.
+
+### Changed
+
+- `tests/check_design.py` wakes the control rail before measuring a control's
+  shape, because the three-second idle fade could otherwise be measured as a
+  broken (half-transparent) circle on a slow host.
+- `tests/check_robustness.py` checks the cross-process mutex and the silent
+  default for transcript logging; `tests/check_waveform.py` checks that one
+  late frame drains as far as a frame budget would.
+
 ## 1.6.1 — 2026-11-14
 
 A patch release for the installer pipeline; no application code changed. The
