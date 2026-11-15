@@ -636,6 +636,10 @@ class NotchOverlay(QWidget):
         self._checkpoints = {}
         self._edit_mode = False
         self._text_fade_for_expand = True
+        # Set when the geometry lands before the text has finished fading out,
+        # so the fade-out's handler owns the fade back in. See
+        # _on_edit_motion_finished.
+        self._fade_in_after_text = False
         self._collapsed_size = None
         self._prev_voice_mode = True
         self._compact_mode = False
@@ -1228,7 +1232,11 @@ class NotchOverlay(QWidget):
                 self._text_edit.verticalScrollBar().setValue(0)
             if self._voice_mode:
                 self._scroll_to_reading_line(0)
-            # Text stays invisible; fade-in deferred to _on_edit_geometry_anim_finished
+            # Text stays invisible; the fade back in belongs to the geometry
+            # step, unless that landed first and is waiting for this fade.
+            if self._fade_in_after_text:
+                self._fade_in_after_text = False
+                self._text_fade_in.start()
 
     # ═══════════════════════════════════════════════════════════════════
     #  UI Construction (Ultra Minimal)
@@ -4556,7 +4564,15 @@ class NotchOverlay(QWidget):
         origin = self._head_layout_origin()
         self._motion.jump(x=float(origin.x()), y=float(origin.y()),
                           w=float(self.width()), h=float(self.height()))
-        self._text_fade_in.start()
+        # Under reduced motion the geometry settles in the same turn, before
+        # the text has finished fading out. Starting the fade back in here
+        # would stop that fade mid-flight, and the swap that commits the edit
+        # and returns the reader lives in its handler: Done would look dead.
+        # That handler starts the fade in itself when it still owns the order.
+        if self._text_fade_out.state() == QAbstractAnimation.Running:
+            self._fade_in_after_text = True
+        else:
+            self._text_fade_in.start()
         if self._prev_voice_mode and not self._edit_target:
             self._voice_mode = True
             self._start_listening()
