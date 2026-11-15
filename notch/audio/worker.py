@@ -24,6 +24,18 @@ import sounddevice as sd
 from PyQt5.QtCore import QThread, pyqtSignal
 
 
+# Every partial result used to be printed, which meant the reader's own speech
+# was written to stdout (and, under start-notch.bat, appended to a growing log)
+# at recogniser cadence. The transcript is the reader's words, not diagnostics,
+# so it is only emitted when someone asks for it explicitly.
+_TRACE_TRANSCRIPT = os.environ.get("NOTCH_TRACE_TRANSCRIPT") == "1"
+
+
+def _trace_transcript(kind: str, text: str) -> None:
+    if _TRACE_TRANSCRIPT:
+        print(f"[Notch audio] ({kind}): {text!r}", flush=True)
+
+
 class AudioWorker(QThread):
     """Continuously streams microphone audio and emits volume levels."""
 
@@ -185,12 +197,12 @@ class AudioWorker(QThread):
                 self._last_partial = ""
             return
         if is_final:
-            print(f"[Notch audio] (final): {text!r}", flush=True)
+            _trace_transcript("final", text)
             self.speech_text_signal.emit(text, True)
             self._last_partial = ""
             return
         if text != self._last_partial:
-            print(f"[Notch audio] (partial): {text!r}", flush=True)
+            _trace_transcript("partial", text)
             self.speech_text_signal.emit(text, False)
             self._last_partial = text
 
@@ -205,7 +217,7 @@ class AudioWorker(QThread):
                 text = ""
         self._last_partial = ""
         if text:
-            print(f"[Notch audio] (final): {text!r}", flush=True)
+            _trace_transcript("final", text)
             self.speech_text_signal.emit(text, True)
 
     def _feed_recognizer(self, data: bytes, speech: Optional[bool]):

@@ -1945,8 +1945,8 @@ class NotchOverlay(QWidget):
         txt = " ".join(text.strip().lower().split())  # normalize spaces
         if txt in self._SPEECH_IGNORE_WORDS and not self._is_speaking:
             return  # Skip filler false positives when not actively speaking
-        if text.strip():
-            print(f"[Notch speech] {'(final)' if is_final else '(partial)'}: {text!r}", flush=True)
+        # The worker already logs the transcript when NOTCH_TRACE_TRANSCRIPT is
+        # set; printing it again here wrote every partial twice.
 
         # Voice commands (final only, work even without script)
         if is_final and txt in self._VOICE_COMMANDS:

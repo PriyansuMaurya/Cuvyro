@@ -10,6 +10,7 @@ Run headless:
     QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_robustness.py
 """
 
+import io
 import json
 import os
 import sys
@@ -931,6 +932,19 @@ def main():
               seen == "taken", seen)
         check("the mutex is free again once the reader quits",
               probe_from_another_process() == "free")
+
+    # ── The reader's own words stay out of the log by default ────────
+    from notch.audio import worker as audio_worker
+
+    def trace_output(enabled):
+        buffer = io.StringIO()
+        with patch.object(audio_worker, "_TRACE_TRANSCRIPT", enabled):
+            with patch("sys.stdout", buffer):
+                audio_worker._trace_transcript("partial", "these are my words")
+        return buffer.getvalue()
+
+    check("a transcript is not written unless tracing is switched on",
+          trace_output(False) == "" and "these are my words" in trace_output(True))
 
     for window in (win, menu_win, restored, positioned, import_win):
         with patch.object(QApplication, "quit", lambda *_: None):
