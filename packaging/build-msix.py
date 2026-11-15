@@ -76,7 +76,16 @@ def main():
     with tempfile.TemporaryDirectory(dir=dist, prefix="store-") as directory:
         work = Path(directory)
         stage = work / "package"
-        shutil.copytree(frozen, stage, ignore=shutil.ignore_patterns("notch*.log*"))
+        # The app leaves support logs beside its executable, and a local build
+        # that was run once keeps a notch_log.txt there whose first line is the
+        # install path. None of that belongs in a package the Store serves.
+        shutil.copytree(
+            frozen, stage, ignore=shutil.ignore_patterns("notch*.log*", "notch*.txt")
+        )
+        # Vosk is only the fallback engine and sherpa was verified above, so its
+        # four model folders would add ~140 MB to every download for nothing.
+        for legacy in ("am", "conf", "graph", "ivector"):
+            shutil.rmtree(stage / "model" / legacy, ignore_errors=True)
         manifest = (HERE / "AppxManifest.xml").read_text(encoding="utf-8")
         manifest, count = re.subn(
             r'(<Identity\b[^>]*\bVersion=)"[^"]+"', rf'\g<1>"{args.version}"', manifest
