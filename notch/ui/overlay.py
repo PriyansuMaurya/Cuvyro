@@ -1,4 +1,5 @@
 import gc
+import math
 import os
 import sys
 import time
@@ -530,7 +531,12 @@ class NotchOverlay(QWidget):
     WAVE_REST_H = 1.6        # resting dash height, DIP
     WAVE_MAX_H = 7.0         # tallest bar at full voice, DIP
     WAVE_TOP_MARGIN = 5.0    # baseline height above the card's foot, DIP
-    WAVE_EASE = 0.34         # share of the gap closed per waveform frame
+    # Share of the gap closed per waveform frame, expressed as a time constant
+    # rather than a per-frame fraction: 0.34 per 33 ms frame is a tau of
+    # ~0.082 s. A per-frame constant made the ribbon drain by frame count, so
+    # a busy machine (or a late tick) left a dead microphone's bars standing
+    # for visibly longer than a quiet one.
+    WAVE_EASE_TAU = 0.082
     WAVE_FRAME_SECONDS = 0.030   # 30 fps ceiling, below the 60 fps tick
     WAVE_HOLD_SECONDS = 0.45     # silence after which a dead mic drains
 
@@ -690,6 +696,7 @@ class NotchOverlay(QWidget):
         self._wave_heights = [0.0] * self.WAVE_BARS
         self._wave_last_sample = 0.0
         self._wave_last_frame = 0.0
+        self._wave_step_at = 0.0
 
         # ── Workers ──────────────────────────────────────────────────
         self._audio_worker: Optional[AudioWorker] = None
@@ -1804,6 +1811,13 @@ class NotchOverlay(QWidget):
         if not self._voice_mode or self._edit_mode or self._peeked:
             return False
         now = time.monotonic()
+        if not self._wave_step_at:
+            self._wave_step_at = now
+        elapsed = max(0.0, now - self._wave_step_at)
+        self._wave_step_at = now
+        # The same 0.34-per-33 ms feel, independent of how many frames the host
+        # actually delivered in between.
+        ease = 1.0 - math.exp(-elapsed / self.WAVE_EASE_TAU)
         # Three ways the ribbon goes quiet: a muted mic, a worker that stopped
         # sending (unplugged, killed, muted by the OS), and the voice detector
         # saying nobody is talking. The last one matters most: without it the
@@ -1825,7 +1839,7 @@ class NotchOverlay(QWidget):
                 continue
             # A fixed fraction per step, not a spring: the ribbon never
             # overshoots, and its motion reads as a level, not as elastic.
-            heights[index] = current + delta * self.WAVE_EASE
+            heights[index] = current + delta * ease
             moved = True
         return moved
 
@@ -1853,6 +1867,7 @@ class NotchOverlay(QWidget):
         for index in range(len(heights)):
             heights[index] = 0.0
         self._wave_last_sample = 0.0
+        self._wave_step_at = 0.0
         self._repaint_waveform()
 
     def waveform_layout(self):

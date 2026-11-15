@@ -212,6 +212,20 @@ def main():
           max(win._wave_heights) < 0.02,
           f"tallest bar {max(win._wave_heights):.3f}")
 
+    # The drain must follow the clock, not the number of frames the host
+    # delivered. A busy machine used to leave a dead mic's bars standing for
+    # visibly longer than an idle one, because each frame eased by a fixed
+    # fraction of the gap.
+    win._muted = False
+    win._is_speaking = False
+    win._wave_heights[:] = [1.0] * count
+    win._wave_step_at = time.monotonic() - 0.4
+    win._advance_waveform()
+    check("one late frame drains as far as a frame budget would",
+          max(win._wave_heights) < 0.02,
+          f"tallest bar {max(win._wave_heights):.3f} after a single 400 ms step")
+    win._is_speaking = True          # the next section is a live microphone again
+
     # Repeated loss and recovery must not grow the history without bound.
     for _ in range(120):
         win._on_volume_level(0.5)
