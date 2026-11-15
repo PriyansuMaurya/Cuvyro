@@ -21,6 +21,10 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 ; Per-user install: no UAC prompt, and {app} stays writable for notch_log.txt
 PrivilegesRequired=lowest
+; Same named mutex the app takes at startup (notch/platform/single_instance.py).
+; Setup detects a running reader and asks for it to be closed instead of
+; replacing files underneath it.
+AppMutex=Local\NotchReaderSingleton
 OutputDir=..\dist
 OutputBaseFilename=NotchSetup-{#MyAppVersion}
 Compression=lzma2/max

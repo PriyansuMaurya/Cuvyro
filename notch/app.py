@@ -18,9 +18,11 @@ Right-click the card for mode, typeface, theme, Help, Setup and Quit.
 
 import sys
 
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt
+
+from notch.platform import single_instance
 
 
 def main():
@@ -32,6 +34,17 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Notch")
     app.setStyle("Fusion")
+
+    # One reader per session: a second copy would share the state file, the
+    # global chords and the camera with the first, and the last save wins.
+    if not single_instance.acquire():
+        QMessageBox.information(
+            None, "Notch",
+            "Notch is already running.\n\n"
+            "Use the copy that is already open, or quit it from its menu "
+            "before starting another.")
+        return 0
+    app.aboutToQuit.connect(single_instance.release)
 
     # ── Default font ─────────────────────────────────────────────────
     font = QFont("Segoe UI", 10)

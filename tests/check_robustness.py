@@ -903,6 +903,35 @@ def main():
               str(pixel))
         guide.deleteLater()
 
+    # ── One reader per session ───────────────────────────────────────
+    # Two copies share one state file, one camera and one set of chords; the
+    # last save wins, so the second launch can silently undo the first.
+    from notch.platform import single_instance
+    import subprocess
+
+    def probe_from_another_process():
+        """Ask a fresh interpreter whether it can take the reader's mutex."""
+        code = (
+            "import sys; sys.path.insert(0, %r);"
+            "from notch.platform import single_instance as s;"
+            "print('taken' if not s.acquire() else 'free')" % REPO_ROOT
+        )
+        done = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT,
+                              capture_output=True, text=True, timeout=60)
+        return done.stdout.strip()
+
+    if sys.platform == "win32":
+        check("a reader takes the session mutex at startup",
+              single_instance.acquire())
+        try:
+            seen = probe_from_another_process()
+        finally:
+            single_instance.release()
+        check("a second copy is refused while the reader runs",
+              seen == "taken", seen)
+        check("the mutex is free again once the reader quits",
+              probe_from_another_process() == "free")
+
     for window in (win, menu_win, restored, positioned, import_win):
         with patch.object(QApplication, "quit", lambda *_: None):
             window.close()

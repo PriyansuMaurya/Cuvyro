@@ -69,6 +69,8 @@ Without a speech model, Voice mode reports "Speech recognition unavailable — v
 
 `main.py` is the compatibility launcher; the application itself is `notch.app.main`. `python run.py` is the development launcher and installs the requirements on first use if PyQt5 or sounddevice is missing. `python -m notch` also works. `start-notch.bat` uses `main.py` and appends stdout and stderr to `notch-run.log`.
 
+Only one copy runs at a time. A second launch says the reader is already open and exits, because two copies would share one state file, one camera and one set of global chords. The installer uses the same named mutex, so an upgrade asks for the running reader to be closed instead of replacing files underneath it.
+
 The first Voice session loads the acoustic model before it can hear anything. The menu's status line says it is loading. On the machine used for the engine benchmark that load took 4.2 seconds; the loaded engine is reused until the process exits, so switching to the editor and back does not pay it again.
 
 ## Building a Windows installer
