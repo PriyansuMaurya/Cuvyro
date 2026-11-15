@@ -922,16 +922,24 @@ def main():
         return done.stdout.strip()
 
     if sys.platform == "win32":
-        check("a reader takes the session mutex at startup",
-              single_instance.acquire())
-        try:
-            seen = probe_from_another_process()
-        finally:
-            single_instance.release()
-        check("a second copy is refused while the reader runs",
-              seen == "taken", seen)
-        check("the mutex is free again once the reader quits",
-              probe_from_another_process() == "free")
+        # With a real reader open -- a developer's own window, or a packaged
+        # soak -- the guard is already doing its job and this process cannot
+        # take the mutex. That is not a failure, and reporting it as one made
+        # the suite red precisely when the feature was working.
+        if probe_from_another_process() == "taken":
+            print("SKIP  the session mutex is held by a running reader; "
+                  "close it to exercise this check")
+        else:
+            check("a reader takes the session mutex at startup",
+                  single_instance.acquire())
+            try:
+                seen = probe_from_another_process()
+            finally:
+                single_instance.release()
+            check("a second copy is refused while the reader runs",
+                  seen == "taken", seen)
+            check("the mutex is free again once the reader quits",
+                  probe_from_another_process() == "free")
 
     # ── The reader's own words stay out of the log by default ────────
     from notch.audio import worker as audio_worker
