@@ -1,6 +1,6 @@
 # Changelog
 
-Notch is versioned with [semantic versioning](https://semver.org/): a minor
+Cuvyro is versioned with [semantic versioning](https://semver.org/): a minor
 release adds behaviour, a patch fixes it, and a major release may break a
 saved state or a workflow. Each release is a `vX.Y.Z` tag on `main`; this file
 starts at 1.6.0, and earlier releases are described by their tags and commit
@@ -15,8 +15,8 @@ messages.
   `Cuvyro.exe`, `CuvyroSetup-<version>.exe`, `%APPDATA%\Cuvyro` and
   `CUVYRO_*`. The first launch copies an existing `%APPDATA%\NotchFree`
   forward, so the script, notes and learned speaking profile survive the
-  rename; the old folder is left in place. Entries below describe builds that
-  shipped as Notch.
+  rename; the old folder is left in place. Earlier entries use the
+  current product name.
 
 ### Fixed
 
@@ -28,7 +28,7 @@ messages.
   runner, which reduces animation; `tests/check_note_clearing.py` now covers
   both settings.
 - Launch logs no longer accumulate. Every launch writes its own
-  `notch-<pid>.log` and `notch-fault-<pid>.log`, and nothing removed the
+  `cuvyro-<pid>.log` and `cuvyro-fault-<pid>.log`, and nothing removed the
   previous ones, so a reader started daily kept one session per launch for
   ever. Startup now keeps the five newest sessions and deletes the rest,
   never the running process's own files.
@@ -63,8 +63,8 @@ the freeze, so it ships in the next build rather than this one.
   The stroke is a glyph outline rather than a font weight, so a state change
   cannot re-wrap the line under the reader, and the change crossfades over
   120 ms from the reader's own clock.
-- One palette and one set of springs for every surface. `notch/ui/theme.py`
-  holds the colours, radii and spacing and `notch/ui/motion.py` holds the
+- One palette and one set of springs for every surface. `cuvyro/ui/theme.py`
+  holds the colours, radii and spacing and `cuvyro/ui/motion.py` holds the
   spring presets and crossfade durations, which ends the drift of a note a
   shade off the card it was opened from and of a hover that took 150 ms in
   one place and 170 in another. The sticky note animates for the first time:
@@ -83,11 +83,11 @@ the freeze, so it ships in the next build rather than this one.
   the speech model, which took the process from 208 MB to 89 MB across three
   measured Voice/Manual cycles with no growth across them, and returning to
   Voice reloads it in 3.0-4.2 seconds behind the existing status line.
-- Windowed builds now leave support evidence. `notch.diagnostics` writes a
-  rotating `notch-<pid>.log` beside the executable, falling back to
-  `%LOCALAPPDATA%\NotchFree\logs`, records unhandled exceptions from the
+- Windowed builds now leave support evidence. `cuvyro.diagnostics` writes a
+  rotating `cuvyro-<pid>.log` beside the executable, falling back to
+  `%LOCALAPPDATA%\Cuvyro\logs`, records unhandled exceptions from the
   main thread and from worker threads, and keeps native fault traces in
-  `notch-fault-<pid>.log`. A windowed build has no console, so without this
+  `cuvyro-fault-<pid>.log`. A windowed build has no console, so without this
   a launch-day crash left nothing to read.
 - `tests/soak_packaged.py` is the eight-hour endurance monitor: it hashes the
   packaged tree, runs the exe against an isolated state folder, and fails on
@@ -98,8 +98,8 @@ the freeze, so it ships in the next build rather than this one.
   style processes, and the release workflow now runs it before the installer
   step.
 - A release build can be signed, and a tag refuses to publish one that is not.
-  `packaging/sign.bat` signs from a `.pfx` named by `NOTCH_SIGN_CERT`, the
-  build signs `Notch.exe` before Inno Setup and the installer after it, and the
+  `packaging/sign.bat` signs from a `.pfx` named by `CUVYRO_SIGN_CERT`, the
+  build signs `Cuvyro.exe` before Inno Setup and the installer after it, and the
   workflow restores the certificate from a secret, verifies that both files
   carry a valid timestamped signature, and deletes the certificate afterwards.
   Without a certificate a developer build stays unsigned and says so.
@@ -123,11 +123,11 @@ the freeze, so it ships in the next build rather than this one.
   a script the codepage lacks raised `UnicodeEncodeError` from inside the check
   and read as a hotkey failure.
 - Two copies can no longer run at once. They shared one state file, one camera
-  and one set of global chords, and the last save won. `notch.platform.
+  and one set of global chords, and the last save won. `cuvyro.platform.
   single_instance` takes a session mutex; the window explains the situation and
   exits, and the installer uses the same name as its `AppMutex`.
 - The reader's own words are no longer written to the log at partial cadence,
-  twice per result. Transcript tracing is opt-in with `NOTCH_TRACE_TRANSCRIPT=1`.
+  twice per result. Transcript tracing is opt-in with `CUVYRO_TRACE_TRANSCRIPT=1`.
 - The microphone ribbon drains on a time constant instead of a fixed fraction
   per frame, so an unplugged or muted mic clears in the same wall-clock time on
   a busy host as on an idle one.
@@ -180,7 +180,7 @@ version resource and the README's build command all name 1.6.0.
   `tests/check_predictive_speech.py --live` records a real reading into
   `.sessions/`, and `--replay` decodes that recording again through the same
   worker, which turns one human reading into a repeatable real-audio check.
-- One tooltip layer for every surface (`notch/ui/tooltips.py`). The panel is
+- One tooltip layer for every surface (`cuvyro/ui/tooltips.py`). The panel is
   painted in the menu's material, with the same hairline and bright top edge,
   rounded to 8 DIP on three soft shadow rings, and it is excluded from screen
   capture like the rest of the app. Hovering a control for 650 ms opens it;
@@ -197,10 +197,10 @@ version resource and the README's build command all name 1.6.0.
 
 ### Changed
 
-- The application is a responsibility-based package: `notch/ui`, `notch/audio`,
-  `notch/tracking`, `notch/platform` and `notch/storage`, with shared model and
-  install paths in `notch/paths.py`. `main.py` remains a thin launcher for
-  `start-notch.bat` and the PyInstaller spec.
+- The application is a responsibility-based package: `cuvyro/ui`, `cuvyro/audio`,
+  `cuvyro/tracking`, `cuvyro/platform` and `cuvyro/storage`, with shared model and
+  install paths in `cuvyro/paths.py`. `main.py` remains a thin launcher for
+  `start-cuvyro.bat` and the PyInstaller spec.
 - The repository sits at the workspace root with a single `.gitignore`, so the
   app, its model benchmarks and the Electron rebuild share one history and one
   ignore policy.
