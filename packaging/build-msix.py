@@ -8,6 +8,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
+from zipfile import ZipFile
 
 from PIL import Image
 
@@ -15,6 +17,9 @@ from PIL import Image
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 LOGOS = {"StoreLogo": 50, "Square150x150Logo": 150, "Square44x44Logo": 44}
+IDENTITY = "{http://schemas.microsoft.com/appx/manifest/foundation/windows10}Identity"
+REQUIRED_MODELS = ("sherpa/tokens.txt", "silero_vad.onnx", "face_landmarker.task")
+SHERPA_COMPONENTS = ("encoder", "decoder", "joiner")
 
 
 def store_version(value):
@@ -54,6 +59,28 @@ def write_store_assets(directory):
             icon.resize((size, size), Image.Resampling.LANCZOS).save(directory / f"{name}.png")
 
 
+def verify_package(package, manifest):
+    expected = ET.fromstring(manifest).find(IDENTITY)
+    with ZipFile(package) as archive:
+        actual = ET.fromstring(archive.read("AppxManifest.xml")).find(IDENTITY)
+        if expected is None or actual is None or actual.attrib != expected.attrib:
+            raise SystemExit("The packed MSIX identity differs from its manifest.")
+        paths = {name.replace("\\", "/") for name in archive.namelist()}
+        required = {
+            "Cuvyro.exe",
+            "AppxBlockMap.xml",
+            *(f"model/{name}" for name in REQUIRED_MODELS),
+            *(f"StoreAssets/{name}.png" for name in LOGOS),
+        }
+        missing = required - paths
+        if missing:
+            raise SystemExit(f"MSIX is missing: {', '.join(sorted(missing))}")
+        sherpa = [name for name in paths if name.startswith("model/sherpa/") and name.endswith(".onnx")]
+        for component in SHERPA_COMPONENTS:
+            if not any(component in Path(name).name for name in sherpa):
+                raise SystemExit(f"MSIX is missing the Sherpa {component}.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("version", type=store_version)
@@ -63,10 +90,10 @@ def main():
     if not (frozen / "Cuvyro.exe").is_file() or not (frozen / "_internal").is_dir():
         parser.error("Create the x64 frozen tree with build-installer.bat <version> --freeze-only.")
     models = frozen / "model"
-    for relative in ("sherpa/tokens.txt", "silero_vad.onnx", "face_landmarker.task"):
+    for relative in REQUIRED_MODELS:
         if not (models / relative).is_file():
             parser.error(f"Frozen application is missing model/{relative}")
-    for component in ("encoder", "decoder", "joiner"):
+    for component in SHERPA_COMPONENTS:
         if not any((models / "sherpa").glob(f"*{component}*.onnx")):
             parser.error(f"Frozen application is missing the Sherpa {component}")
 
@@ -96,6 +123,7 @@ def main():
         write_store_assets(stage / "StoreAssets")
         package = work / filename
         subprocess.run([makeappx, "pack", "/d", str(stage), "/p", str(package)], check=True)
+        verify_package(package, manifest)
         package.replace(output)
 
     with output.open("rb") as stream:

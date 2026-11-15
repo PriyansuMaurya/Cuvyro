@@ -6,7 +6,8 @@ REM
 REM  Signing is opt-in through the environment so a developer build stays
 REM  unsigned and a release build signs without editing this script:
 REM
-REM    CUVYRO_SIGN_CERT       path to a .pfx (unset means skip, exit 0)
+REM    CUVYRO_SIGN_THUMBPRINT provider certificate in CurrentUser\My
+REM    CUVYRO_SIGN_CERT       alternative path to a .pfx
 REM    CUVYRO_SIGN_PASSWORD   its password
 REM    CUVYRO_SIGN_TIMESTAMP  RFC 3161 server, default http://timestamp.digicert.com
 REM    CUVYRO_SIGNTOOL        signtool.exe; PATH and the Windows SDK are tried
@@ -24,13 +25,14 @@ setlocal
 set "TARGET=%~1"
 if not defined TARGET goto :no_file
 if not exist "%TARGET%" goto :missing_file
+if defined CUVYRO_SIGN_THUMBPRINT goto :have_thumbprint
 if defined CUVYRO_SIGN_CERT goto :have_cert
 if defined CUVYRO_SIGN_REQUIRED goto :required_without_cert
-echo   sign: %~nx1 left unsigned ^(CUVYRO_SIGN_CERT not set^)
+echo   sign: %~nx1 left unsigned ^(no signing certificate configured^)
 exit /b 0
 
 :required_without_cert
-echo   sign: CUVYRO_SIGN_REQUIRED is set but CUVYRO_SIGN_CERT is not
+echo   sign: CUVYRO_SIGN_REQUIRED is set but CUVYRO_SIGN_CERT is not set and no provider thumbprint was supplied
 exit /b 1
 
 :no_file
@@ -39,6 +41,11 @@ exit /b 1
 
 :missing_file
 echo   sign: file not found: %TARGET%
+exit /b 1
+
+:have_thumbprint
+if not defined CUVYRO_SIGN_CERT goto :have_tool
+echo   sign: configure one signing certificate source
 exit /b 1
 
 :have_cert
@@ -62,8 +69,16 @@ if not defined TIMESTAMP set "TIMESTAMP=http://timestamp.digicert.com"
 echo   sign: %~nx1
 REM `call` on both lines: a .bat named through CUVYRO_SIGNTOOL would otherwise
 REM take over the batch and skip the verification below it.
+if defined CUVYRO_SIGN_THUMBPRINT goto :sign_with_provider
 call "%SIGNTOOL%" sign /fd sha256 /td sha256 /tr "%TIMESTAMP%" /f "%CUVYRO_SIGN_CERT%" /p "%CUVYRO_SIGN_PASSWORD%" "%TARGET%"
 if errorlevel 1 goto :sign_failed
+goto :verify
+
+:sign_with_provider
+call "%SIGNTOOL%" sign /fd sha256 /td sha256 /tr "%TIMESTAMP%" /s My /sha1 "%CUVYRO_SIGN_THUMBPRINT%" "%TARGET%"
+if errorlevel 1 goto :sign_failed
+
+:verify
 call "%SIGNTOOL%" verify /pa /v "%TARGET%" >nul
 if errorlevel 1 goto :verify_failed
 echo   sign: ok %~nx1

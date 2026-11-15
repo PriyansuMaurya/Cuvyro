@@ -3,6 +3,7 @@ REM ============================================================
 REM  Cuvyro - build a Windows installer in one command.
 REM  Usage:  build-installer.bat [version]     (default 1.6.2)
 REM          build-installer.bat [version] --freeze-only    (for MSIX)
+REM          build-installer.bat [version] --installer-only (from a frozen app)
 REM  Output: dist\CuvyroSetup-<version>.exe
 REM
 REM  Signing is opt-in through the CUVYRO_SIGN_* environment; see
@@ -14,6 +15,7 @@ cd /d "%~dp0"
 
 set "VERSION=%~1"
 if "%VERSION%"=="" set "VERSION=1.6.2"
+if /i "%~2"=="--installer-only" goto :installer
 
 set "PY=.venv\Scripts\python.exe"
 REM Prefer `python` (present on CI runners); fall back to the `py` launcher.
@@ -76,6 +78,11 @@ xcopy /e /i /y "model" "dist\Cuvyro\model" >nul
 if errorlevel 1 goto :err
 if /i "%~2"=="--freeze-only" exit /b 0
 
+:installer
+if not exist "dist\Cuvyro\Cuvyro.exe" (
+  echo ERROR: no frozen application in dist\Cuvyro.
+  goto :err
+)
 echo [5/7] Signing the executable...
 call "%~dp0packaging\sign.bat" "dist\Cuvyro\Cuvyro.exe"
 if errorlevel 1 goto :err

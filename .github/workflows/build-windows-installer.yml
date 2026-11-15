@@ -3,13 +3,17 @@ name: Build Windows installer
 on:
   push:
     tags: ["v*"]
+  release:
+    types: [published]
   pull_request:
     paths:
       - '.github/workflows/build-windows-installer.yml'
       - 'build-installer.bat'
-      - 'packaging/build-msix.py'
-      - 'packaging/notch.spec'
-      - 'packaging/AppxManifest.xml'
+      - 'packaging/**'
+      - 'cuvyro/**'
+      - 'main.py'
+      - 'requirements.txt'
+      - 'tests/**'
   workflow_dispatch:
     inputs:
       package:
@@ -26,8 +30,15 @@ permissions:
 
 jobs:
   build:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      && (github.event_name != 'release' || !github.event.release.prerelease)
+      && (github.ref_type != 'tag' || !contains(github.ref_name, '-'))
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      store_version: ${{ steps.version.outputs.store_version }}
+      store_sha256: ${{ steps.msix.outputs.sha256 }}
     defaults:
       run:
         shell: pwsh
@@ -42,21 +53,14 @@ jobs:
           python-version: "3.13"
 
       - name: Resolve version
+        id: version
+        env:
+          DISPATCH_STORE_VERSION: ${{ inputs.store_version || '1.6.2.0' }}
         run: |
-          $version = if ('${{ github.ref_type }}' -eq 'tag') {
-            '${{ github.ref_name }}'.TrimStart('v')
-          } else {
-            '0.0.0-dev'
-          }
-          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "Building version $version"
-
-      # A tag used to publish whatever the runner produced. The eight-hour soak
-      # cannot run on a hosted runner, so the report is archived in the
-      # repository instead and this step refuses a tag that has none. A
-      # dispatch build has no version yet and is not held to it.
-      - name: Require archived soak evidence
-        if: github.ref_type == 'tag' && inputs.package != 'msix'
+          $version = '0.0.0-dev'
+          $storeVersion = $env:DISPATCH_STORE_VERSION
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            if ($env:GITHUB_REF_NAME -cnotmatch '^v([1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})
         run: |
           $report = "docs/release/$env:VERSION-soak-result.json"
           if (-not (Test-Path $report)) {
@@ -112,14 +116,15 @@ jobs:
           if ($size -lt 1MB) { throw "face landmarker is truncated: $size bytes" }
           Write-Host "Face landmarker ready: $size bytes"
 
+      - name: Freeze application
+        shell: cmd
+        run: build-installer.bat %VERSION% --freeze-only
+
       # A tag used to publish without running anything. These are the checks
       # the README documents as offscreen-safe, so a behavioural regression
       # cannot reach the installer. check_diagnostics is included because the
       # only support evidence a windowed build leaves behind is its log: a
       # frozen build that stopped writing one would otherwise ship silently.
-      - name: Install check dependencies
-        run: python -m pip install -r requirements.txt
-
       # A check that blocks holds the job to the six-hour limit, and a tag that
       # dies there publishes nothing at all. Each check therefore runs with a
       # five-minute cap and unbuffered output: a hang names the check and leaves
@@ -138,7 +143,7 @@ jobs:
           $failed = @()
           foreach ($check in $checks) {
             Write-Host "::group::$check"
-            $proc = Start-Process -FilePath 'python' -NoNewWindow -PassThru `
+            $proc = Start-Process -FilePath '.venv/Scripts/python.exe' -NoNewWindow -PassThru `
               -ArgumentList '-u', "tests/$check.py"
             if (-not $proc.WaitForExit(300000)) {
               & taskkill.exe /PID $proc.Id /T /F | Out-Null
@@ -161,133 +166,223 @@ jobs:
             throw "checks failed: $($failed -join ', ')"
           }
 
-      # Signing material never goes into the repository. A tag build restores
-      # the certificate from secrets, signs through packaging/sign.bat, and
-      # deletes it afterwards. Without the secret a tag fails here rather than
-      # publishing an installer nobody can attribute.
-      - name: Restore signing certificate
-        if: github.ref_type == 'tag' && inputs.package != 'msix'
-        env:
-          SIGN_PFX: ${{ secrets.NOTCH_SIGN_CERT_PFX }}
-          SIGN_PASSWORD: ${{ secrets.NOTCH_SIGN_CERT_PASSWORD }}
-        run: |
-          if (-not $env:SIGN_PFX) {
-            throw 'NOTCH_SIGN_CERT_PFX is not configured; a tag cannot publish an unsigned installer.'
-          }
-          $path = Join-Path $env:RUNNER_TEMP 'notch-signing.pfx'
-          [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:SIGN_PFX))
-          if ((Get-Item $path).Length -lt 1) { throw 'the restored certificate is empty' }
-          "NOTCH_SIGN_CERT=$path" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "NOTCH_SIGN_PASSWORD=$env:SIGN_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          'NOTCH_SIGN_REQUIRED=1' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host 'Signing certificate restored'
-
-      # Same one-command flow used locally; version comes from the tag. The
-      # build script signs dist/Notch/Notch.exe before Inno Setup runs and the
-      # installer afterwards, which is the order the verification expects.
-      - name: Build installer
-        if: github.event_name != 'pull_request' && inputs.package != 'msix'
-        shell: cmd
-        run: build-installer.bat %VERSION%
-
-      - name: Freeze application for MSIX
-        if: github.event_name == 'pull_request' || inputs.package == 'msix'
-        shell: cmd
-        run: build-installer.bat %VERSION% --freeze-only
-
       # The frozen tree must carry the same models the checks just exercised.
       # build-installer.bat still accepts a Vosk-only folder for legacy local
       # builds, so the release asserts the shipping configuration explicitly.
       - name: Verify the frozen build carries the tested engines
         run: |
           $required = @(
-            'dist/Notch/model/sherpa/tokens.txt',
-            'dist/Notch/model/silero_vad.onnx',
-            'dist/Notch/model/face_landmarker.task'
+            'dist/Cuvyro/model/sherpa/tokens.txt',
+            'dist/Cuvyro/model/silero_vad.onnx',
+            'dist/Cuvyro/model/face_landmarker.task'
           )
           foreach ($path in $required) {
             if (-not (Test-Path $path)) { throw "release build is missing $path" }
           }
           foreach ($component in @('encoder', 'decoder', 'joiner')) {
-            if (-not (Get-ChildItem 'dist/Notch/model/sherpa' -Filter "*${component}*.onnx")) {
+            if (-not (Get-ChildItem 'dist/Cuvyro/model/sherpa' -Filter "*${component}*.onnx")) {
               throw "Frozen build has no sherpa $component"
             }
           }
           Write-Host 'Frozen models verified'
 
       - name: Build Store MSIX
-        if: github.event_name == 'pull_request' || inputs.package == 'msix'
+        if: github.ref_type == 'tag' || github.event_name == 'pull_request' || inputs.package == 'msix'
+        id: msix
         env:
-          STORE_VERSION: ${{ inputs.store_version || '1.6.2.0' }}
+          STORE_VERSION: ${{ steps.version.outputs.store_version }}
         run: |
-          python -m pip install Pillow
+          .venv/Scripts/python.exe -m pip install Pillow
           if ($LASTEXITCODE -ne 0) { throw 'Could not install Pillow' }
-          python packaging/build-msix.py $env:STORE_VERSION
+          .venv/Scripts/python.exe packaging/build-msix.py $env:STORE_VERSION
           if ($LASTEXITCODE -ne 0) { throw 'MSIX build failed' }
+          $package = "dist/Cuvyro-$env:STORE_VERSION-x64.msix"
+          $sha256 = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash
+          "sha256=$sha256" >> $env:GITHUB_OUTPUT
 
       - name: Upload Store MSIX
-        if: github.event_name == 'pull_request' || inputs.package == 'msix'
+        if: steps.msix.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: Cuvyro-Store-MSIX-x64
-          path: dist/Cuvyro-*.msix
+          path: dist/Cuvyro-${{ steps.version.outputs.store_version }}-x64.msix
           if-no-files-found: error
           retention-days: 30
 
-      - name: Verify installer exists
-        if: github.event_name != 'pull_request' && inputs.package != 'msix'
-        run: |
-          $exe = Get-ChildItem 'dist/NotchSetup-*.exe' -ErrorAction SilentlyContinue
-          if (-not $exe) { throw 'No installer produced' }
-          $exe | ForEach-Object { Write-Host ("{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB)) }
+      - name: Build development installer
+        if: github.ref_type != 'tag' && github.event_name == 'workflow_dispatch' && inputs.package == 'installer'
+        shell: cmd
+        run: build-installer.bat %VERSION% --installer-only
 
-      # Signing is worthless if nobody checks it: verify both artifacts, and
-      # require a timestamp so the signature outlives the certificate.
-      - name: Verify Authenticode signatures
-        if: github.ref_type == 'tag' && inputs.package != 'msix'
+      - name: Upload development installer
+        if: github.ref_type != 'tag' && github.event_name == 'workflow_dispatch' && inputs.package == 'installer'
+        uses: actions/upload-artifact@v4
+        with:
+          name: CuvyroSetup-windows-x64
+          path: dist/CuvyroSetup-${{ steps.version.outputs.version }}.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Archive the frozen payload for signing
+        if: github.ref_type == 'tag' && github.event_name != 'release' && inputs.package != 'msix'
         run: |
-          $files = @('dist/Notch/Notch.exe') + @(Get-ChildItem 'dist/NotchSetup-*.exe' | ForEach-Object FullName)
-          foreach ($file in $files) {
-            $sig = Get-AuthenticodeSignature $file
-            if ($sig.Status -ne 'Valid') { throw "$file is not validly signed: $($sig.Status)" }
-            if (-not $sig.SignerCertificate) { throw "$file has no signer certificate" }
-            if (-not $sig.TimeStamperCertificate) { throw "$file carries no timestamp" }
+          tar.exe -cf Cuvyro-frozen.tar -C dist Cuvyro
+          if ($LASTEXITCODE -ne 0) { throw 'Could not archive the frozen payload' }
+
+      - name: Upload frozen payload
+        if: github.ref_type == 'tag' && github.event_name != 'release' && inputs.package != 'msix'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cuvyro-frozen
+          path: Cuvyro-frozen.tar
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  sign_installer:
+    if: github.ref_type == 'tag' && github.event_name != 'release' && inputs.package != 'msix'
+    needs: build
+    runs-on: ${{ vars.CUVYRO_SIGN_RUNNER || 'windows-latest' }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: Cuvyro-frozen
+          path: ${{ runner.temp }}/cuvyro-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Extract the frozen payload
+        env:
+          PAYLOAD: ${{ runner.temp }}/cuvyro-${{ github.run_id }}-${{ github.run_attempt }}/Cuvyro-frozen.tar
+        run: |
+          if (Test-Path dist) { Remove-Item dist -Recurse -Force }
+          New-Item -ItemType Directory dist | Out-Null
+          tar.exe -xf $env:PAYLOAD -C dist
+          if ($LASTEXITCODE -ne 0) { throw 'Could not extract the frozen payload' }
+
+      - name: Sign the application and installer
+        env:
+          CUVYRO_SIGN_REQUIRED: '1'
+          CUVYRO_SIGN_THUMBPRINT: ${{ vars.CUVYRO_SIGN_THUMBPRINT }}
+          CUVYRO_SIGN_PASSWORD: ${{ secrets.NOTCH_SIGN_CERT_PASSWORD }}
+          SIGN_PFX: ${{ secrets.NOTCH_SIGN_CERT_PFX }}
+        run: |
+          $certPath = Join-Path $env:RUNNER_TEMP ("cuvyro-" + [guid]::NewGuid() + ".pfx")
+          try {
+            if ($env:CUVYRO_SIGN_THUMBPRINT) {
+              if ($env:CUVYRO_SIGN_THUMBPRINT -notmatch '^[0-9a-fA-F]{40}$') {
+                throw 'CUVYRO_SIGN_THUMBPRINT must be a 40-character certificate thumbprint.'
+              }
+            } elseif ($env:SIGN_PFX) {
+              [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:SIGN_PFX))
+              $env:CUVYRO_SIGN_CERT = $certPath
+            } else {
+              throw 'Configure a provider-backed certificate for GitHub EXE releases.'
+            }
+            Remove-Item Env:SIGN_PFX -ErrorAction SilentlyContinue
+            & cmd.exe /d /c build-installer.bat $env:VERSION --installer-only
+            if ($LASTEXITCODE -ne 0) { throw 'Signed installer build failed.' }
+          } finally {
+            if (Test-Path -LiteralPath $certPath) { Remove-Item -Force -LiteralPath $certPath }
+          }
+
+      - name: Verify Authenticode signatures
+        env:
+          SIGN_THUMBPRINT: ${{ vars.CUVYRO_SIGN_THUMBPRINT }}
+        run: |
+          foreach ($file in @('dist/Cuvyro/Cuvyro.exe', "dist/CuvyroSetup-$env:VERSION.exe")) {
+            $sig = Get-AuthenticodeSignature -LiteralPath $file
+            if ($sig.Status -ne 'Valid' -or !$sig.SignerCertificate -or !$sig.TimeStamperCertificate) {
+              throw "$file has no valid, timestamped Authenticode signature ($($sig.Status))."
+            }
+            if ($env:SIGN_THUMBPRINT -and $sig.SignerCertificate.Thumbprint -ne $env:SIGN_THUMBPRINT) {
+              throw "$file was signed by a different certificate."
+            }
             Write-Host ("signed: {0} by {1}" -f (Split-Path $file -Leaf), $sig.SignerCertificate.Subject)
           }
 
-      - name: Remove signing certificate
-        if: always() && github.ref_type == 'tag' && inputs.package != 'msix'
-        run: |
-          $path = Join-Path $env:RUNNER_TEMP 'notch-signing.pfx'
-          if (Test-Path $path) { Remove-Item -Force $path }
-          Write-Host 'Signing certificate removed'
-
-      - name: Upload installer artifact
-        if: github.event_name != 'pull_request' && inputs.package != 'msix'
+      - name: Upload signed installer
         uses: actions/upload-artifact@v4
         with:
-          name: NotchSetup-windows-x64
-          path: dist/NotchSetup-*.exe
+          name: CuvyroSetup-windows-x64
+          path: dist/CuvyroSetup-${{ needs.build.outputs.version }}.exe
           if-no-files-found: error
           retention-days: 30
 
-  publish:
-    if: github.ref_type == 'tag' && inputs.package != 'msix'
-    needs: build
+      - name: Remove the temporary frozen payload
+        if: always()
+        env:
+          PAYLOAD_DIR: ${{ runner.temp }}/cuvyro-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          if (Test-Path -LiteralPath $env:PAYLOAD_DIR) {
+            Remove-Item -LiteralPath $env:PAYLOAD_DIR -Recurse -Force
+          }
+
+  github_release:
+    needs: [build, sign_installer]
     runs-on: windows-latest
     permissions:
       contents: write
+    outputs:
+      published: ${{ steps.release_status.outputs.published }}
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: NotchSetup-windows-x64
+          name: CuvyroSetup-windows-x64
           path: dist
-      - name: Attach installer to release
+      - name: Attach signed installer to release
         uses: softprops/action-gh-release@v2
         with:
-          # The title carries the product name, Cuvyro, rather than the tag
-          # alone, so the releases page reads as the app instead of a version.
           name: Cuvyro ${{ github.ref_name }}
-          files: dist/NotchSetup-*.exe
+          files: dist/CuvyroSetup-${{ needs.build.outputs.version }}.exe
           generate_release_notes: true
           fail_on_unmatched_files: true
+      - name: Check the GitHub release is published
+        id: release_status
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $published = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME" --jq '(.draft == false and .prerelease == false)'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify the GitHub release status.' }
+          "published=$published" >> $env:GITHUB_OUTPUT
+
+  store_submission:
+    # GITHUB_TOKEN-created releases do not emit a new Actions run. A human
+    # publishing a stable release reaches this job through the release event.
+    if: >-
+      !cancelled() && needs.build.result == 'success'
+      && (github.event_name == 'release' || needs.github_release.outputs.published == 'true')
+    needs: [build, github_release]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    concurrency:
+      group: cuvyro-store-9MX46V9WW83Q
+      queue: max
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: Cuvyro-Store-MSIX-x64
+          path: dist
+      - uses: microsoft/microsoft-store-apppublisher@v1.1
+      - name: Submit the verified MSIX for certification
+        env:
+          STORE_VERSION: ${{ needs.build.outputs.store_version }}
+          STORE_SHA256: ${{ needs.build.outputs.store_sha256 }}
+          STORE_TENANT_ID: ${{ secrets.STORE_TENANT_ID }}
+          STORE_CLIENT_ID: ${{ secrets.STORE_CLIENT_ID }}
+          STORE_CLIENT_SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
+          STORE_SELLER_ID: ${{ secrets.STORE_SELLER_ID }}
+        run: packaging/publish-store.ps1
