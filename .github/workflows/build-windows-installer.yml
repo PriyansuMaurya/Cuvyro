@@ -285,6 +285,9 @@ jobs:
       - name: Attach installer to release
         uses: softprops/action-gh-release@v2
         with:
+          # The title carries the product name, Cuvyro, rather than the tag
+          # alone, so the releases page reads as the app instead of a version.
+          name: Cuvyro ${{ github.ref_name }}
           files: dist/NotchSetup-*.exe
           generate_release_notes: true
           fail_on_unmatched_files: true
