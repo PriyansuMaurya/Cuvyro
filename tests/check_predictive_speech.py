@@ -664,6 +664,12 @@ def run_replay(target, script_override=None, trace=None):
 
 
 def main():
+    # The first-run guide is modal. A machine that has never run Notch (a
+    # runner, a new laptop) would block on it instead of starting, so the
+    # check states the machine it describes. check_note_clearing, the
+    # robustness check and the upgrade check do the same.
+    from PyQt5.QtCore import QSettings
+    QSettings("Notch", "Notch").setValue("guide_seen", True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true",
                         help="use the real microphone and record the session")

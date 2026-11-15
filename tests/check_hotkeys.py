@@ -65,6 +65,12 @@ def os_chord(*keys):
 
 
 def main():
+    # The first-run guide is modal. A machine that has never run Notch (a
+    # runner, a new laptop) would block on it instead of starting, so the
+    # check states the machine it describes. check_note_clearing, the
+    # robustness check and the upgrade check do the same.
+    from PyQt5.QtCore import QSettings
+    QSettings("Notch", "Notch").setValue("guide_seen", True)
     app = QApplication(sys.argv)
     from notch.platform import hotkeys as hk
     from notch.ui import overlay as ui_overlay

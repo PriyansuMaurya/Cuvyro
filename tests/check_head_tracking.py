@@ -1199,6 +1199,12 @@ def check_integration():
 
 
 def main():
+    # The first-run guide is modal. A machine that has never run Notch (a
+    # runner, a new laptop) would block on it instead of starting, so the
+    # check states the machine it describes. check_note_clearing, the
+    # robustness check and the upgrade check do the same.
+    from PyQt5.QtCore import QSettings
+    QSettings("Notch", "Notch").setValue("guide_seen", True)
     print(f"head tracking — camera {CAMERA_HZ:.0f} Hz, render {FRAME_HZ:.0f} Hz")
     print(f"grid {ht.GRID_COLUMNS}x{ht.GRID_ROWS} over the top "
           f"{ht.TOP_SHARE * 100:.0f}% of the display")
