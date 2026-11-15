@@ -37,6 +37,10 @@ Pre-launch hardening found by an independent read of the shipping paths.
   face landmarker, asserts them, and verifies the frozen tree carries them.
 - A tag can no longer publish an untested build. The release workflow runs the
   offscreen checks before the installer step and fails on any non-zero check.
+- The system-wide hotkey check no longer dies while reporting. It printed the
+  foreground window's title through the console codepage, so a window named in
+  a script the codepage lacks raised `UnicodeEncodeError` from inside the check
+  and read as a hotkey failure.
 - Two copies can no longer run at once. They shared one state file, one camera
   and one set of global chords, and the last save won. `notch.platform.
   single_instance` takes a session mutex; the window explains the situation and

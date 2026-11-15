@@ -22,6 +22,16 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)
 
+# The focus checks print the foreground window's title, and a title is whatever
+# the application in front calls itself. Redirected output uses the console
+# codepage, so a CJK title under cp1252 raised UnicodeEncodeError from inside
+# the report and took the whole check down with it.
+for stream in (sys.stdout, sys.stderr):
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 failures = []
 
 
