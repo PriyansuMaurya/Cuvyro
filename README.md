@@ -81,6 +81,27 @@ build-installer.bat 1.6.2
 
 The script creates or reuses `.venv`, installs the requirements plus PyInstaller, checks for the model files, freezes the app with `packaging/notch.spec`, copies `model/` beside `Notch.exe`, and compiles the installer with Inno Setup 6. The result is `dist\NotchSetup-<version>.exe`. Inno Setup can be installed with `winget install JRSoftware.InnoSetup`.
 
+## Microsoft Store package
+
+In GitHub Actions, run **Build Windows installer**, choose `msix`, and enter a
+Store package version such as `1.6.2.0`. Download the
+`Cuvyro-Store-MSIX-x64` artifact and extract the `.msix` file for the Cuvyro
+submission in Partner Center. Microsoft signs the package for Store distribution
+after certification. The Store package uses the Crispr Labs publisher identity
+and runs on Windows 10 version 2004 or later.
+
+To build locally with the Windows SDK and the models above:
+
+```bat
+build-installer.bat 1.6.2 --freeze-only
+.venv\Scripts\python.exe -m pip install Pillow
+.venv\Scripts\python.exe packaging\build-msix.py 1.6.2.0
+```
+
+The MSIX workflow shares the installer workflow's application checks and model
+downloads. Before submission, test the packaged app on Windows, including
+Voice mode, microphone access, global shortcuts and settings persistence.
+
 ## Using Notch
 
 ### The card

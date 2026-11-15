@@ -3,13 +3,30 @@ name: Build Windows installer
 on:
   push:
     tags: ["v*"]
+  pull_request:
+    paths:
+      - '.github/workflows/build-windows-installer.yml'
+      - 'build-installer.bat'
+      - 'packaging/build-msix.py'
+      - 'packaging/notch.spec'
+      - 'packaging/AppxManifest.xml'
   workflow_dispatch:
+    inputs:
+      package:
+        description: Windows package to build
+        type: choice
+        options: [installer, msix]
+        default: installer
+      store_version:
+        description: MSIX version (major.minor.patch.0)
+        default: '1.6.2.0'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-latest
     defaults:
       run:
@@ -39,7 +56,7 @@ jobs:
       # repository instead and this step refuses a tag that has none. A
       # dispatch build has no version yet and is not held to it.
       - name: Require archived soak evidence
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' && inputs.package != 'msix'
         run: |
           $report = "docs/release/$env:VERSION-soak-result.json"
           if (-not (Test-Path $report)) {
@@ -149,7 +166,7 @@ jobs:
       # deletes it afterwards. Without the secret a tag fails here rather than
       # publishing an installer nobody can attribute.
       - name: Restore signing certificate
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' && inputs.package != 'msix'
         env:
           SIGN_PFX: ${{ secrets.NOTCH_SIGN_CERT_PFX }}
           SIGN_PASSWORD: ${{ secrets.NOTCH_SIGN_CERT_PASSWORD }}
@@ -169,8 +186,14 @@ jobs:
       # build script signs dist/Notch/Notch.exe before Inno Setup runs and the
       # installer afterwards, which is the order the verification expects.
       - name: Build installer
+        if: github.event_name != 'pull_request' && inputs.package != 'msix'
         shell: cmd
         run: build-installer.bat %VERSION%
+
+      - name: Freeze application for MSIX
+        if: github.event_name == 'pull_request' || inputs.package == 'msix'
+        shell: cmd
+        run: build-installer.bat %VERSION% --freeze-only
 
       # The frozen tree must carry the same models the checks just exercised.
       # build-installer.bat still accepts a Vosk-only folder for legacy local
@@ -185,11 +208,34 @@ jobs:
           foreach ($path in $required) {
             if (-not (Test-Path $path)) { throw "release build is missing $path" }
           }
-          $encoder = Get-ChildItem 'dist/Notch/model/sherpa' -Filter '*encoder*.onnx'
-          if (-not $encoder) { throw 'release build has no sherpa encoder' }
-          Write-Host "Frozen models verified: $(($required + $encoder.FullName).Count) files"
+          foreach ($component in @('encoder', 'decoder', 'joiner')) {
+            if (-not (Get-ChildItem 'dist/Notch/model/sherpa' -Filter "*${component}*.onnx")) {
+              throw "Frozen build has no sherpa $component"
+            }
+          }
+          Write-Host 'Frozen models verified'
+
+      - name: Build Store MSIX
+        if: github.event_name == 'pull_request' || inputs.package == 'msix'
+        env:
+          STORE_VERSION: ${{ inputs.store_version || '1.6.2.0' }}
+        run: |
+          python -m pip install Pillow
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install Pillow' }
+          python packaging/build-msix.py $env:STORE_VERSION
+          if ($LASTEXITCODE -ne 0) { throw 'MSIX build failed' }
+
+      - name: Upload Store MSIX
+        if: github.event_name == 'pull_request' || inputs.package == 'msix'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cuvyro-Store-MSIX-x64
+          path: dist/Cuvyro-*.msix
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Verify installer exists
+        if: github.event_name != 'pull_request' && inputs.package != 'msix'
         run: |
           $exe = Get-ChildItem 'dist/NotchSetup-*.exe' -ErrorAction SilentlyContinue
           if (-not $exe) { throw 'No installer produced' }
@@ -198,7 +244,7 @@ jobs:
       # Signing is worthless if nobody checks it: verify both artifacts, and
       # require a timestamp so the signature outlives the certificate.
       - name: Verify Authenticode signatures
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' && inputs.package != 'msix'
         run: |
           $files = @('dist/Notch/Notch.exe') + @(Get-ChildItem 'dist/NotchSetup-*.exe' | ForEach-Object FullName)
           foreach ($file in $files) {
@@ -210,13 +256,14 @@ jobs:
           }
 
       - name: Remove signing certificate
-        if: always() && github.ref_type == 'tag'
+        if: always() && github.ref_type == 'tag' && inputs.package != 'msix'
         run: |
           $path = Join-Path $env:RUNNER_TEMP 'notch-signing.pfx'
           if (Test-Path $path) { Remove-Item -Force $path }
           Write-Host 'Signing certificate removed'
 
       - name: Upload installer artifact
+        if: github.event_name != 'pull_request' && inputs.package != 'msix'
         uses: actions/upload-artifact@v4
         with:
           name: NotchSetup-windows-x64
@@ -224,8 +271,18 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  publish:
+    if: github.ref_type == 'tag' && inputs.package != 'msix'
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: NotchSetup-windows-x64
+          path: dist
       - name: Attach installer to release
-        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           files: dist/NotchSetup-*.exe
