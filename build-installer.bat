@@ -3,6 +3,10 @@ REM ============================================================
 REM  Notch - build a Windows installer in one command.
 REM  Usage:  build-installer.bat [version]     (default 1.6.1)
 REM  Output: dist\NotchSetup-<version>.exe
+REM
+REM  Signing is opt-in through the NOTCH_SIGN_* environment; see
+REM  packaging\sign.bat. The exe is signed before the installer is compiled and
+REM  the installer afterwards, which is the order a release verifies.
 REM ============================================================
 setlocal
 cd /d "%~dp0"
@@ -14,9 +18,9 @@ set "PY=.venv\Scripts\python.exe"
 REM Prefer `python` (present on CI runners); fall back to the `py` launcher.
 REM Each check re-tests the result instead of relying on a variable, because
 REM %VAR% expands at parse time inside a parenthesised block.
-if exist "%PY%" echo [1/5] Virtual environment found.
+if exist "%PY%" echo [1/7] Virtual environment found.
 if not exist "%PY%" (
-  echo [1/5] Creating virtual environment...
+  echo [1/7] Creating virtual environment...
   python -m venv .venv
 )
 if not exist "%PY%" (
@@ -28,7 +32,7 @@ if not exist "%PY%" (
   goto :err
 )
 
-echo [2/5] Installing dependencies...
+echo [2/7] Installing dependencies...
 "%PY%" -m pip install -q -r requirements.txt pyinstaller
 if errorlevel 1 goto :err
 
@@ -55,7 +59,7 @@ if not exist "model\face_landmarker.task" (
   goto :err
 )
 
-echo [3/5] Freezing app with PyInstaller...
+echo [3/7] Freezing app with PyInstaller...
 if exist "build" rmdir /s /q "build"
 if exist "dist" rmdir /s /q "dist"
 "%PY%" -m PyInstaller --noconfirm --clean packaging\notch.spec
@@ -66,11 +70,15 @@ if not exist "dist\Notch\Notch.exe" (
   goto :err
 )
 
-echo [4/5] Placing the model folder next to the executable...
+echo [4/7] Placing the model folder next to the executable...
 xcopy /e /i /y "model" "dist\Notch\model" >nul
 if errorlevel 1 goto :err
 
-echo [5/5] Compiling installer with Inno Setup...
+echo [5/7] Signing the executable...
+call "%~dp0packaging\sign.bat" "dist\Notch\Notch.exe"
+if errorlevel 1 goto :err
+
+echo [6/7] Compiling installer with Inno Setup...
 set "ISCC="
 if exist "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" set "ISCC=%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe"
 if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
@@ -82,6 +90,10 @@ if not defined ISCC (
 )
 
 "%ISCC%" /Q /DMyAppVersion=%VERSION% packaging\notch.iss
+if errorlevel 1 goto :err
+
+echo [7/7] Signing the installer...
+call "%~dp0packaging\sign.bat" "dist\NotchSetup-%VERSION%.exe"
 if errorlevel 1 goto :err
 
 echo.

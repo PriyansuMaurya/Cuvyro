@@ -26,6 +26,16 @@ Pre-launch hardening found by an independent read of the shipping paths.
 - `tests/check_diagnostics.py` proves exception capture in fresh windowed-
   style processes, and the release workflow now runs it before the installer
   step.
+- A release build can be signed, and a tag refuses to publish one that is not.
+  `packaging/sign.bat` signs from a `.pfx` named by `NOTCH_SIGN_CERT`, the
+  build signs `Notch.exe` before Inno Setup and the installer after it, and the
+  workflow restores the certificate from a secret, verifies that both files
+  carry a valid timestamped signature, and deletes the certificate afterwards.
+  Without a certificate a developer build stays unsigned and says so.
+- A tag refuses to build a version with no archived soak. The workflow reads
+  `docs/release/<version>-soak-result.json` and fails unless it reports PASS
+  for at least the full 28,800 seconds with a packaged-file manifest, which is
+  the check that was missing when the harness landed.
 
 ### Fixed
 

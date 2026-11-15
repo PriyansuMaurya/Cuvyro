@@ -43,7 +43,8 @@ diff.
 - `tests/` holds the standalone checks, the screenshot harnesses and their
   fixture. They run from the repository root and put it on `sys.path` before
   importing `notch`.
-- `packaging/` holds only build configuration and the icon sources.
+- `packaging/` holds only build configuration, the signing helper and the
+  icon sources.
 - `assets/` and `docs/` are presentation material, not runtime code.
 
 ## Checks
@@ -68,6 +69,7 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/profile_reading.py
 .venv/Scripts/python.exe tests/check_design.py      # needs a real display
 .venv/Scripts/python.exe tests/check_quality.py     # needs a real display
 .venv/Scripts/python.exe tests/check_hotkeys.py     # needs Windows and a real display
+.venv/Scripts/python.exe tests/check_signing.py     # needs Windows
 ```
 
 `tests/check_hotkeys.py` registers the real system-wide chords and presses them
@@ -75,6 +77,16 @@ with OS-level keyboard events while another application owns the foreground, so
 it needs Windows: `RegisterHotKey` is an operating-system service. It checks
 delivery, focus preservation, conflict reporting (error 1409), the Voice-mode
 no-op, and release on close.
+
+`tests/check_signing.py` pins the helper the release build cannot skip. It puts
+a stub in front of signtool, so no certificate is involved, and asserts that
+`packaging/sign.bat` leaves a developer build unsigned, refuses that path when
+`NOTCH_SIGN_REQUIRED` is set, treats a missing certificate or a missing
+signtool as an error rather than a skip, hands the certificate and timestamp
+server to signtool, verifies the signature after signing, and fails the build
+when either step fails. The helper is label-based on purpose: cmd returns 0 for
+an `exit /b N` sitting inside two levels of parentheses, which is exactly how a
+refused signature would have become a pass.
 
 `tests/verify_installed.py` does the same against the exe the installer
 produced (rebuild with `build-installer.bat`, install it, then run the check).

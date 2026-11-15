@@ -34,6 +34,29 @@ jobs:
           "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "Building version $version"
 
+      # A tag used to publish whatever the runner produced. The eight-hour soak
+      # cannot run on a hosted runner, so the report is archived in the
+      # repository instead and this step refuses a tag that has none. A
+      # dispatch build has no version yet and is not held to it.
+      - name: Require archived soak evidence
+        if: github.ref_type == 'tag'
+        run: |
+          $report = "docs/release/$env:VERSION-soak-result.json"
+          if (-not (Test-Path $report)) {
+            throw "No soak evidence for $env:VERSION. Archive docs/release/$env:VERSION-soak-result.json from a packaged run."
+          }
+          $soak = Get-Content $report -Raw | ConvertFrom-Json
+          if ($soak.status -ne 'PASS') { throw "The archived soak for $env:VERSION is $($soak.status), not PASS." }
+          if ([double]$soak.required_seconds -lt 28800) {
+            throw "The archived soak asked for $($soak.required_seconds) s, not the 28,800 a release requires."
+          }
+          if ([double]$soak.elapsed_seconds -lt [double]$soak.required_seconds) {
+            throw "The archived soak ran $($soak.elapsed_seconds) s of $($soak.required_seconds)."
+          }
+          $hashed = ($soak.files_sha256.PSObject.Properties | Measure-Object).Count
+          if ($hashed -lt 1) { throw "The archived soak carries no packaged-file manifest." }
+          Write-Host "Soak evidence: PASS, $($soak.elapsed_seconds) s, $hashed packaged files hashed"
+
       # The app ships and is measured against sherpa-onnx zipformer + Silero
       # VAD. model/ is not tracked, so the runner has to fetch every file the
       # build expects; fetching only the Vosk fallback published an installer
@@ -88,7 +111,8 @@ jobs:
             'check_speech_engine', 'check_robustness', 'check_note_clearing',
             'check_note_placement', 'check_motion', 'check_upgrades',
             'check_head_tracking', 'check_storage', 'check_diagnostics',
-            'check_predictive_highlight', 'check_predictive_speech'
+            'check_predictive_highlight', 'check_predictive_speech',
+            'check_signing'
           )
           foreach ($check in $checks) {
             Write-Host "::group::$check"
@@ -97,7 +121,30 @@ jobs:
             Write-Host '::endgroup::'
           }
 
-      # Same one-command flow used locally; version comes from the tag.
+      # Signing material never goes into the repository. A tag build restores
+      # the certificate from secrets, signs through packaging/sign.bat, and
+      # deletes it afterwards. Without the secret a tag fails here rather than
+      # publishing an installer nobody can attribute.
+      - name: Restore signing certificate
+        if: github.ref_type == 'tag'
+        env:
+          SIGN_PFX: ${{ secrets.NOTCH_SIGN_CERT_PFX }}
+          SIGN_PASSWORD: ${{ secrets.NOTCH_SIGN_CERT_PASSWORD }}
+        run: |
+          if (-not $env:SIGN_PFX) {
+            throw 'NOTCH_SIGN_CERT_PFX is not configured; a tag cannot publish an unsigned installer.'
+          }
+          $path = Join-Path $env:RUNNER_TEMP 'notch-signing.pfx'
+          [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:SIGN_PFX))
+          if ((Get-Item $path).Length -lt 1) { throw 'the restored certificate is empty' }
+          "NOTCH_SIGN_CERT=$path" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "NOTCH_SIGN_PASSWORD=$env:SIGN_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          'NOTCH_SIGN_REQUIRED=1' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host 'Signing certificate restored'
+
+      # Same one-command flow used locally; version comes from the tag. The
+      # build script signs dist/Notch/Notch.exe before Inno Setup runs and the
+      # installer afterwards, which is the order the verification expects.
       - name: Build installer
         shell: cmd
         run: build-installer.bat %VERSION%
@@ -124,6 +171,27 @@ jobs:
           $exe = Get-ChildItem 'dist/NotchSetup-*.exe' -ErrorAction SilentlyContinue
           if (-not $exe) { throw 'No installer produced' }
           $exe | ForEach-Object { Write-Host ("{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB)) }
+
+      # Signing is worthless if nobody checks it: verify both artifacts, and
+      # require a timestamp so the signature outlives the certificate.
+      - name: Verify Authenticode signatures
+        if: github.ref_type == 'tag'
+        run: |
+          $files = @('dist/Notch/Notch.exe') + @(Get-ChildItem 'dist/NotchSetup-*.exe' | ForEach-Object FullName)
+          foreach ($file in $files) {
+            $sig = Get-AuthenticodeSignature $file
+            if ($sig.Status -ne 'Valid') { throw "$file is not validly signed: $($sig.Status)" }
+            if (-not $sig.SignerCertificate) { throw "$file has no signer certificate" }
+            if (-not $sig.TimeStamperCertificate) { throw "$file carries no timestamp" }
+            Write-Host ("signed: {0} by {1}" -f (Split-Path $file -Leaf), $sig.SignerCertificate.Subject)
+          }
+
+      - name: Remove signing certificate
+        if: always() && github.ref_type == 'tag'
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP 'notch-signing.pfx'
+          if (Test-Path $path) { Remove-Item -Force $path }
+          Write-Host 'Signing certificate removed'
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
