@@ -495,6 +495,13 @@ def main():
         win._dark_theme = dark
         win._apply_read_mode_style()
         win._apply_control_theme()
+        # This asserts the control's own shape and fill, so the rail has to be
+        # awake. Three seconds of stillness legitimately dissolves it (that is
+        # checked separately in check_quality); measuring during the fade used
+        # to report a half-transparent circle as a broken one whenever the host
+        # was slow enough for the idle timer to fire first.
+        win._wake_chrome()
+        wait_until(lambda: win._chrome_opacity.opacity() >= 0.99, 1500)
         win.update()
         QTest.qWait(80)
         image = win.grab().toImage()
