@@ -10,6 +10,13 @@ messages.
 
 ### Fixed
 
+- Leaving the editor commits the edit again when Windows animations are
+  reduced. The card lands in the same turn as the toggle, so the fade back in
+  started before the fade out had finished and stopped it; the handler that
+  commits the script and returns the reader lived in that fade, so Done looked
+  dead and the edit was never stored. Found by the release checks on a CI
+  runner, which reduces animation; `tests/check_note_clearing.py` now covers
+  both settings.
 - Launch logs no longer accumulate. Every launch writes its own
   `notch-<pid>.log` and `notch-fault-<pid>.log`, and nothing removed the
   previous ones, so a reader started daily kept one session per launch for
