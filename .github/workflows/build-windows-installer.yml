@@ -60,7 +60,23 @@ jobs:
           $version = '0.0.0-dev'
           $storeVersion = $env:DISPATCH_STORE_VERSION
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
-            if ($env:GITHUB_REF_NAME -cnotmatch '^v([1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})
+            if ($env:GITHUB_REF_NAME -cnotmatch '^v([1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$') {
+              throw 'Use a stable tag in the form vMAJOR.MINOR.PATCH.'
+            }
+            $version = $env:GITHUB_REF_NAME.Substring(1)
+            $storeVersion = "$version.0"
+            foreach ($component in $version.Split('.')) {
+              if ([int]$component -gt 65535) { throw 'A version component exceeds 65535.' }
+            }
+          }
+          "VERSION=$version" >> $env:GITHUB_ENV
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "store_version=$storeVersion" >> $env:GITHUB_OUTPUT
+          Write-Host "Building version $version (Store $storeVersion)"
+
+      # A stable release must carry the archived result of the eight-hour soak.
+      - name: Require archived soak evidence
+        if: github.ref_type == 'tag' && inputs.package != 'msix'
         run: |
           $report = "docs/release/$env:VERSION-soak-result.json"
           if (-not (Test-Path $report)) {
