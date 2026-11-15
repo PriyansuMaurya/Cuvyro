@@ -103,6 +103,10 @@ jobs:
       - name: Install check dependencies
         run: python -m pip install -r requirements.txt
 
+      # A check that blocks holds the job to the six-hour limit, and a tag that
+      # dies there publishes nothing at all. Each check therefore runs with a
+      # five-minute cap and unbuffered output: a hang names the check and leaves
+      # the line it stopped on, instead of a silent gap behind a group header.
       - name: Run offscreen checks
         run: |
           $env:QT_QPA_PLATFORM = 'offscreen'
@@ -116,9 +120,17 @@ jobs:
           )
           foreach ($check in $checks) {
             Write-Host "::group::$check"
-            python "tests/$check.py"
-            if ($LASTEXITCODE -ne 0) { throw "$check failed" }
+            $proc = Start-Process -FilePath 'python' -NoNewWindow -PassThru `
+              -ArgumentList '-u', "tests/$check.py"
+            if (-not $proc.WaitForExit(300000)) {
+              & taskkill.exe /PID $proc.Id /T /F | Out-Null
+              Write-Host '::endgroup::'
+              throw "$check did not finish within 300 seconds"
+            }
+            $proc.WaitForExit()
+            $code = $proc.ExitCode
             Write-Host '::endgroup::'
+            if ($code -ne 0) { throw "$check failed with exit code $code" }
           }
 
       # Signing material never goes into the repository. A tag build restores
