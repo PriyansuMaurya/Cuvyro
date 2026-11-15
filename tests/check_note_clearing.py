@@ -167,6 +167,9 @@ def main():
     check("a new script opens with no notes over it",
           not recovered._notes and not visible_notes(),
           f"{len(recovered._notes)} open")
+    # The subject is what the store holds, not how soon the debounced save
+    # lands: commit what the reader is holding, then read it back.
+    recovered._save_state()
     check("the new script stores no note of its own",
           state_file(tmp).get("notes") == [],
           repr(state_file(tmp).get("notes")))

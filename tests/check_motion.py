@@ -103,6 +103,11 @@ def drag(note, delta, gap_ms=20):
 
 
 def main():
+    # This check is about motion, so it describes a machine that allows it.
+    # Windows can be told to reduce animation and a CI runner usually is,
+    # which would make every surface answer instantly and fail every
+    # assertion about a spring. The reduced path is exercised explicitly.
+    os.environ["NOTCH_REDUCED_MOTION"] = "0"
     app = QApplication(sys.argv)
     from notch.ui import motion, theme
     from notch.ui.notes import NoteWindow, NOTE_H, NOTE_W
@@ -379,7 +384,7 @@ def main():
     check("reduced motion: recolouring has no dissolve",
           getattr(instant, "_theme_fade", None) is None)
     instant.close()
-    del os.environ["NOTCH_REDUCED_MOTION"]
+    os.environ["NOTCH_REDUCED_MOTION"] = "0"  # back to the path this check describes
 
     # ── Dragging and the release coast ──────────────────────────────────
     dragged = NoteWindow(scale=1.0, dark=True)
