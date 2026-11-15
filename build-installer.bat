@@ -2,6 +2,7 @@
 REM ============================================================
 REM  Notch - build a Windows installer in one command.
 REM  Usage:  build-installer.bat [version]     (default 1.6.2)
+REM          build-installer.bat [version] --freeze-only    (for MSIX)
 REM  Output: dist\NotchSetup-<version>.exe
 REM
 REM  Signing is opt-in through the NOTCH_SIGN_* environment; see
@@ -73,6 +74,7 @@ if not exist "dist\Notch\Notch.exe" (
 echo [4/7] Placing the model folder next to the executable...
 xcopy /e /i /y "model" "dist\Notch\model" >nul
 if errorlevel 1 goto :err
+if /i "%~2"=="--freeze-only" exit /b 0
 
 echo [5/7] Signing the executable...
 call "%~dp0packaging\sign.bat" "dist\Notch\Notch.exe"
