@@ -132,7 +132,7 @@ from the same machine, with the checks in `tests/check_robustness.py`:
 | Note saved on a removed monitor | invisible | **clamped, text kept** |
 | Windows-encoded `.txt` | silently ignored | **cp1252/BOM decode, errors shown** |
 | Space in the editor | consumed by the reader shortcut | **types a space; arrows move the caret** |
-| Manual mode while another app has focus | dead: Space and the arrows are window-scoped, so they went to the app in front, which is exactly when Manual is used | **system-wide chords, opt-in; the window keys still work when Notch has focus** |
+| Manual mode while another app has focus | dead: Space and the arrows are window-scoped, so they went to the app in front, which is exactly when Manual is used | **system-wide chords, opt-in; the window keys still work when Cuvyro has focus** |
 | Manual mode after the menu, Help or Setup closes | keyboard left with the window behind | **the reader asks for activation back, and never takes it from another application** |
 | Speech shading per advance (3,360 words) | 5.3 ms | **0.13 ms** |
 | Setup construction, input devices | 780 ms (10 devices) | **2.4 ms median (17 devices)**, no probe streams; meter starts after paint |
@@ -177,7 +177,7 @@ viewport widths.
 ## Focus and system-wide Manual keys (fourth pass)
 
 Manual mode was reported dead during presentations. It was: every Manual
-control is a window-scoped shortcut, so it only exists while Notch owns the
+control is a window-scoped shortcut, so it only exists while Cuvyro owns the
 keyboard, and presenting means another application does. Voice kept working
 because the microphone needs no focus.
 
@@ -201,7 +201,7 @@ obvious do not work on Windows:
   `Ctrl+Alt+arrows`, which do deliver and never open a menu.
 
 The reader no longer reaches for the foreground at all: `_focus_reader()`
-only asks for activation after Notch's own menu, Help or Setup closes, and it
+only asks for activation after Cuvyro's own menu, Help or Setup closes, and it
 declines while a note, dialog, the editor or the pill is active. Nothing is
 attached to another application's input queue.
 
@@ -256,7 +256,7 @@ excluded rather than tuned around. The zipformer in use is 3.4x cheaper per
 second of audio with the same order of accuracy, and it halves the median block
 cost, which is the headroom the scroll timer runs in.
 
-What changed in `notch/audio/worker.py`, behind the same `speech_text_signal`:
+What changed in `cuvyro/audio/worker.py`, behind the same `speech_text_signal`:
 
 | Finding | Before | After |
 |---|---|---|
@@ -280,7 +280,7 @@ engine is reused afterwards.
 Privacy is asserted, not assumed: `tests/check_speech_engine.py` patches
 `socket.connect`, `connect_ex` and `create_connection` to raise, then loads the
 model and decodes a sentence. Nothing reaches for a socket, and there is no
-network code in either engine — `notch/audio/speech.py` only calls into local ONNX
+network code in either engine — `cuvyro/audio/speech.py` only calls into local ONNX
 models and, for the fallback, Vosk's local Kaldi model.
 
 ### Following an accent
@@ -342,7 +342,7 @@ literals for the same durations: the note was `#1C1C1C` beside the menu's
 `#1E1E1E`, a hover faded in 150 ms in one place and 170 in another. Two
 values a few levels or a few milliseconds apart do not read as a hierarchy,
 they read as drift. Both now come from one module each:
-`notch/ui/theme.py` for colour and shape, `notch/ui/motion.py` for timing.
+`cuvyro/ui/theme.py` for colour and shape, `cuvyro/ui/motion.py` for timing.
 
 ### Palette
 

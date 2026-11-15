@@ -47,7 +47,7 @@ voice-mode session over 150 MB, and no amount of application work removes it.
 `tests/profile_reading.py` reports 61 MB because its `ProfiledOverlay`
 overrides `_start_listening` to a no-op, so the engine never loads. That number
 is the overlay, not the application. Measure the engine by constructing the
-bare `NotchOverlay`.
+bare `CuvyroOverlay`.
 
 ## The one change tried, and why it was reverted
 
@@ -143,8 +143,8 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/profile_reading.py --se
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/bench_predictive_highlight.py
 ```
 
-Cold start is `import` + `QApplication` + `NotchOverlay()` + `show()` +
+Cold start is `import` + `QApplication` + `CuvyroOverlay()` + `show()` +
 `processEvents()` in a fresh process, timed in five runs. Memory and idle CPU
 come from `K32GetProcessMemoryInfo` and `time.process_time()` over a settled
-window; the overlay must be constructed as a bare `NotchOverlay` for the engine
+window; the overlay must be constructed as a bare `CuvyroOverlay` for the engine
 to be included.

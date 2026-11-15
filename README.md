@@ -1,6 +1,6 @@
-# Notch
+# Cuvyro
 
-Notch is a desktop teleprompter for Windows. It keeps a small card of script text near your webcam, scrolls it as you speak, and stays out of screen captures, so the words do not appear in a recording or a video call.
+Cuvyro is a desktop teleprompter for Windows. It keeps a small card of script text near your webcam, scrolls it as you speak, and stays out of screen captures, so the words do not appear in a recording or a video call.
 
 The card is a PyQt5 overlay with a transparent strip of controls beside it. It is set to stay above other windows. In Voice mode a local speech recogniser follows your reading; in Manual mode the card scrolls at a fixed words-per-minute pace. Scripts, sticky notes, window position, theme and typeface are restored on the next launch.
 
@@ -8,7 +8,7 @@ Speech recognition and head tracking run on this machine. There is no account, n
 
 ## Screenshots
 
-![A tour of Notch](assets/demo.gif)
+![A tour of Cuvyro](assets/demo.gif)
 
 One pass through the app: voice follow, manual pace, the right-click panel, the editor, a sticky note, the narrow reader and the resting pill, setup, help, and each surface again in light. The frames come from the running app, not a mock-up.
 
@@ -67,7 +67,7 @@ Without a speech model, Voice mode reports "Speech recognition unavailable — v
 .venv\Scripts\python.exe main.py
 ```
 
-`main.py` is the compatibility launcher; the application itself is `notch.app.main`. `python run.py` is the development launcher and installs the requirements on first use if PyQt5 or sounddevice is missing. `python -m notch` also works. `start-notch.bat` uses `main.py` and appends stdout and stderr to `notch-run.log`.
+`main.py` is the compatibility launcher; the application itself is `cuvyro.app.main`. `python run.py` is the development launcher and installs the requirements on first use if PyQt5 or sounddevice is missing. `python -m cuvyro` also works. `start-cuvyro.bat` uses `main.py` and appends stdout and stderr to `cuvyro-run.log`.
 
 Only one copy runs at a time. A second launch says the reader is already open and exits, because two copies would share one state file, one camera and one set of global chords. The installer uses the same named mutex, so an upgrade asks for the running reader to be closed instead of replacing files underneath it.
 
@@ -79,7 +79,7 @@ The first Voice session loads the acoustic model before it can hear anything. Th
 build-installer.bat 1.6.2
 ```
 
-The script creates or reuses `.venv`, installs the requirements plus PyInstaller, checks for the model files, freezes the app with `packaging/notch.spec`, copies `model/` beside `Notch.exe`, and compiles the installer with Inno Setup 6. The result is `dist\NotchSetup-<version>.exe`. Inno Setup can be installed with `winget install JRSoftware.InnoSetup`.
+The script creates or reuses `.venv`, installs the requirements plus PyInstaller, checks for the model files, freezes the app with `packaging/cuvyro.spec`, copies `model/` beside `Cuvyro.exe`, and compiles the installer with Inno Setup 6. The result is `dist\CuvyroSetup-<version>.exe`. Inno Setup can be installed with `winget install JRSoftware.InnoSetup`.
 
 ## Microsoft Store package
 
@@ -102,7 +102,7 @@ The MSIX workflow shares the installer workflow's application checks and model
 downloads. Before submission, test the packaged app on Windows, including
 Voice mode, microphone access, global shortcuts and settings persistence.
 
-## Using Notch
+## Using Cuvyro
 
 ### The card
 
@@ -113,7 +113,7 @@ Voice mode, microphone access, global shortcuts and settings persistence.
 - The microphone control mutes or unmutes the recogniser. A muted mic reads as a resting pill, not as a live one.
 - Right-click the card or the script for mode, speed, font size, typeface, theme, head tracking, global keys, Load Script, Help, Setup and Quit.
 
-### Keyboard, while Notch has focus
+### Keyboard, while Cuvyro has focus
 
 | Keys | Action |
 | --- | --- |
@@ -129,7 +129,7 @@ Voice mode, microphone access, global shortcuts and settings persistence.
 
 ### Global keys
 
-Manual playback normally needs the reader to own the keyboard, which is exactly what it does not have during a presentation. **Global keys** is an opt-in row in the menu and in Setup. When it is on, Notch registers three chords with Windows:
+Manual playback normally needs the reader to own the keyboard, which is exactly what it does not have during a presentation. **Global keys** is an opt-in row in the menu and in Setup. When it is on, Cuvyro registers three chords with Windows:
 
 - `Ctrl+Shift+Space` starts or pauses Manual scrolling.
 - `Ctrl+Alt+Left` and `Ctrl+Alt+Right` change the pace.
@@ -140,12 +140,12 @@ These are delivered while another application is in front, without taking focus.
 
 Say one of these while Voice mode is listening. They are matched from a final transcript, not from a partial one, and they work with or without a script loaded:
 
-- "Notch restart" returns to the beginning.
-- "Notch expand" opens or closes the editor.
-- "Notch mute" mutes or unmutes the microphone.
-- "Notch close" closes Notch.
+- "Cuvyro restart" returns to the beginning.
+- "Cuvyro expand" opens or closes the editor.
+- "Cuvyro mute" mutes or unmutes the microphone.
+- "Cuvyro close" closes Cuvyro.
 
-The recogniser sometimes writes "not" instead of "Notch"; both forms are accepted.
+The recogniser sometimes writes "not" instead of "Cuvyro"; both forms are accepted.
 
 ### Head tracking
 
@@ -157,16 +157,18 @@ Turning tracking off releases the camera. Turning it back on reuses the loaded m
 
 ## Where your data goes
 
-The app stores its own state under `%APPDATA%\NotchFree`:
+The app stores its own state under `%APPDATA%\Cuvyro`:
 
 - `state.json` holds the script, the notes, the settings, the reader's position and the time it was last written. `state.json.bak` is the previous good copy; the primary file is replaced atomically.
 - `speaking-profile.json` holds aggregate speech timings for the predictive shading: words per second, pause length and five duration weights. It contains no audio, transcript or script. `speaking-profile.json.bak` is its previous good copy. Deleting both resets the estimate to the default pace.
 
 An update never starts from an empty state. A file written by an older build is upgraded on load, with the original kept as `state.json.v<schema>.bak` or `speaking-profile.json.v<schema>.bak` before the first rewrite. A file from a newer build is read for the fields this build understands and snapshotted the same way, so downgrading or reinstalling does not erase the newer data on disk.
 
+A build from before the rename kept this data in `%APPDATA%\NotchFree`. The first launch copies that folder here, so the script, notes and learned profile survive the update, and leaves the old folder untouched.
+
 Each launch also keeps one timestamped copy of the state and speaking profile it found, named like `state.json.2026-11-14T16-47-03-123456.bak`. The newest ten are kept, so a session opened by mistake can be recovered after the next one has started. `tests/check_storage.py` lists them; they are never loaded automatically.
 
-Audio is captured at 16 kHz mono and decoded by a local model. `tests/check_speech_engine.py` patches socket calls to raise, then loads the model and decodes a sentence, so a network path in the recognition stack fails the check rather than passing unnoticed. Nothing records audio, and recognised words are not written anywhere: the transcript trace is opt-in with `NOTCH_TRACE_TRANSCRIPT=1`, which prints each result to the console (under `start-notch.bat`, that means `notch-run.log`). The optional `tests/check_predictive_speech.py --live` does write a reading and its measurements into `.sessions/`, which git ignores; `--replay` decodes that recording again through the same recogniser.
+Audio is captured at 16 kHz mono and decoded by a local model. `tests/check_speech_engine.py` patches socket calls to raise, then loads the model and decodes a sentence, so a network path in the recognition stack fails the check rather than passing unnoticed. Nothing records audio, and recognised words are not written anywhere: the transcript trace is opt-in with `CUVYRO_TRACE_TRANSCRIPT=1`, which prints each result to the console (under `start-cuvyro.bat`, that means `cuvyro-run.log`). The optional `tests/check_predictive_speech.py --live` does write a reading and its measurements into `.sessions/`, which git ignores; `--replay` decodes that recording again through the same recogniser.
 
 Every app window (the reader, notes, menu and dialogs) asks Windows to exclude it from screen capture with `SetWindowDisplayAffinity`. On Windows 10 2004 and later this removes the window from captures; older builds get the monitor-blank fallback. A capture path that ignores display affinity, such as an external capture card, is outside what Windows can hide.
 
@@ -212,7 +214,7 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/profile_reading.py
 
 `tests/check_head_tracking.py` drives the motion layer with explicit timestamps at the worker's measured cadence, covers all ten regions, continuity, bounds, calibration, dead zones, hysteresis, jitter, fusion, release and disable, then exercises the real worker against a simulated camera. `tests/measure_head_tracking.py` is the real-camera half and SKIPs when there is no camera or no face.
 
-`tests/check_predictive_highlight.py` scores the anticipatory layer; `tests/bench_predictive_highlight.py` runs a known speaker timeline through the predictor and reports coverage, lead, precision, flicker and update cost. The constants in `notch/audio/predict.py` were chosen against that benchmark. `tests/check_predictive_speech.py` decodes three SAPI sentences with the installed model and drives the real overlay; `--live` uses the production microphone worker and records the reading, and `--replay <session>` decodes it again, which makes one human reading a repeatable benchmark. Sessions land in `.sessions/` and stay local.
+`tests/check_predictive_highlight.py` scores the anticipatory layer; `tests/bench_predictive_highlight.py` runs a known speaker timeline through the predictor and reports coverage, lead, precision, flicker and update cost. The constants in `cuvyro/audio/predict.py` were chosen against that benchmark. `tests/check_predictive_speech.py` decodes three SAPI sentences with the installed model and drives the real overlay; `--live` uses the production microphone worker and records the reading, and `--replay <session>` decodes it again, which makes one human reading a repeatable benchmark. Sessions land in `.sessions/` and stay local.
 
 `tests/profile_reading.py` drives the real overlay offscreen at recogniser cadence and reports frame cadence, result-to-paint latency, CPU and working set. `tests/calibrate_voice.py` scores a speaker against the recording corpus and can drive the overlay with those takes. Recordings remain local WAV files.
 
@@ -223,7 +225,7 @@ All checks build their own temporary store, so they do not touch the saved scrip
 ## Project layout
 
 ```
-notch/
+cuvyro/
   app.py            Qt start-up
   ui/               card, controls, dialogs, notes, motion
   audio/            microphone worker, recognition, matching, prediction
@@ -231,14 +233,14 @@ notch/
   platform/         Windows capture exclusion and global hotkeys
   storage/          atomic state persistence
   paths.py          shared model and install paths
-main.py             compatibility launcher (notch.app.main)
+main.py             compatibility launcher (cuvyro.app.main)
 run.py              development launcher
 tests/              behaviour checks, benchmarks and screenshot harnesses
 packaging/          PyInstaller spec and Inno Setup script
 model/              local speech and face models (not tracked)
 ```
 
-`notch.app.main` is the real entry point. `main.py` exists because `start-notch.bat`, the PyInstaller spec and older instructions all use `python main.py`.
+`cuvyro.app.main` is the real entry point. `main.py` exists because `start-cuvyro.bat`, the PyInstaller spec and older instructions all use `python main.py`.
 
 ## Known limits
 

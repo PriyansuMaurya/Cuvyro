@@ -8,6 +8,16 @@ messages.
 
 ## Unreleased
 
+### Changed
+
+- The app is named Cuvyro. The package, executable, installer, data folder,
+  environment variables and checks all follow the new name: `cuvyro/`,
+  `Cuvyro.exe`, `CuvyroSetup-<version>.exe`, `%APPDATA%\Cuvyro` and
+  `CUVYRO_*`. The first launch copies an existing `%APPDATA%\NotchFree`
+  forward, so the script, notes and learned speaking profile survive the
+  rename; the old folder is left in place. Entries below describe builds that
+  shipped as Notch.
+
 ### Fixed
 
 - Leaving the editor commits the edit again when Windows animations are

@@ -30,19 +30,19 @@ diff.
 
 ## Layout
 
-- `notch/` is the application package, split by responsibility: `app.py` (Qt
+- `cuvyro/` is the application package, split by responsibility: `app.py` (Qt
   startup), `ui/` (overlay, controls, dialogs, notes, tooltips, and the two
   shared modules every surface reads: `theme.py` for the palette, radii and
   spacing, `motion.py` for spring presets and crossfade durations), `audio/`
   (microphone worker, recognition, matching), `tracking/` (camera and grid
   motion), `platform/` (Windows hotkeys and capture exclusion), and `storage/`
   (atomic state persistence). Shared filesystem paths live in `paths.py`.
-- `main.py` is the compatibility launcher used by `start-notch.bat` and the
-  PyInstaller spec; the real entry point is `notch.app.main` (or
-  `python -m notch`). `run.py` is the development launcher.
+- `main.py` is the compatibility launcher used by `start-cuvyro.bat` and the
+  PyInstaller spec; the real entry point is `cuvyro.app.main` (or
+  `python -m cuvyro`). `run.py` is the development launcher.
 - `tests/` holds the standalone checks, the screenshot harnesses and their
   fixture. They run from the repository root and put it on `sys.path` before
-  importing `notch`.
+  importing `cuvyro`.
 - `packaging/` holds only build configuration, the signing helper and the
   icon sources.
 - `assets/` and `docs/` are presentation material, not runtime code.
@@ -81,7 +81,7 @@ no-op, and release on close.
 `tests/check_signing.py` pins the helper the release build cannot skip. It puts
 a stub in front of signtool, so no certificate is involved, and asserts that
 `packaging/sign.bat` leaves a developer build unsigned, refuses that path when
-`NOTCH_SIGN_REQUIRED` is set, treats a missing certificate or a missing
+`CUVYRO_SIGN_REQUIRED` is set, treats a missing certificate or a missing
 signtool as an error rather than a skip, hands the certificate and timestamp
 server to signtool, verifies the signature after signing, and fails the build
 when either step fails. The helper is label-based on purpose: cmd returns 0 for
@@ -92,8 +92,8 @@ refused signature would have become a pass.
 produced (rebuild with `build-installer.bat`, install it, then run the check).
 It backs up and restores the reader's saved state around the run. Because the
 reader excludes itself from screen capture, the scroll offset comes from
-`NOTCH_MANUAL_TRACE=1`, which makes the app append one line per Manual start
-and pause to `notch.log` beside the executable; nothing is written without it.
+`CUVYRO_MANUAL_TRACE=1`, which makes the app append one line per Manual start
+and pause to `cuvyro.log` beside the executable; nothing is written without it.
 
 `tests/check_motion.py` covers the floating surfaces' motion and the two
 shared token modules. A note is created and driven frame by frame: it starts
@@ -115,7 +115,10 @@ real overlay against them. It checks that the script, notes, preferences,
 placement and learned profile all survive, that the old file is kept as
 `*.v<schema>.bak` before its first rewrite, that a corrupt profile recovers
 its `.bak`, and that a file from a newer schema is snapshotted rather than
-silently discarded. A change to `notch/storage/store.py`, the profile fields
+silently discarded. It also covers the rename itself: a data folder from the
+build that called the app Notch is copied to `%APPDATA%\Cuvyro` with the
+script, notes and learned profile intact, its session logs left behind and
+the old folder untouched. A change to `cuvyro/storage/store.py`, the profile fields
 or the settings keys belongs here. The v1-to-v2 step that adds `saved_at` is
 the worked template: raise `SCHEMA`, add one function to `MIGRATIONS` that
 copies the payload and gives the new field a safe default, and extend this
@@ -127,7 +130,7 @@ schema and size, says which copy the app would load, names the script, notes
 and learned profile that are recoverable, counts the timestamped session
 copies and migration snapshots, and flags a pending migration or a newer
 schema. It never writes, so it is safe to run against the real
-`%APPDATA%\NotchFree`; `--dir` points it at a fixture instead. It exits
+`%APPDATA%\Cuvyro`; `--dir` points it at a fixture instead. It exits
 non-zero only when neither the primary nor the backup of a store can be read.
 
 `tests/check_diagnostics.py` pins the support evidence a windowed build
@@ -135,8 +138,8 @@ leaves behind. It starts fresh interpreters with stdout and stderr set to
 `None` — the state a frozen windowed build runs in — and checks that
 printed output reaches the process log, that a main-thread and a
 worker-thread exception are both recorded, and that an unwritable install
-directory falls back to `%LOCALAPPDATA%\NotchFree\logs`. It patches
-`notch.paths.app_dir` in the child process, so it never writes beside the
+directory falls back to `%LOCALAPPDATA%\Cuvyro\logs`. It patches
+`cuvyro.paths.app_dir` in the child process, so it never writes beside the
 repository. It also holds startup to the retention rule: the five newest
 sessions are kept and older ones deleted, because one file per launch
 otherwise accumulates for ever. A build that cannot write a log is a build
@@ -145,7 +148,7 @@ installer step.
 
 `tests/soak_packaged.py` is the eight-hour endurance monitor. It hashes the
 packaged tree, launches the exe with an isolated `APPDATA` and
-`NOTCH_SOAK_DIR`, and fails on an early exit, a missing startup heartbeat, a
+`CUVYRO_SOAK_DIR`, and fails on an early exit, a missing startup heartbeat, a
 heartbeat more than 60 seconds stale, any ERROR or CRITICAL line in the
 process log, or a non-empty native fault log. It runs for 28,800 seconds and
 always writes its report, so a killed monitor cannot be mistaken for a pass.
@@ -164,7 +167,7 @@ rate, pause freeze, line bound, anti-flicker, profile persistence, theme
 contrast and update cost. `tests/bench_predictive_highlight.py` runs a known
 speaker timeline through the predictor and reports coverage, lead, precision,
 flicker, pause growth and per-update/paint latency; it is the number the
-tuning constants in `notch/audio/predict.py` are chosen against.
+tuning constants in `cuvyro/audio/predict.py` are chosen against.
 `tests/check_predictive_speech.py` decodes three SAPI sentences with the real
 model in wall-clock time and drives the real overlay. `--live` uses the
 production microphone worker for a real reading and records it, and
@@ -180,7 +183,7 @@ undo-stack fixes, so the two profiles can be compared directly.
 
 `tests/calibrate_voice.py` scores a speaker against the corpus and drives the
 overlay with the recordings (`--no-mic --reader` re-scores takes already in
-`%TEMP%\notch-voice`). Recordings stay local WAVs; nothing is uploaded.
+`%TEMP%\cuvyro-voice`). Recordings stay local WAVs; nothing is uploaded.
 
 `tests/check_head_tracking.py` drives `HeadMotion` with explicit timestamps at
 the cadence the worker achieves (14.7 Hz — a 66 ms camera frame plus the

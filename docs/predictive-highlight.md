@@ -51,7 +51,7 @@ at one; painting is not scrolling, so none of this can move the reader.
 
 ## How the estimate works
 
-`notch/audio/predict.py` combines three signals:
+`cuvyro/audio/predict.py` combines three signals:
 
 - **Adaptive rate.** Every confirmed word interval updates a session rate
   (fast, weight 0.14/0.30 for partial/final) and a cross-session prior (slow,
