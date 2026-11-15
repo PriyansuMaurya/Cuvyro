@@ -60,6 +60,7 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_motion.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_upgrades.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_head_tracking.py
 .venv/Scripts/python.exe tests/check_storage.py
+.venv/Scripts/python.exe tests/check_diagnostics.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_predictive_highlight.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/bench_predictive_highlight.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/check_predictive_speech.py
@@ -116,6 +117,27 @@ copies and migration snapshots, and flags a pending migration or a newer
 schema. It never writes, so it is safe to run against the real
 `%APPDATA%\NotchFree`; `--dir` points it at a fixture instead. It exits
 non-zero only when neither the primary nor the backup of a store can be read.
+
+`tests/check_diagnostics.py` pins the support evidence a windowed build
+leaves behind. It starts fresh interpreters with stdout and stderr set to
+`None` — the state a frozen windowed build runs in — and checks that printed
+output reaches the process log, that a main-thread and a worker-thread
+exception are both recorded, and that an unwritable install directory falls
+back to `%LOCALAPPDATA%\NotchFree\logs`. It patches `notch.paths.app_dir` in
+the child process, so it never writes beside the repository. A build that
+cannot write a log is a build nobody can support, which is why the release
+workflow runs it before the installer step.
+
+`tests/soak_packaged.py` is the eight-hour endurance monitor. It hashes the
+packaged tree, launches the exe with an isolated `APPDATA` and
+`NOTCH_SOAK_DIR`, and fails on an early exit, a missing startup heartbeat, a
+heartbeat more than 60 seconds stale, any ERROR or CRITICAL line in the
+process log, or a non-empty native fault log. It runs for 28,800 seconds and
+always writes its report, so a killed monitor cannot be mistaken for a pass.
+Close any other copy first: the single-instance mutex makes the soak's own
+launch exit and the report says FAIL. A pass proves survival and that the GUI
+event loop answered; using the app during the run, and reading the logs
+afterwards, is still the human half.
 
 `tests/check_speech_engine.py` decodes real audio through the installed model
 and reports SKIP when `model/` has none. `tests/bench_speech_engines.py` is the
