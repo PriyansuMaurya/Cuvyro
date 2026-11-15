@@ -1,11 +1,15 @@
-# Submits a package already built and checked by this workflow.
+# Checks Store access or submits a package already verified by the build.
+param([switch]$CheckAccess)
+
 $ErrorActionPreference = 'Stop'
 $productId = '9MX46V9WW83Q'
-$version = [version]::Parse($env:STORE_VERSION)
-$package = Get-Item -LiteralPath "dist/Cuvyro-$version-x64.msix"
-$sha256 = (Get-FileHash -LiteralPath $package.FullName -Algorithm SHA256).Hash
-if ($env:STORE_SHA256 -notmatch '^[a-fA-F0-9]{64}$' -or $sha256 -ne $env:STORE_SHA256) {
-    throw 'The MSIX does not match the SHA-256 from the build job.'
+if (-not $CheckAccess) {
+    $version = [version]::Parse($env:STORE_VERSION)
+    $package = Get-Item -LiteralPath "dist/Cuvyro-$version-x64.msix"
+    $sha256 = (Get-FileHash -LiteralPath $package.FullName -Algorithm SHA256).Hash
+    if ($env:STORE_SHA256 -notmatch '^[a-fA-F0-9]{64}$' -or $sha256 -ne $env:STORE_SHA256) {
+        throw 'The MSIX does not match the SHA-256 from the build job.'
+    }
 }
 
 foreach ($name in @('STORE_TENANT_ID', 'STORE_CLIENT_ID', 'STORE_CLIENT_SECRET', 'STORE_SELLER_ID')) {
@@ -45,6 +49,10 @@ if (-not $liveId) { throw 'Partner Center has no live Cuvyro submission.' }
 $live = Invoke-RestMethod -Uri "$appUri/submissions/$liveId" -Headers $headers
 $liveVersion = Get-X64ReleaseVersions $live | Sort-Object -Descending | Select-Object -First 1
 if (-not $liveVersion) { throw 'Could not determine the live Cuvyro x64 package version.' }
+if ($CheckAccess) {
+    Write-Host "Authenticated to Partner Center and verified Cuvyro x64 $liveVersion."
+    return
+}
 $releaseVersion = [version]::new($version.Major, $version.Minor, $version.Build)
 if ($releaseVersion -le $liveVersion) {
     Write-Host "Skipping Store update. Version $liveVersion is already live."

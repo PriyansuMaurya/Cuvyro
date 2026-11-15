@@ -17,9 +17,9 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: Windows package to build
+        description: Windows package or Store access check
         type: choice
-        options: [installer, msix]
+        options: [installer, msix, check-store-access]
         default: installer
       store_version:
         description: MSIX version (major.minor.patch.0)
@@ -33,6 +33,7 @@ jobs:
     if: >-
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
       && (github.event_name != 'release' || !github.event.release.prerelease)
+      && (github.event_name != 'workflow_dispatch' || inputs.package != 'check-store-access')
       && (github.ref_type != 'tag' || !contains(github.ref_name, '-'))
     runs-on: windows-latest
     outputs:
@@ -402,3 +403,20 @@ jobs:
           STORE_CLIENT_SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
           STORE_SELLER_ID: ${{ secrets.STORE_SELLER_ID }}
         run: packaging/publish-store.ps1
+
+  store_access:
+    if: github.event_name == 'workflow_dispatch' && inputs.package == 'check-store-access'
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify read access to the live Cuvyro submission
+        shell: pwsh
+        env:
+          STORE_TENANT_ID: ${{ secrets.STORE_TENANT_ID }}
+          STORE_CLIENT_ID: ${{ secrets.STORE_CLIENT_ID }}
+          STORE_CLIENT_SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
+          STORE_SELLER_ID: ${{ secrets.STORE_SELLER_ID }}
+        run: packaging/publish-store.ps1 -CheckAccess

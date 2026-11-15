@@ -92,6 +92,10 @@ Set these GitHub Actions secrets.
 
 [Microsoft's GitHub Actions setup](https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/github-actions)
 
+To verify the credential setup, manually run **Build Windows installer** and
+select **check-store-access**. It reads Cuvyro's live submission and shows its
+x64 version in the run log.
+
 The workflow submits the MSIX for certification. Microsoft signs the Store
 package and publishes it after approval. The Store job skips versions already
 live or in review and stops if another submission is pending. After resolving a
