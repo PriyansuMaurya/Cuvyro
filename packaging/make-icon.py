@@ -1,4 +1,4 @@
-"""Render packaging/notch.ico from assets/Notch_Clear_1.png.
+"""Render packaging/notch.ico from assets/Cuvyro_Logo.png.
 
 Windows Explorer, the taskbar and Inno Setup need several sizes in one .ico,
 so each size is downscaled separately from the master artwork rather than
@@ -16,7 +16,7 @@ PAD = 0.04  # keep the mark off the icon edge so it reads at 16px
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
-SOURCE = os.path.join(REPO_ROOT, "assets", "Notch_Clear_1.png")
+SOURCE = os.path.join(REPO_ROOT, "assets", "Cuvyro_Logo.png")
 OUTPUT = os.path.join(HERE, "notch.ico")
 
 
