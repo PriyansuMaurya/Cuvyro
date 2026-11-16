@@ -55,36 +55,67 @@ this machine, measured over three launches of the packaged exe; a cold first
 launch after installation can be slower, which is why README keeps the wider
 range. Re-measure if the machine, the model or the freeze changes.
 
-## Signing and release
+## GitHub releases and the Microsoft Store
 
-An OV/EV signing certificate and access to its supported signing provider are
-still required. Do not put private keys or passwords into the repository.
+The two release paths reuse the Windows build, the offscreen checks, and the
+packaged-engine checks. Publish a stable GitHub release from a reviewed
+`vMAJOR.MINOR.PATCH` tag. The workflow packages `MAJOR.MINOR.PATCH.0` for Store
+product `9MX46V9WW83Q`. A tag push can also create the GitHub release after
+signing the EXE. The Store job follows GitHub publication in that same run,
+because a release created with `GITHUB_TOKEN` does not trigger another workflow.
 
-`packaging/sign.bat` signs one artifact when `CUVYRO_SIGN_CERT` points at a
-`.pfx`; `CUVYRO_SIGN_PASSWORD` is its password and `CUVYRO_SIGN_TIMESTAMP`
-overrides the default RFC 3161 server. `build-installer.bat` calls it twice, in
-the order a release verifies: `dist\Cuvyro\Cuvyro.exe` before Inno Setup runs and
-`dist\CuvyroSetup-<version>.exe` after. `CUVYRO_SIGN_REQUIRED` turns the
-unconfigured path into an error, which is what a release build sets; a
-developer build without a certificate stays unsigned and says so.
+Both paths require the archived eight-hour result for the tag version at
+`docs/release/<version>-soak-result.json`. Build and soak the release candidate
+before tagging. The gate checks the archived result and its file manifest.
+Keep the signed candidate and its hashes if you need byte-for-byte evidence.
+The release workflow builds from the tag. Its MSIX hash covers that build's
+validated package from artifact upload through Store submission.
 
-A tag now carries both gates. Before anything is built, the workflow requires
-`docs/release/<version>-soak-result.json` to report PASS, at least 28,800
-seconds and a packaged-file manifest. Before anything is published, it restores
-the certificate from `secrets.NOTCH_SIGN_CERT_PFX` (a base64 `.pfx`) with
-`secrets.NOTCH_SIGN_CERT_PASSWORD`, deletes it afterwards, and fails unless
-(the repository secrets kept their original names across the rename, because
-a workflow cannot rename one, and they already hold this certificate; the
-variables handed to `sign.bat` are `CUVYRO_SIGN_*`)
-`Cuvyro.exe` and the installer both verify as valid, attributable and
-timestamped. A `workflow_dispatch` build is held to neither gate because it has
-no version to check.
+To verify the Windows build without publishing, run **Build Windows installer**
+from a branch and select **msix**. Set the version explicitly for the candidate.
+The downloadable **Cuvyro-Store-MSIX-x64** Actions artifact contains the MSIX.
+The workflow checks its manifest and engine files. Install and test the
+certified build from the Store on Windows as well.
 
-Verify both signatures and timestamps on a clean Windows machine as well: the
-workflow sees the runner's copy, not what the installer writes.
+### Store setup
 
-Rebuilding after the soak creates different bytes; do not present an earlier
-candidate's report as proof of the rebuilt artifact. Archive the signed
-installer, its SHA-256, the matching packaged-file manifest, soak report and
-check output; for 1.6.2 those last three are in `docs/release/` and the
-installer stays in `dist/` and in the release attachment.
+Link a Microsoft Entra tenant to Partner Center. Add a dedicated Entra
+application with the Manager role required by Microsoft's publishing workflow.
+Set these GitHub Actions secrets.
+
+| Secret | Value |
+| --- | --- |
+| `STORE_TENANT_ID` | Entra tenant ID |
+| `STORE_CLIENT_ID` | Entra application (client) ID |
+| `STORE_CLIENT_SECRET` | Entra client secret value |
+| `STORE_SELLER_ID` | Partner Center seller ID |
+
+[Microsoft's GitHub Actions setup](https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/github-actions)
+
+To verify the credential setup, manually run **Build Windows installer** and
+select **check-store-access**. It reads Cuvyro's live submission and shows its
+x64 version in the run log.
+
+The workflow submits the MSIX for certification. Microsoft signs the Store
+package and publishes it after approval. The Store job skips versions already
+live or in review and stops if another submission is pending. After resolving a
+pending draft or failed submission in Partner Center, rerun the failed Store
+job while the build artifact is available. Check Partner Center for the
+certification result.
+
+### Standalone GitHub installer signing
+
+Configure a publicly trusted Authenticode certificate with a signing provider.
+On a dedicated Windows signing runner, install the Windows SDK, Inno Setup 6
+and the provider's software. Make the provider certificate and its signing key
+accessible through the runner service user's `CurrentUser\My` certificate
+store. Configure the provider to sign without an interactive prompt. Set the
+GitHub Actions variables `CUVYRO_SIGN_RUNNER` to the dedicated runner label and
+`CUVYRO_SIGN_THUMBPRINT` to the certificate thumbprint.
+
+`build-installer.bat` signs the frozen app before compiling the installer, then
+signs the installer. The release job verifies both signatures and RFC 3161
+timestamps before attaching the EXE. Local development builds can run without
+signing configuration. Existing legacy PFX configurations using
+`NOTCH_SIGN_CERT_PFX` and `NOTCH_SIGN_CERT_PASSWORD` still work where the
+certificate provider supports that format.

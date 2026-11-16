@@ -91,6 +91,19 @@ def main():
         check("the certificate and timestamp server reach signtool",
               "certificate.pfx" in logged and "/tr" in logged, logged.replace("\n", " | "))
 
+        thumbprint = "0123456789abcdef0123456789abcdef01234567"
+        rc, out = run(CUVYRO_SIGN_THUMBPRINT=thumbprint, CUVYRO_SIGNTOOL=stub, CUVYRO_SIGN_REQUIRED=1)
+        logged = calls.read_text(encoding="utf-8") if calls.exists() else ""
+        check("the provider certificate signs and verifies without a PFX",
+              rc == 0 and f'/s My /sha1 "{thumbprint}"' in logged
+              and "/tr" in logged and "/f " not in logged and "verify /pa" in logged,
+              f"rc={rc} {logged.strip()}")
+
+        rc, out = run(CUVYRO_SIGN_THUMBPRINT=thumbprint, CUVYRO_SIGN_CERT=cert, CUVYRO_SIGNTOOL=stub)
+        check("two signing sources are refused",
+              rc == 1 and "configure one signing certificate source" in out and not calls.exists(),
+              f"rc={rc} {out.strip()}")
+
         rc, out = run(CUVYRO_SIGN_CERT=cert, CUVYRO_SIGNTOOL=stub, STUB_FAIL_SIGN=1)
         check("a failed signature fails the build",
               rc == 1 and "signing failed" in out, f"rc={rc}")
