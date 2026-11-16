@@ -48,6 +48,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check Microsoft Store submission behavior
+        run: tests/check_store_submission.ps1
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -85,14 +88,20 @@ jobs:
           }
           $soak = Get-Content $report -Raw | ConvertFrom-Json
           if ($soak.status -ne 'PASS') { throw "The archived soak for $env:VERSION is $($soak.status), not PASS." }
-          if ([double]$soak.required_seconds -lt 28800) {
-            throw "The archived soak asked for $($soak.required_seconds) s, not the 28,800 a release requires."
+          $required = [double]$soak.required_seconds
+          $elapsed = [double]$soak.elapsed_seconds
+          if (-not [double]::IsFinite($required) -or $required -lt 28800) {
+            throw "The archived soak requires $required s. Expected at least 28,800 s."
           }
-          if ([double]$soak.elapsed_seconds -lt [double]$soak.required_seconds) {
-            throw "The archived soak ran $($soak.elapsed_seconds) s of $($soak.required_seconds)."
+          if (-not [double]::IsFinite($elapsed) -or $elapsed -lt $required) {
+            throw "The archived soak reports $elapsed s of $required s."
           }
-          $hashed = ($soak.files_sha256.PSObject.Properties | Measure-Object).Count
-          if ($hashed -lt 1) { throw "The archived soak carries no packaged-file manifest." }
+          $hashes = $soak.files_sha256.PSObject.Properties
+          $hashed = ($hashes | Measure-Object).Count
+          if ($soak.files_sha256 -isnot [PSCustomObject] -or $hashed -eq 0 -or
+              ($hashes | Where-Object { $_.Value -isnot [string] -or $_.Value -notmatch '^[0-9a-fA-F]{64}$' })) {
+            throw "The archived soak must contain a valid SHA-256 manifest."
+          }
           Write-Host "Soak evidence: PASS, $($soak.elapsed_seconds) s, $hashed packaged files hashed"
 
       # The app ships and is measured against sherpa-onnx zipformer + Silero
@@ -393,7 +402,14 @@ jobs:
         with:
           name: Cuvyro-Store-MSIX-x64
           path: dist
-      - uses: microsoft/microsoft-store-apppublisher@v1.1
+      - name: Verify the tagged GitHub release is still published and stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $published = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME" --jq '(.draft == false and .prerelease == false)'
+          if ($LASTEXITCODE -ne 0 -or $published -ne 'true') {
+            throw "The GitHub release must be published and stable at submission time."
+          }
       - name: Submit the verified MSIX for certification
         env:
           STORE_VERSION: ${{ needs.build.outputs.store_version }}
@@ -401,7 +417,6 @@ jobs:
           STORE_TENANT_ID: ${{ secrets.STORE_TENANT_ID }}
           STORE_CLIENT_ID: ${{ secrets.STORE_CLIENT_ID }}
           STORE_CLIENT_SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
-          STORE_SELLER_ID: ${{ secrets.STORE_SELLER_ID }}
         run: packaging/publish-store.ps1
 
   store_access:
@@ -418,5 +433,4 @@ jobs:
           STORE_TENANT_ID: ${{ secrets.STORE_TENANT_ID }}
           STORE_CLIENT_ID: ${{ secrets.STORE_CLIENT_ID }}
           STORE_CLIENT_SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
-          STORE_SELLER_ID: ${{ secrets.STORE_SELLER_ID }}
         run: packaging/publish-store.ps1 -CheckAccess
