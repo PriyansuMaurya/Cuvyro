@@ -88,20 +88,22 @@ Set these GitHub Actions secrets.
 | `STORE_TENANT_ID` | Entra tenant ID |
 | `STORE_CLIENT_ID` | Entra application (client) ID |
 | `STORE_CLIENT_SECRET` | Entra client secret value |
-| `STORE_SELLER_ID` | Partner Center seller ID |
 
 [Microsoft's GitHub Actions setup](https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/github-actions)
 
 To verify the credential setup, manually run **Build Windows installer** and
-select **check-store-access**. It reads Cuvyro's live submission and shows its
-x64 version in the run log.
+select **check-store-access**. It reads Cuvyro's live submission and checks
+its x64 version and base pricing.
 
-The workflow submits the MSIX for certification. Microsoft signs the Store
-package and publishes it after approval. The Store job skips versions already
-live or in review and stops if another submission is pending. After resolving a
-pending draft or failed submission in Partner Center, rerun the failed Store
-job while the build artifact is available. Check Partner Center for the
-certification result.
+The Store job verifies that the GitHub release is still stable and published.
+It creates a new submission through the Store API, retains the listing and
+pricing, uploads the verified package, and waits for Microsoft to accept the
+commit. Microsoft signs the Store package and publishes it after approval.
+
+The job skips versions already live or accepted for review and stops if a
+different submission is pending. If an upload or commit fails, inspect the
+draft in Partner Center before rerunning the failed Store job with the
+existing build artifact.
 
 ### Standalone GitHub installer signing
 
